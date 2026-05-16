@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go build *)",
+      "Bash(go run *)",
+      "Bash(curl -s https://api.cf.us10.hana.ondemand.com/v2/info)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s https://api.cf.us10.hana.ondemand.com)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('links',{}\\), indent=2\\)\\)\")",
+      "Bash(curl -s \"https://login.cf.us10.hana.ondemand.com/login\")",
+      "Bash(curl -s \"https://login.cf.us10.hana.ondemand.com/.well-known/openid-configuration\")",
+      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&passcode=dummy_test_code')",
+      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_test_code')",
+      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&origin=sap.ids')",
+      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&response_type=token')",
+      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&scope=openid')"
+    ]
+  }
+}
