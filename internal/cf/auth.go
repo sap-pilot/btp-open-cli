@@ -15,10 +15,17 @@ import (
 
 var authHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-type cfInfo struct {
-	// AuthorizationEndpoint is the login server that issues and validates passcodes.
-	// Passcode token exchanges must go here, not to the UAA token_endpoint.
+type cfInfoRaw struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+}
+
+// Endpoints holds the two OAuth server URLs discovered from /v2/info.
+type Endpoints struct {
+	// Authorization is the login server (issues/validates SSO passcodes).
+	Authorization string
+	// Token is the UAA server (accepts direct username/password grants).
+	Token string
 }
 
 type TokenResponse struct {
@@ -28,63 +35,81 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 }
 
-// GetAuthorizationEndpoint returns the login-server base URL (e.g.
-// https://login.cf.us10.hana.ondemand.com) by querying the CF API info
-// endpoint at cfAPIBaseURL. Passcode URLs and token exchanges must both
-// use this endpoint.
-func GetAuthorizationEndpoint(ctx context.Context, cfAPIBaseURL string) (string, error) {
+// GetEndpoints fetches both OAuth endpoints from the CF API /v2/info.
+func GetEndpoints(ctx context.Context, cfAPIBaseURL string) (*Endpoints, error) {
 	infoURL := strings.TrimRight(cfAPIBaseURL, "/") + "/v2/info"
+	slog.Debug("fetching CF endpoints", "url", infoURL)
+
 	req, err := http.NewRequestWithContext(ctx, "GET", infoURL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := authHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("reaching CF API at %s: %w", infoURL, err)
+		return nil, fmt.Errorf("reaching CF API at %s: %w", infoURL, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("CF info endpoint returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("CF info endpoint returned HTTP %d", resp.StatusCode)
 	}
 
-	var info cfInfo
-	if err := json.Unmarshal(body, &info); err != nil {
-		return "", fmt.Errorf("parsing CF info response: %w", err)
+	var raw cfInfoRaw
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parsing CF info response: %w", err)
 	}
-	if info.AuthorizationEndpoint == "" {
-		return "", fmt.Errorf("CF info response missing authorization_endpoint")
+	if raw.AuthorizationEndpoint == "" || raw.TokenEndpoint == "" {
+		return nil, fmt.Errorf("CF info response missing endpoints (auth=%q token=%q)",
+			raw.AuthorizationEndpoint, raw.TokenEndpoint)
 	}
-	return info.AuthorizationEndpoint, nil
+	ep := &Endpoints{
+		Authorization: raw.AuthorizationEndpoint,
+		Token:         raw.TokenEndpoint,
+	}
+	slog.Debug("CF endpoints resolved", "auth", ep.Authorization, "token", ep.Token)
+	return ep, nil
 }
 
-// ExchangePasscode trades a one-time SSO passcode for OAuth tokens.
-// authEndpoint must be the login/authorization server (authorization_endpoint
-// from /v2/info), not the UAA server, because passcodes are issued and
-// validated exclusively by the login server.
+// ExchangePasscode trades a one-time SSO passcode for OAuth tokens via the
+// login/authorization server. Passcodes are issued and validated there, not
+// by the UAA server.
 func ExchangePasscode(ctx context.Context, authEndpoint, passcode string) (*TokenResponse, error) {
-	tokenURL := authEndpoint + "/oauth/token"
-
-	form := url.Values{}
-	form.Set("grant_type", "password")
-	form.Set("username", "passcode")
-	form.Set("password", passcode)
-
-	slog.Debug("token exchange request",
-		"url", tokenURL,
-		"passcode_len", len(passcode),
-		"body", "grant_type=password&username=passcode&password=<redacted>",
+	return doTokenRequest(ctx, authEndpoint+"/oauth/token",
+		url.Values{
+			"grant_type": {"password"},
+			"username":   {"passcode"},
+			"password":   {passcode},
+		},
+		"passcode exchange",
 	)
+}
+
+// PasswordLogin authenticates with a username and password directly against
+// the UAA server (token_endpoint from /v2/info).
+func PasswordLogin(ctx context.Context, tokenEndpoint, username, password string) (*TokenResponse, error) {
+	return doTokenRequest(ctx, tokenEndpoint+"/oauth/token",
+		url.Values{
+			"grant_type": {"password"},
+			"username":   {username},
+			"password":   {password},
+		},
+		"password login",
+	)
+}
+
+// doTokenRequest posts OAuth form data to tokenURL using the public "cf" client.
+func doTokenRequest(ctx context.Context, tokenURL string, form url.Values, op string) (*TokenResponse, error) {
+	slog.Debug("token request", "op", op, "url", tokenURL)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, err
 	}
-	// "cf" is a public OAuth client registered in CF UAA with an empty secret.
+	// "cf" is the public OAuth client registered in CF UAA with an empty secret.
 	creds := base64.StdEncoding.EncodeToString([]byte("cf:"))
 	req.Header.Set("Authorization", "Basic "+creds)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -92,7 +117,7 @@ func ExchangePasscode(ctx context.Context, authEndpoint, passcode string) (*Toke
 
 	resp, err := authHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("posting to token endpoint: %w", err)
+		return nil, fmt.Errorf("%s: posting to token endpoint: %w", op, err)
 	}
 	defer resp.Body.Close()
 
@@ -101,7 +126,7 @@ func ExchangePasscode(ctx context.Context, authEndpoint, passcode string) (*Toke
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("token exchange failed (HTTP %d): %s", resp.StatusCode, body)
+		return nil, fmt.Errorf("%s failed (HTTP %d): %s", op, resp.StatusCode, body)
 	}
 
 	var tr TokenResponse
