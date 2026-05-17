@@ -1,6 +1,3 @@
-/*
-Copyright © 2026 Da Chen <da01.chen@gmail.com>
-*/
 package cmd
 
 import (
@@ -9,26 +6,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// versionCmd represents the version command
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "print version info",
-	Long:  `print version info`,
+	Short: "Print version info",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("v0.1 - initial project")
+		fmt.Println("bo v0.1 - built 2026-05-16 22:40:17 PST")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  login           Authenticate against SAP BTP CF regions (password, SSO, CI/CD)")
+		fmt.Println("  logoff          Clear stored tokens (regions preserved)")
+		fmt.Println("  org-users       List users across all CF organizations with roles")
+		fmt.Println("  org-space-users List users at org and space level with roles")
+		fmt.Println()
+		fmt.Println("Run 'bo <command> --help' for usage details.")
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(versionCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// versionCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// versionCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
