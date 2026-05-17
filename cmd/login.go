@@ -40,6 +40,8 @@ Omit region flags to reuse the regions from the previous login.`,
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		region, _ := cmd.Flags().GetString("region")
 		apiURL, _ := cmd.Flags().GetString("api")
+		usernameFlag, _ := cmd.Flags().GetString("username")
+		passwordFlag, _ := cmd.Flags().GetString("password")
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
@@ -87,19 +89,27 @@ Omit region flags to reuse the regions from the previous login.`,
 		)
 
 		if !sso {
-			// Prompt once for password credentials shared across all regions.
-			fmt.Fprintf(os.Stdout, "Email> ")
-			scanner := bufio.NewScanner(os.Stdin)
-			scanner.Scan()
-			username = strings.TrimSpace(scanner.Text())
+			// Use -u / -p flags when provided (non-interactive / CI mode).
+			username = usernameFlag
+			pwBytes = []byte(passwordFlag)
+
+			// Fall back to interactive prompts for any missing value.
+			if username == "" {
+				fmt.Fprintf(os.Stdout, "Email> ")
+				scanner := bufio.NewScanner(os.Stdin)
+				scanner.Scan()
+				username = strings.TrimSpace(scanner.Text())
+			}
 			if username == "" {
 				return fmt.Errorf("email cannot be empty")
 			}
-			fmt.Fprintf(os.Stdout, "Password> ")
-			pwBytes, err = term.ReadPassword(int(os.Stdin.Fd()))
-			fmt.Fprintln(os.Stdout)
-			if err != nil {
-				return fmt.Errorf("reading password: %w", err)
+			if len(pwBytes) == 0 {
+				fmt.Fprintf(os.Stdout, "Password> ")
+				pwBytes, err = term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprintln(os.Stdout)
+				if err != nil {
+					return fmt.Errorf("reading password: %w", err)
+				}
 			}
 			if len(pwBytes) == 0 {
 				return fmt.Errorf("password cannot be empty")
@@ -275,4 +285,6 @@ func init() {
 	loginCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); persisted for future commands")
 	loginCmd.Flags().String("region", "", "Single CF region shorthand (e.g. us10)")
 	loginCmd.Flags().String("api", "", "Full CF API endpoint URL (overrides --region)")
+	loginCmd.Flags().StringP("username", "u", "", "Username (email); skips the interactive email prompt")
+	loginCmd.Flags().StringP("password", "p", "", "Password; skips the interactive password prompt")
 }
