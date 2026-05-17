@@ -28,8 +28,7 @@
 * Use `bytes.Buffer` to capture and assert command output in CLI integration tests.
 
 ## Versioning Workflow
-- **Update Command**: When I say "version update," update `CHANGELOG.md`- increase verison number by 0.1.
+- **Update Command**: When I say "version update," update `CHANGELOG.md` and `cmd/version.txt`
 - **Date Format**: Use YYYY-MM-DD.
 - **Changelog Format**: Follow the [Keep a Changelog](https://keepachangelog.com/) standard.
 - **Content**: Summarize all recent changes made in the current session.
-- Also update cmd/version.go with latest version number, date and brief message of what's changed

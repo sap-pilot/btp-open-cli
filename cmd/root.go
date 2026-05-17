@@ -1,21 +1,21 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
 )
 
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "bo",
-	Short: "SAP BTP Open CLI",
-	Long:  `bo is an open CLI for SAP Business Technology Platform (BTP) Cloud Foundry.`,
+	Short: "Open CLI for SAP BTP",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println(versionInfo + " — Open CLI for SAP BTP")
+		fmt.Println()
+		cmd.Usage()
+	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		if verbose {
@@ -25,8 +25,6 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
@@ -37,5 +35,3 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose/debug output")
 }
-
-

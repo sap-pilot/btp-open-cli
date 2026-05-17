@@ -1,16 +1,24 @@
 package cmd
 
 import (
+	_ "embed"
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
+
+//go:embed version.txt
+var versionFile string
+
+// versionInfo is the trimmed content of version.txt, available package-wide.
+var versionInfo = strings.TrimSpace(versionFile)
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version info",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("bo v0.1 - built 2026-05-16 22:40:17 PST")
+		fmt.Println(versionInfo)
 		fmt.Println()
 		fmt.Println("Commands:")
 		fmt.Println("  login           Authenticate against SAP BTP CF regions (password, SSO, CI/CD)")
