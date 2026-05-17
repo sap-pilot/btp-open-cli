@@ -23,6 +23,7 @@ import (
 type orgDetail struct {
 	Org   cf.Organization
 	Users []cf.User
+	Roles map[string][]string // userGUID → role types
 }
 
 type regionData struct {
@@ -37,6 +38,7 @@ type outUser struct {
 	ID     string `json:"id"     toon:"id"`
 	Name   string `json:"name"   toon:"name"`
 	Origin string `json:"origin" toon:"origin"`
+	Roles  string `json:"roles"  toon:"roles"`
 }
 
 type outOrg struct {
@@ -81,7 +83,12 @@ func buildOutputDoc(results []regionData, filter string) (outDoc, []error) {
 		for _, od := range r.Orgs {
 			oo := outOrg{ID: od.Org.GUID, Name: od.Org.Name}
 			for _, u := range od.Users {
-				ou := outUser{ID: u.GUID, Name: u.Username, Origin: u.Origin}
+				ou := outUser{
+					ID:     u.GUID,
+					Name:   u.Username,
+					Origin: u.Origin,
+					Roles:  strings.Join(od.Roles[u.GUID], ";"),
+				}
 				if userMatchesFilter(ou, filter) {
 					oo.Users = append(oo.Users, ou)
 				}
@@ -171,7 +178,12 @@ If --regions is omitted, the regions from the last login are used.`,
 						fmt.Fprintf(os.Stderr, "warning: skipping org %q in %s: %v\n", org.Name, regionName, err)
 						continue
 					}
-					details = append(details, orgDetail{Org: org, Users: users})
+					roles, err := client.ListOrganizationRoles(ctx, org.GUID)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not fetch roles for org %q in %s: %v\n", org.Name, regionName, err)
+						roles = map[string][]string{}
+					}
+					details = append(details, orgDetail{Org: org, Users: users, Roles: roles})
 				}
 				results[idx] = regionData{Region: regionName, Orgs: details}
 			}(i, apiURL)
@@ -238,14 +250,14 @@ func writeOrgUsersCSV(results []regionData, filter string) error {
 	w := csv.NewWriter(os.Stdout)
 	defer w.Flush()
 
-	if err := w.Write([]string{"region", "org_id", "org_name", "user_id", "user_name", "user_origin"}); err != nil {
+	if err := w.Write([]string{"region", "org_id", "org_name", "user_id", "user_name", "user_origin", "user_roles"}); err != nil {
 		return err
 	}
 	for _, r := range doc.Regions {
 		for _, o := range r.Orgs {
 			for _, u := range o.Users {
 				if err := w.Write([]string{
-					r.ID, o.ID, o.Name, u.ID, u.Name, u.Origin,
+					r.ID, o.ID, o.Name, u.ID, u.Name, u.Origin, u.Roles,
 				}); err != nil {
 					return err
 				}
