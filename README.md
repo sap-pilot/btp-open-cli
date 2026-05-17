@@ -114,35 +114,37 @@ bo org-space-users --filter space_developer
 bo org-space-users --regions us10,eu10
 ```
 
-### `add-org-users`
+### `create-org-space-users`
 
-Add users to every accessible CF organization from a CSV file.
-
-CSV format (`name,origin,roles`):
-```
-name,origin,roles
-user@example.com,sap.ids,organization_user;organization_manager
-```
-
-```bash
-bo add-org-users --file users.csv
-bo add-org-users --file users.csv --regions us10,eu10
-```
-
-### `add-space-users`
-
-Add users to every space in every accessible CF organization from a CSV file.
+Add users with org and space roles to target CF organizations and their spaces from a CSV file.
 
 CSV format (`name,origin,roles`):
 ```
 name,origin,roles
-user@example.com,sap.ids,space_developer;space_manager
+user@example.com,sap.ids,organization_user;organization_manager;space_developer;space_manager
 ```
 
+Org-level roles (`organization_*`) are assigned to each target org.
+Space-level roles (`space_*`) are assigned to every space within each target org.
+
 ```bash
-bo add-space-users --file users.csv
-bo add-space-users --file users.csv --regions us10,eu10
+# Add to all orgs in stored regions (shows TOON preview, prompts y/N)
+bo create-org-space-users --users users.csv
+
+# Skip confirmation prompt
+bo create-org-space-users --users users.csv -y
+
+# Target specific orgs only (CSV: region,id,name)
+bo create-org-space-users --users users.csv --orgs target-orgs.csv
+
+# Exclude orgs such as production environments (CSV: region,id,name)
+bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
+
+# Specific regions
+bo create-org-space-users --users users.csv --regions us10,eu10
 ```
+
+Without `-y`, a TOON preview of target orgs/spaces and users is shown before any changes are made.
 
 ### `delete-org-space-users`
 
@@ -220,7 +222,6 @@ Run `bo <command> --help` for full flag descriptions and usage examples for any 
 bo login --help
 bo org-users --help
 bo org-space-users --help
-bo add-org-users --help
-bo add-space-users --help
+bo create-org-space-users --help
 bo delete-org-space-users --help
 ```
