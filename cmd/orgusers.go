@@ -65,7 +65,8 @@ func userMatchesFilter(u outUser, filter string) bool {
 	f := strings.ToLower(filter)
 	return strings.Contains(strings.ToLower(u.ID), f) ||
 		strings.Contains(strings.ToLower(u.Name), f) ||
-		strings.Contains(strings.ToLower(u.Origin), f)
+		strings.Contains(strings.ToLower(u.Origin), f) ||
+		strings.Contains(strings.ToLower(u.Roles), f)
 }
 
 // buildOutputDoc converts raw fetch results into the shared output model.

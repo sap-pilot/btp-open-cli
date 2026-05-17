@@ -63,7 +63,10 @@ type ospOutDoc struct {
 	Regions []ospOutRegion `json:"regions" toon:"regions"`
 }
 
-func buildOspOutputDoc(results []ospRegionData) (ospOutDoc, []error) {
+// buildOspOutputDoc converts raw fetch results into the shared output model.
+// filter is an optional substring matched case-insensitively against user
+// id/name/origin/roles; spaces and orgs with no matching users are omitted.
+func buildOspOutputDoc(results []ospRegionData, filter string) (ospOutDoc, []error) {
 	var doc ospOutDoc
 	var errs []error
 	for _, r := range results {
@@ -75,28 +78,40 @@ func buildOspOutputDoc(results []ospRegionData) (ospOutDoc, []error) {
 		for _, od := range r.Orgs {
 			oo := ospOutOrg{ID: od.Org.GUID, Name: od.Org.Name}
 			for _, u := range od.Users {
-				oo.Users = append(oo.Users, outUser{
+				ou := outUser{
 					ID:     u.GUID,
 					Name:   u.Username,
 					Origin: u.Origin,
 					Roles:  strings.Join(od.Roles[u.GUID], ";"),
-				})
+				}
+				if userMatchesFilter(ou, filter) {
+					oo.Users = append(oo.Users, ou)
+				}
 			}
 			for _, sd := range od.Spaces {
 				sp := ospOutSpace{ID: sd.Space.GUID, Name: sd.Space.Name}
 				for _, u := range sd.Users {
-					sp.Users = append(sp.Users, outUser{
+					ou := outUser{
 						ID:     u.GUID,
 						Name:   u.Username,
 						Origin: u.Origin,
 						Roles:  strings.Join(sd.Roles[u.GUID], ";"),
-					})
+					}
+					if userMatchesFilter(ou, filter) {
+						sp.Users = append(sp.Users, ou)
+					}
 				}
-				oo.Spaces = append(oo.Spaces, sp)
+				if len(sp.Users) > 0 {
+					oo.Spaces = append(oo.Spaces, sp)
+				}
 			}
-			or.Orgs = append(or.Orgs, oo)
+			if len(oo.Users) > 0 || len(oo.Spaces) > 0 {
+				or.Orgs = append(or.Orgs, oo)
+			}
 		}
-		doc.Regions = append(doc.Regions, or)
+		if len(or.Orgs) > 0 {
+			doc.Regions = append(doc.Regions, or)
+		}
 	}
 	return doc, errs
 }
@@ -117,6 +132,7 @@ If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
+		filter, _ := cmd.Flags().GetString("filter")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -219,17 +235,17 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOspJSON(results)
+			return writeOspJSON(results, filter)
 		case "csv":
-			return writeOspCSV(results)
+			return writeOspCSV(results, filter)
 		default: // "toon"
-			return writeOspToon(results)
+			return writeOspToon(results, filter)
 		}
 	},
 }
 
-func writeOspToon(results []ospRegionData) error {
-	doc, errs := buildOspOutputDoc(results)
+func writeOspToon(results []ospRegionData, filter string) error {
+	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -241,8 +257,8 @@ func writeOspToon(results []ospRegionData) error {
 	return err
 }
 
-func writeOspJSON(results []ospRegionData) error {
-	doc, errs := buildOspOutputDoc(results)
+func writeOspJSON(results []ospRegionData, filter string) error {
+	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -257,8 +273,8 @@ func writeOspJSON(results []ospRegionData) error {
 // writeOspCSV writes one row per user. The "scope" column is "org" for
 // org-level users and "space" for space-level users; scope_id/scope_name
 // identify the org or space respectively.
-func writeOspCSV(results []ospRegionData) error {
-	doc, errs := buildOspOutputDoc(results)
+func writeOspCSV(results []ospRegionData, filter string) error {
+	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -304,4 +320,5 @@ func init() {
 	rootCmd.AddCommand(orgSpaceUsersCmd)
 	orgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgSpaceUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
 }
