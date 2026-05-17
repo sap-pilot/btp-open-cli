@@ -91,6 +91,21 @@ func Load() (*Credentials, error) {
 	return &c, nil
 }
 
+// ClearTokens removes all stored OAuth tokens while preserving ActiveAPIURLs
+// so the next login can reuse the same regions without requiring --regions.
+func ClearTokens() error {
+	creds, err := Load()
+	if err != nil {
+		// Nothing to clear if the file doesn't exist yet.
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	creds.Tokens = make(map[string]RegionToken)
+	return Save(creds)
+}
+
 func Clear() error {
 	path, err := credentialsPath()
 	if err != nil {
