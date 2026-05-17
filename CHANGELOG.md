@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1+7d191a16d.2026-05-17
+
+### New commands
+- **`delete-org-space-users`** — remove users from all spaces (space-level roles first) then from the org across one or more regions; CSV format: `name,origin`; actual CF API errors surfaced to stderr
+
+### Fixes
+- `add-org-users` / `add-space-users`: fixed "user not found" error by passing `username`+`origin` directly in `POST /v3/roles` body — CF resolves IdP users itself, no separate `POST /v3/users` step needed
+- `delete-org-space-users`: `DELETE /v3/roles` now accepts `202 Accepted` in addition to `204 No Content` for async CF role deletions
+- Role deletion errors now print the actual CF API response to stderr instead of being silently swallowed
+
+---
+
 ## v0.1+f06db5869.2026-05-16
 
 ### New commands
