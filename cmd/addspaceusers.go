@@ -100,17 +100,9 @@ If --regions is omitted, the regions from the last login are used.`,
 						mu.Unlock()
 
 						for _, u := range users {
-							cfUser, err := client.CreateUser(ctx, u.Name, u.Origin)
-							if err != nil {
-								mu.Lock()
-								fmt.Fprintf(os.Stderr, "  ! %s: failed to resolve user: %v\n", u.Name, err)
-								mu.Unlock()
-								continue
-							}
-
 							var addedRoles, failedRoles []string
 							for _, role := range u.Roles {
-								if err := client.CreateSpaceRole(ctx, role, cfUser.GUID, space.GUID); err != nil {
+								if err := client.CreateSpaceRole(ctx, role, u.Name, u.Origin, space.GUID); err != nil {
 									failedRoles = append(failedRoles, role)
 									slog.Debug("role error", "user", u.Name, "role", role, "err", err)
 								} else {

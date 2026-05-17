@@ -98,3 +98,29 @@ func (c *Client) post(ctx context.Context, fullURL string, body, out interface{}
 	}
 	return nil
 }
+
+// deleteRequest sends DELETE to fullURL and returns *APIError for non-2xx responses.
+func (c *Client) deleteRequest(ctx context.Context, fullURL string) error {
+	req, err := http.NewRequestWithContext(ctx, "DELETE", fullURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", fullURL, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusAccepted:
+		return nil
+	default:
+		return &APIError{StatusCode: resp.StatusCode, Body: body}
+	}
+}
