@@ -60,6 +60,27 @@ func (c *Client) CreateOrganizationRole(ctx context.Context, roleType, userGUID,
 	return nil
 }
 
+// CreateSpaceRole assigns roleType to userGUID in spaceGUID via POST /v3/roles.
+// Returns nil when the role already exists (HTTP 422).
+func (c *Client) CreateSpaceRole(ctx context.Context, roleType, userGUID, spaceGUID string) error {
+	body := map[string]interface{}{
+		"type": roleType,
+		"relationships": map[string]interface{}{
+			"user":  map[string]interface{}{"data": map[string]string{"guid": userGUID}},
+			"space": map[string]interface{}{"data": map[string]string{"guid": spaceGUID}},
+		},
+	}
+	err := c.post(ctx, c.BaseURL()+"/v3/roles", body, nil)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
+			return nil // role already exists — idempotent
+		}
+		return err
+	}
+	return nil
+}
+
 func (c *Client) listRoles(ctx context.Context, filterParam, guid string) (map[string][]string, error) {
 	result := make(map[string][]string)
 	nextURL := fmt.Sprintf("%s/v3/roles?%s=%s&per_page=100", c.BaseURL(), filterParam, guid)

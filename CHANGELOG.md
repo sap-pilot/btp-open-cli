@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.1+f06db5869.2026-05-16
+
+### New commands
+- **`add-space-users`** — add users from a CSV file (`name,origin,roles`) to every space in every accessible CF organization across one or more regions; users created via `POST /v3/users`, space roles assigned via `POST /v3/roles`; both operations are idempotent
+
+### Features
+- `add-space-users --file <path>` (required): same CSV format as `add-org-users` (`name,origin,roles`); roles should be space-level (e.g. `space_developer;space_manager`)
+- `add-space-users --regions`: optional, defaults to regions from last login
+- CSV parser (`parseUsersCSV`) extracted as a shared helper used by both `add-org-users` and `add-space-users`
+
+### Internal
+- `cf/roles`: added `CreateSpaceRole` (POST `/v3/roles` with space relationship, ignores 422 already-exists)
+
+---
+
 ## v0.1+e4a576dd8.2026-05-16
 
 ### New commands

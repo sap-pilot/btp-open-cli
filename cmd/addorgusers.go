@@ -23,7 +23,7 @@ type csvUser struct {
 	Roles  []string
 }
 
-func parseAddOrgUsersCSV(path string) ([]csvUser, error) {
+func parseUsersCSV(path string) ([]csvUser, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening file: %w", err)
@@ -87,7 +87,7 @@ If --regions is omitted, the regions from the last login are used.`,
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		filePath, _ := cmd.Flags().GetString("file")
 
-		users, err := parseAddOrgUsersCSV(filePath)
+		users, err := parseUsersCSV(filePath)
 		if err != nil {
 			return fmt.Errorf("invalid CSV: %w", err)
 		}
