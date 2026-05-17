@@ -39,3 +39,6 @@ bo_master.exe
 
 # tmp config/testing folder
 tmp/
+
+# Claude Code local settings
+.claude/settings.local.json
