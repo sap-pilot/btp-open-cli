@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.1+e4a576dd8.2026-05-16
+
+### New commands
+- **`add-org-users`** — add users from a CSV file (`name,origin,roles`) to all accessible CF organizations in one or more regions; users created via `POST /v3/users`, roles assigned via `POST /v3/roles`; both operations are idempotent (existing users/roles are left unchanged)
+
+### Features
+- `add-org-users --file <path>` (required): parses CSV with header `name,origin,roles`; roles are semicolon-separated
+- `add-org-users --regions`: optional, defaults to regions from last login
+- Version string now follows `v{version}+{9-char-commit}.{YYYY-MM-DD}` format, embedded at build time from `cmd/version.txt`
+- `bo` root command consolidated to show version and description on a single line
+
+### Internal
+- `cf/client`: added `post()` method and `APIError` type for structured HTTP error handling
+- `cf/users`: added `CreateUser` (POST `/v3/users` with 422 fallback to `FindUser`) and `FindUser` (GET `/v3/users?usernames=&origins=`)
+- `cf/roles`: added `CreateOrganizationRole` (POST `/v3/roles`, ignores 422 already-exists)
+
+---
+
 ## v0.1 — 2026-05-16
 
 ### New commands
