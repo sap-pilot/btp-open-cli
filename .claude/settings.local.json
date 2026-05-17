@@ -13,7 +13,8 @@
       "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_test_code')",
       "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&origin=sap.ids')",
       "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&response_type=token')",
-      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&scope=openid')"
+      "Bash(curl -s -X POST https://login.cf.us10.hana.ondemand.com/oauth/token -H 'Authorization: Basic Y2Y6' -H 'Content-Type: application/x-www-form-urlencoded' -d 'grant_type=password&username=passcode&password=dummy_code&scope=openid')",
+      "Bash(go get *)"
     ]
   }
 }

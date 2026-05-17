@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -22,109 +23,253 @@ var loginCmd = &cobra.Command{
 	Short: "Authenticate against SAP BTP Cloud Foundry",
 	Long: `Authenticate against SAP BTP Cloud Foundry.
 
-Password login (prompts for email and password):
+Single-region (password):
   bo login --region us10
   bo login --api https://api.cf.us10-001.hana.ondemand.com
 
-SSO login (one-time passcode):
-  bo login --sso --region us10
+Multi-region (password, prompts once):
+  bo login --regions us10,eu10
 
-If --region and --api are both omitted, the API endpoint from the previous
-login is reused. Find your exact endpoint in BTP Cockpit → subaccount →
-Cloud Foundry Environment.`,
+SSO (one-time passcode):
+  bo login --sso --region us10
+  bo login --sso --regions us10,eu10
+
+Omit region flags to reuse the regions from the previous login.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sso, _ := cmd.Flags().GetBool("sso")
-		apiURL, _ := cmd.Flags().GetString("api")
+		regionsFlag, _ := cmd.Flags().GetString("regions")
 		region, _ := cmd.Flags().GetString("region")
-
-		// Resolve CF API base URL: --api > --region > stored from last login.
-		switch {
-		case apiURL != "":
-			// use as-is
-		case region != "":
-			apiURL = fmt.Sprintf("https://api.cf.%s.hana.ondemand.com", region)
-		default:
-			stored, err := store.Load()
-			if err != nil || stored.APIURL == "" {
-				return fmt.Errorf(
-					"provide --region <region> or --api <url>\n" +
-						"(find the API endpoint in BTP Cockpit → subaccount → Cloud Foundry Environment)",
-				)
-			}
-			apiURL = stored.APIURL
-			fmt.Fprintf(os.Stderr, "Using previously configured API: %s\n", apiURL)
-		}
+		apiURL, _ := cmd.Flags().GetString("api")
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		slog.Debug("resolving CF endpoints", "api_url", apiURL)
-		endpoints, err := cf.GetEndpoints(ctx, apiURL)
+		// Resolve the ordered list of CF API base URLs to authenticate against.
+		apiURLs, err := resolveAPIURLs(regionsFlag, region, apiURL)
 		if err != nil {
-			return fmt.Errorf("could not reach CF API at %q: %w", apiURL, err)
+			return err
 		}
 
-		var tr *cf.TokenResponse
+		// Load existing credentials to merge into; create fresh if absent.
+		creds, loadErr := store.Load()
+		if loadErr != nil {
+			creds = &store.Credentials{Tokens: make(map[string]store.RegionToken)}
+		}
 
-		if sso {
-			passcodeURL := endpoints.Authorization + "/passcode"
-			fmt.Fprintf(os.Stdout, "\nOne Time Code (Get one at %s)\nPasscode> ", passcodeURL)
+		// Fetch CF endpoints for every URL in parallel.
+		type endpointResult struct {
+			apiURL    string
+			endpoints *cf.Endpoints
+			err       error
+		}
+		epResults := make([]endpointResult, len(apiURLs))
+		var wg sync.WaitGroup
+		for i, u := range apiURLs {
+			wg.Add(1)
+			go func(idx int, url string) {
+				defer wg.Done()
+				ep, e := cf.GetEndpoints(ctx, url)
+				epResults[idx] = endpointResult{apiURL: url, endpoints: ep, err: e}
+			}(i, u)
+		}
+		wg.Wait()
 
-			scanner := bufio.NewScanner(os.Stdin)
-			scanner.Scan()
-			passcode := strings.TrimSpace(scanner.Text())
-			if passcode == "" {
-				return fmt.Errorf("passcode cannot be empty")
+		// Validate: all endpoints must be reachable before we prompt credentials.
+		for _, r := range epResults {
+			if r.err != nil {
+				return fmt.Errorf("could not reach CF API at %q: %w", r.apiURL, r.err)
 			}
+		}
 
-			slog.Debug("exchanging SSO passcode", "token_url", endpoints.Authorization+"/oauth/token")
-			tr, err = cf.ExchangePasscode(ctx, endpoints.Authorization, passcode)
-		} else {
+		var (
+			username string
+			pwBytes  []byte
+		)
+
+		if !sso {
+			// Prompt once for password credentials shared across all regions.
 			fmt.Fprintf(os.Stdout, "Email> ")
 			scanner := bufio.NewScanner(os.Stdin)
 			scanner.Scan()
-			username := strings.TrimSpace(scanner.Text())
+			username = strings.TrimSpace(scanner.Text())
 			if username == "" {
 				return fmt.Errorf("email cannot be empty")
 			}
-
 			fmt.Fprintf(os.Stdout, "Password> ")
-			pwBytes, readErr := term.ReadPassword(int(os.Stdin.Fd()))
+			pwBytes, err = term.ReadPassword(int(os.Stdin.Fd()))
 			fmt.Fprintln(os.Stdout)
-			if readErr != nil {
-				return fmt.Errorf("reading password: %w", readErr)
+			if err != nil {
+				return fmt.Errorf("reading password: %w", err)
 			}
 			if len(pwBytes) == 0 {
 				return fmt.Errorf("password cannot be empty")
 			}
-
-			slog.Debug("authenticating with password", "token_url", endpoints.Token+"/oauth/token", "username", username)
-			tr, err = cf.PasswordLogin(ctx, endpoints.Token, username, string(pwBytes))
 		}
 
-		if err != nil {
-			return fmt.Errorf("authentication failed: %w", err)
+		// For SSO: collect a passcode per region first (user can open all tabs
+		// in the browser before entering codes), then authenticate in order.
+		type ssoPasscode struct {
+			apiURL   string
+			region   string
+			authEP   string
+			passcode string
+		}
+		var ssoCodes []ssoPasscode
+		if sso {
+			fmt.Fprintln(os.Stdout, "\nGet a one-time passcode for each region:")
+			for _, r := range epResults {
+				regionName := store.APIURLToRegion(r.apiURL)
+				slog.Debug("passcode URL", "region", regionName, "url", r.endpoints.Authorization+"/passcode")
+				fmt.Fprintf(os.Stdout, "  %s → %s/passcode\n", regionName, r.endpoints.Authorization)
+			}
+			fmt.Fprintln(os.Stdout)
+			scanner := bufio.NewScanner(os.Stdin)
+			for _, r := range epResults {
+				regionName := store.APIURLToRegion(r.apiURL)
+				fmt.Fprintf(os.Stdout, "%s Passcode> ", regionName)
+				scanner.Scan()
+				code := strings.TrimSpace(scanner.Text())
+				if code == "" {
+					return fmt.Errorf("passcode for %s cannot be empty", regionName)
+				}
+				ssoCodes = append(ssoCodes, ssoPasscode{
+					apiURL:   r.apiURL,
+					region:   regionName,
+					authEP:   r.endpoints.Authorization,
+					passcode: code,
+				})
+			}
 		}
 
-		token := &store.Token{
-			APIURL:       apiURL,
-			AccessToken:  tr.AccessToken,
-			RefreshToken: tr.RefreshToken,
-			TokenType:    tr.TokenType,
-			ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
+		// Authenticate against each region (parallel for password, sequential for SSO
+		// since we already have all codes).
+		type authResult struct {
+			apiURL string
+			token  *store.RegionToken
+			err    error
 		}
-		if err := store.Save(token); err != nil {
+		authResults := make([]authResult, len(apiURLs))
+
+		if sso {
+			// Sequential but non-blocking — codes already collected.
+			var authWg sync.WaitGroup
+			for i, sc := range ssoCodes {
+				authWg.Add(1)
+				go func(idx int, s ssoPasscode) {
+					defer authWg.Done()
+					tr, e := cf.ExchangePasscode(ctx, s.authEP, s.passcode)
+					if e != nil {
+						authResults[idx] = authResult{apiURL: s.apiURL, err: e}
+						return
+					}
+					tok := buildRegionToken(s.apiURL, tr)
+					authResults[idx] = authResult{apiURL: s.apiURL, token: &tok}
+				}(i, sc)
+			}
+			authWg.Wait()
+		} else {
+			password := string(pwBytes)
+			var authWg sync.WaitGroup
+			for i, r := range epResults {
+				authWg.Add(1)
+				go func(idx int, ep endpointResult) {
+					defer authWg.Done()
+					tr, e := cf.PasswordLogin(ctx, ep.endpoints.Token, username, password)
+					if e != nil {
+						authResults[idx] = authResult{apiURL: ep.apiURL, err: e}
+						return
+					}
+					tok := buildRegionToken(ep.apiURL, tr)
+					authResults[idx] = authResult{apiURL: ep.apiURL, token: &tok}
+				}(i, r)
+			}
+			authWg.Wait()
+		}
+
+		// Merge successful tokens into credentials; report failures.
+		var activeURLs []string
+		for _, ar := range authResults {
+			region := store.APIURLToRegion(ar.apiURL)
+			if ar.err != nil {
+				fmt.Fprintf(os.Stderr, "  %s: FAILED — %v\n", region, ar.err)
+				continue
+			}
+			creds.Tokens[ar.apiURL] = *ar.token
+			activeURLs = append(activeURLs, ar.apiURL)
+			fmt.Fprintf(os.Stdout, "  %s: OK\n", region)
+		}
+
+		if len(activeURLs) == 0 {
+			return fmt.Errorf("authentication failed for all regions")
+		}
+
+		creds.ActiveAPIURLs = activeURLs
+		if err := store.Save(creds); err != nil {
 			return fmt.Errorf("saving credentials: %w", err)
 		}
 
-		fmt.Fprintln(os.Stdout, "\nAuthenticated successfully.")
+		fmt.Fprintf(os.Stdout, "\nAuthenticated. %d region(s) active.\n", len(activeURLs))
 		return nil
 	},
+}
+
+// resolveAPIURLs builds the ordered list of CF API base URLs from flags.
+// Priority: --regions > --api > --region > stored credentials.
+func resolveAPIURLs(regionsFlag, region, apiURL string) ([]string, error) {
+	switch {
+	case regionsFlag != "":
+		var urls []string
+		for _, r := range splitCSV(regionsFlag) {
+			urls = append(urls, store.RegionToAPIURL(r))
+		}
+		return urls, nil
+	case apiURL != "":
+		return []string{apiURL}, nil
+	case region != "":
+		return []string{store.RegionToAPIURL(region)}, nil
+	default:
+		creds, err := store.Load()
+		if err != nil || len(creds.ActiveAPIURLs) == 0 {
+			return nil, fmt.Errorf(
+				"provide --regions <r1,r2>, --region <region>, or --api <url>\n" +
+					"(find the API endpoint in BTP Cockpit → subaccount → Cloud Foundry Environment)",
+			)
+		}
+		regions := make([]string, len(creds.ActiveAPIURLs))
+		for i, u := range creds.ActiveAPIURLs {
+			regions[i] = store.APIURLToRegion(u)
+		}
+		fmt.Fprintf(os.Stderr, "Using previously configured region(s): %s\n",
+			strings.Join(regions, ", "))
+		return creds.ActiveAPIURLs, nil
+	}
+}
+
+func buildRegionToken(apiURL string, tr *cf.TokenResponse) store.RegionToken {
+	return store.RegionToken{
+		APIURL:       apiURL,
+		AccessToken:  tr.AccessToken,
+		RefreshToken: tr.RefreshToken,
+		TokenType:    tr.TokenType,
+		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
+	}
+}
+
+// splitCSV parses a comma-separated string, trimming whitespace from each element.
+func splitCSV(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func init() {
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().Bool("sso", false, "Authenticate using a one-time SSO passcode")
-	loginCmd.Flags().String("region", "", "SAP BTP CF region (e.g. us10, eu10); omit to reuse last login's region")
+	loginCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); persisted for future commands")
+	loginCmd.Flags().String("region", "", "Single CF region shorthand (e.g. us10)")
 	loginCmd.Flags().String("api", "", "Full CF API endpoint URL (overrides --region)")
 }
