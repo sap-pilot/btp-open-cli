@@ -1,0 +1,53 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(sed 's/^bo //' cmd/version.txt | tr -d '[:space:]')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build binaries
+        run: |
+          mkdir dist
+          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/bo-linux-amd64    .
+          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/bo-linux-arm64    .
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/bo-darwin-amd64   .
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/bo-darwin-arm64   .
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/bo-windows-amd64.exe .
+
+      - name: Extract release notes
+        run: |
+          awk '/^## /{found=1; next} found && /^---/{exit} found{print}' CHANGELOG.md \
+            | sed '/^[[:space:]]*$/d' > release-notes.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true
