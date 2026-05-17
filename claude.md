@@ -28,7 +28,7 @@
 * Use `bytes.Buffer` to capture and assert command output in CLI integration tests.
 
 ## Versioning Workflow
-- **Update Command**: When I say "version update," update `CHANGELOG.md` and `cmd/version.txt`
+- **Update Command**: When I say "version update," update `CHANGELOG.md` and update `cmd/version.txt` with {version_number}+{last_9_characters_of_last_git_commit_id}.{last_commit_date_in_YYYY-MM-DD_format} 
 - **Date Format**: Use YYYY-MM-DD.
 - **Changelog Format**: Follow the [Keep a Changelog](https://keepachangelog.com/) standard.
 - **Content**: Summarize all recent changes made in the current session.
