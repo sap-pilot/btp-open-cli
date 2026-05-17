@@ -18,9 +18,17 @@ type usersResponse struct {
 
 // ListOrganizationUsers fetches all users in a given org, iterating every page.
 func (c *Client) ListOrganizationUsers(ctx context.Context, orgGUID string) ([]User, error) {
-	var all []User
-	nextURL := fmt.Sprintf("%s/v3/organizations/%s/users?per_page=100", c.BaseURL(), orgGUID)
+	return c.listUsers(ctx, fmt.Sprintf("%s/v3/organizations/%s/users?per_page=100", c.BaseURL(), orgGUID))
+}
 
+// ListSpaceUsers fetches all users in a given space, iterating every page.
+func (c *Client) ListSpaceUsers(ctx context.Context, spaceGUID string) ([]User, error) {
+	return c.listUsers(ctx, fmt.Sprintf("%s/v3/spaces/%s/users?per_page=100", c.BaseURL(), spaceGUID))
+}
+
+func (c *Client) listUsers(ctx context.Context, firstURL string) ([]User, error) {
+	var all []User
+	nextURL := firstURL
 	for nextURL != "" {
 		var page usersResponse
 		if err := c.get(ctx, nextURL, &page); err != nil {

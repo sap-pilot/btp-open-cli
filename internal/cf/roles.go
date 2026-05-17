@@ -28,8 +28,18 @@ type rolesResponse struct {
 // ListOrganizationRoles fetches all role assignments for the given org and
 // returns a map of userGUID → []roleType (e.g. "organization_manager").
 func (c *Client) ListOrganizationRoles(ctx context.Context, orgGUID string) (map[string][]string, error) {
+	return c.listRoles(ctx, "organization_guids", orgGUID)
+}
+
+// ListSpaceRoles fetches all role assignments for the given space and
+// returns a map of userGUID → []roleType (e.g. "space_developer").
+func (c *Client) ListSpaceRoles(ctx context.Context, spaceGUID string) (map[string][]string, error) {
+	return c.listRoles(ctx, "space_guids", spaceGUID)
+}
+
+func (c *Client) listRoles(ctx context.Context, filterParam, guid string) (map[string][]string, error) {
 	result := make(map[string][]string)
-	nextURL := fmt.Sprintf("%s/v3/roles?organization_guids=%s&per_page=100", c.BaseURL(), orgGUID)
+	nextURL := fmt.Sprintf("%s/v3/roles?%s=%s&per_page=100", c.BaseURL(), filterParam, guid)
 
 	for nextURL != "" {
 		var page rolesResponse
