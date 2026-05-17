@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,11 +10,15 @@ import (
 	"strings"
 	"sync"
 
+	toonenc "github.com/toon-format/toon-go"
+
 	"btp-open-cli/internal/cf"
 	"btp-open-cli/internal/store"
 
 	"github.com/spf13/cobra"
 )
+
+// ── internal fetch types ────────────────────────────────────────────────────
 
 type orgDetail struct {
 	Org   cf.Organization
@@ -21,18 +26,71 @@ type orgDetail struct {
 }
 
 type regionData struct {
-	Region string // display name, e.g. "us10"
+	Region string
 	Orgs   []orgDetail
 	Err    error
 }
+
+// ── shared output document model (JSON + TOON tags) ─────────────────────────
+
+type outUser struct {
+	ID     string `json:"id"     toon:"id"`
+	Name   string `json:"name"   toon:"name"`
+	Origin string `json:"origin" toon:"origin"`
+}
+
+type outOrg struct {
+	ID    string    `json:"id"    toon:"id"`
+	Name  string    `json:"name"  toon:"name"`
+	Users []outUser `json:"users" toon:"users"`
+}
+
+type outRegion struct {
+	ID   string   `json:"id"   toon:"id"`
+	Orgs []outOrg `json:"orgs" toon:"orgs"`
+}
+
+type outDoc struct {
+	Regions []outRegion `json:"regions" toon:"regions"`
+}
+
+// buildOutputDoc converts raw fetch results into the shared output model.
+func buildOutputDoc(results []regionData) (outDoc, []error) {
+	var doc outDoc
+	var errs []error
+	for _, r := range results {
+		if r.Err != nil {
+			errs = append(errs, fmt.Errorf("region %q: %w", r.Region, r.Err))
+			continue
+		}
+		or := outRegion{ID: r.Region}
+		for _, od := range r.Orgs {
+			oo := outOrg{ID: od.Org.GUID, Name: od.Org.Name}
+			for _, u := range od.Users {
+				oo.Users = append(oo.Users, outUser{
+					ID:     u.GUID,
+					Name:   u.Username,
+					Origin: u.Origin,
+				})
+			}
+			or.Orgs = append(or.Orgs, oo)
+		}
+		doc.Regions = append(doc.Regions, or)
+	}
+	return doc, errs
+}
+
+// ── command ─────────────────────────────────────────────────────────────────
 
 var orgUsersCmd = &cobra.Command{
 	Use:   "org-users",
 	Short: "List all org users across every accessible organization",
 	Long: `List users in every CF organization across one or more regions.
 
-Default output is a tree grouped by region → org → user.
-Use --format=csv for machine-readable output.
+Output formats (--format):
+  toon  Token-Oriented Object Notation — compact, human-readable (default)
+  json  JSON document
+  csv   CSV rows: region,org_id,org_name,user_id,user_name,user_origin
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -74,7 +132,7 @@ If --regions is omitted, the regions from the last login are used.`,
 				if !ok {
 					results[idx] = regionData{
 						Region: regionName,
-						Err: fmt.Errorf("no token — run: bo login --regions %s", regionName),
+						Err:    fmt.Errorf("no token — run: bo login --regions %s", regionName),
 					}
 					return
 				}
@@ -103,35 +161,53 @@ If --regions is omitted, the regions from the last login are used.`,
 		wg.Wait()
 
 		switch strings.ToLower(format) {
+		case "json":
+			return writeOrgUsersJSON(results)
 		case "csv":
 			return writeOrgUsersCSV(results)
-		default:
-			writeOrgUsersTree(results)
-			return nil
+		default: // "toon"
+			return writeOrgUsersToon(results)
 		}
 	},
 }
 
-// writeOrgUsersTree prints a human-readable hierarchy:
+// writeOrgUsersToon serializes the output document via the TOON encoder.
+// The library automatically produces a compact tabular representation for the
+// uniform users slice, e.g.:
 //
-//	Region: us10
-//	  Org: my-org (abc-123)
-//	    user@example.com  (guid-xyz)  sap.ids
-func writeOrgUsersTree(results []regionData) {
-	for _, r := range results {
-		fmt.Fprintf(os.Stdout, "Region: %s\n", r.Region)
-		if r.Err != nil {
-			fmt.Fprintf(os.Stdout, "  error: %v\n\n", r.Err)
-			continue
-		}
-		for _, od := range r.Orgs {
-			fmt.Fprintf(os.Stdout, "  Org: %s (%s)\n", od.Org.Name, od.Org.GUID)
-			for _, u := range od.Users {
-				fmt.Fprintf(os.Stdout, "    %-45s (%s)  %s\n", u.Username, u.GUID, u.Origin)
-			}
-		}
-		fmt.Fprintln(os.Stdout)
+//	regions[1]:
+//	  - id: us10
+//	    orgs[1]:
+//	      - id: abc-123
+//	        name: my-org
+//	        users[2]{id,name,origin}:
+//	          xyz-789,user@example.com,sap.ids
+//	          xyz-111,admin@example.com,uaa
+func writeOrgUsersToon(results []regionData) error {
+	doc, errs := buildOutputDoc(results)
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
+	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+	if err != nil {
+		return fmt.Errorf("encoding TOON: %w", err)
+	}
+	_, err = os.Stdout.Write(out)
+	return err
+}
+
+// writeOrgUsersJSON serializes the output document as indented JSON.
+func writeOrgUsersJSON(results []regionData) error {
+	doc, errs := buildOutputDoc(results)
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+	}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding JSON: %w", err)
+	}
+	fmt.Fprintln(os.Stdout, string(out))
+	return nil
 }
 
 // writeOrgUsersCSV writes region,org_id,org_name,user_id,user_name,user_origin rows.
@@ -164,5 +240,5 @@ func writeOrgUsersCSV(results []regionData) error {
 func init() {
 	rootCmd.AddCommand(orgUsersCmd)
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgUsersCmd.Flags().String("format", "tree", `Output format: tree (default) or csv`)
+	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
 }
