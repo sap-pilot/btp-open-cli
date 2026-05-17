@@ -2,7 +2,9 @@ package cf
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 )
 
 type roleRelationshipData struct {
@@ -35,6 +37,27 @@ func (c *Client) ListOrganizationRoles(ctx context.Context, orgGUID string) (map
 // returns a map of userGUID → []roleType (e.g. "space_developer").
 func (c *Client) ListSpaceRoles(ctx context.Context, spaceGUID string) (map[string][]string, error) {
 	return c.listRoles(ctx, "space_guids", spaceGUID)
+}
+
+// CreateOrganizationRole assigns roleType to userGUID in orgGUID via POST /v3/roles.
+// Returns nil when the role already exists (HTTP 422).
+func (c *Client) CreateOrganizationRole(ctx context.Context, roleType, userGUID, orgGUID string) error {
+	body := map[string]interface{}{
+		"type": roleType,
+		"relationships": map[string]interface{}{
+			"user":         map[string]interface{}{"data": map[string]string{"guid": userGUID}},
+			"organization": map[string]interface{}{"data": map[string]string{"guid": orgGUID}},
+		},
+	}
+	err := c.post(ctx, c.BaseURL()+"/v3/roles", body, nil)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
+			return nil // role already exists — idempotent
+		}
+		return err
+	}
+	return nil
 }
 
 func (c *Client) listRoles(ctx context.Context, filterParam, guid string) (map[string][]string, error) {
