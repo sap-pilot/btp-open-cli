@@ -54,8 +54,22 @@ type outDoc struct {
 	Regions []outRegion `json:"regions" toon:"regions"`
 }
 
+// userMatchesFilter reports whether any of a user's id, name, or origin
+// contains the filter string (case-insensitive). Always true when filter is "".
+func userMatchesFilter(u outUser, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	f := strings.ToLower(filter)
+	return strings.Contains(strings.ToLower(u.ID), f) ||
+		strings.Contains(strings.ToLower(u.Name), f) ||
+		strings.Contains(strings.ToLower(u.Origin), f)
+}
+
 // buildOutputDoc converts raw fetch results into the shared output model.
-func buildOutputDoc(results []regionData) (outDoc, []error) {
+// filter is an optional substring applied to user id/name/origin; orgs and
+// regions with no matching users are omitted from the result.
+func buildOutputDoc(results []regionData, filter string) (outDoc, []error) {
 	var doc outDoc
 	var errs []error
 	for _, r := range results {
@@ -67,15 +81,18 @@ func buildOutputDoc(results []regionData) (outDoc, []error) {
 		for _, od := range r.Orgs {
 			oo := outOrg{ID: od.Org.GUID, Name: od.Org.Name}
 			for _, u := range od.Users {
-				oo.Users = append(oo.Users, outUser{
-					ID:     u.GUID,
-					Name:   u.Username,
-					Origin: u.Origin,
-				})
+				ou := outUser{ID: u.GUID, Name: u.Username, Origin: u.Origin}
+				if userMatchesFilter(ou, filter) {
+					oo.Users = append(oo.Users, ou)
+				}
 			}
-			or.Orgs = append(or.Orgs, oo)
+			if len(oo.Users) > 0 {
+				or.Orgs = append(or.Orgs, oo)
+			}
 		}
-		doc.Regions = append(doc.Regions, or)
+		if len(or.Orgs) > 0 {
+			doc.Regions = append(doc.Regions, or)
+		}
 	}
 	return doc, errs
 }
@@ -96,6 +113,7 @@ If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
+		filter, _ := cmd.Flags().GetString("filter")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -162,11 +180,11 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOrgUsersJSON(results)
+			return writeOrgUsersJSON(results, filter)
 		case "csv":
-			return writeOrgUsersCSV(results)
+			return writeOrgUsersCSV(results, filter)
 		default: // "toon"
-			return writeOrgUsersToon(results)
+			return writeOrgUsersToon(results, filter)
 		}
 	},
 }
@@ -183,8 +201,8 @@ If --regions is omitted, the regions from the last login are used.`,
 //	        users[2]{id,name,origin}:
 //	          xyz-789,user@example.com,sap.ids
 //	          xyz-111,admin@example.com,uaa
-func writeOrgUsersToon(results []regionData) error {
-	doc, errs := buildOutputDoc(results)
+func writeOrgUsersToon(results []regionData, filter string) error {
+	doc, errs := buildOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -197,8 +215,8 @@ func writeOrgUsersToon(results []regionData) error {
 }
 
 // writeOrgUsersJSON serializes the output document as indented JSON.
-func writeOrgUsersJSON(results []regionData) error {
-	doc, errs := buildOutputDoc(results)
+func writeOrgUsersJSON(results []regionData, filter string) error {
+	doc, errs := buildOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -211,23 +229,23 @@ func writeOrgUsersJSON(results []regionData) error {
 }
 
 // writeOrgUsersCSV writes region,org_id,org_name,user_id,user_name,user_origin rows.
-func writeOrgUsersCSV(results []regionData) error {
+func writeOrgUsersCSV(results []regionData, filter string) error {
+	doc, errs := buildOutputDoc(results, filter)
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+	}
+
 	w := csv.NewWriter(os.Stdout)
 	defer w.Flush()
 
 	if err := w.Write([]string{"region", "org_id", "org_name", "user_id", "user_name", "user_origin"}); err != nil {
 		return err
 	}
-	for _, r := range results {
-		if r.Err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping region %q: %v\n", r.Region, r.Err)
-			continue
-		}
-		for _, od := range r.Orgs {
-			for _, u := range od.Users {
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, u := range o.Users {
 				if err := w.Write([]string{
-					r.Region, od.Org.GUID, od.Org.Name,
-					u.GUID, u.Username, u.Origin,
+					r.ID, o.ID, o.Name, u.ID, u.Name, u.Origin,
 				}); err != nil {
 					return err
 				}
@@ -241,4 +259,5 @@ func init() {
 	rootCmd.AddCommand(orgUsersCmd)
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, and origin")
 }
