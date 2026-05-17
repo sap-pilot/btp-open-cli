@@ -123,12 +123,15 @@ Omit region flags to reuse the regions from the previous login.`,
 				fmt.Fprintf(os.Stdout, "  %s → %s/passcode\n", regionName, r.endpoints.Authorization)
 			}
 			fmt.Fprintln(os.Stdout)
-			scanner := bufio.NewScanner(os.Stdin)
 			for _, r := range epResults {
 				regionName := store.APIURLToRegion(r.apiURL)
 				fmt.Fprintf(os.Stdout, "%s Passcode> ", regionName)
-				scanner.Scan()
-				code := strings.TrimSpace(scanner.Text())
+				codeBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+				fmt.Fprintln(os.Stdout)
+				if err != nil {
+					return fmt.Errorf("reading passcode for %s: %w", regionName, err)
+				}
+				code := strings.TrimSpace(string(codeBytes))
 				if code == "" {
 					return fmt.Errorf("passcode for %s cannot be empty", regionName)
 				}

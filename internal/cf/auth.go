@@ -81,8 +81,7 @@ func ExchangePasscode(ctx context.Context, authEndpoint, passcode string) (*Toke
 	return doTokenRequest(ctx, authEndpoint+"/oauth/token",
 		url.Values{
 			"grant_type": {"password"},
-			"username":   {"passcode"},
-			"password":   {passcode},
+			"passcode":   {passcode},
 		},
 		"passcode exchange",
 	)
