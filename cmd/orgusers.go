@@ -223,7 +223,10 @@ func writeOrgUsersToon(results []regionData, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
-	_, err = os.Stdout.Write(out)
+	if _, err = os.Stdout.Write(out); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(os.Stdout)
 	return err
 }
 
