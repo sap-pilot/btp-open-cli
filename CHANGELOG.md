@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.1+6c3314ba8.2026-05-17
+## v0.1+e4f0a435a.2026-05-17
+
+### Changed
+- **`delete-org-space-users`**: renamed flag `--file` → `--users`; added `-y`/`--yes` flag to skip confirmation; without `-y` the command now shows a TOON preview of all roles to be deleted (`{regions:[{id,orgs:[{id,name,users:[...],spaces:[{id,name,users:[...]}]}]}]}`) and prompts `y/N` before executing; roles are discovered up-front in parallel; space-level roles are deleted first, followed by a 5-second wait for CF's async processing, then org-level roles are removed
 
 ### New commands
 - **`create-org-space-users`** — add users from a CSV (`name,origin,roles`) to CF organizations and their spaces across one or more regions; org-level roles (`organization_*`) assigned to the org, space-level roles (`space_*`) assigned to every space within the org; supports `--orgs` / `--excludeOrgs` CSV files (`region,id,name`) to include or skip specific orgs; prints a TOON preview of target scope and users then prompts `y/N` before executing (skipped with `-y`)

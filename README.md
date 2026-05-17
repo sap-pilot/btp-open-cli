@@ -148,7 +148,7 @@ Without `-y`, a TOON preview of target orgs/spaces and users is shown before any
 
 ### `delete-org-space-users`
 
-Remove users from every space (space roles first) then from the organization across all accessible CF orgs.
+Remove users from every space (space roles first, then org roles after a 5-second pause) across all accessible CF orgs.
 
 CSV format (`name,origin`):
 ```
@@ -157,9 +157,17 @@ user@example.com,sap.ids
 ```
 
 ```bash
-bo delete-org-space-users --file users.csv
-bo delete-org-space-users --file users.csv --regions us10,eu10
+# Preview roles to be deleted, then confirm (y/N)
+bo delete-org-space-users --users users.csv
+
+# Skip confirmation prompt
+bo delete-org-space-users --users users.csv -y
+
+# Specific regions
+bo delete-org-space-users --users users.csv --regions us10,eu10
 ```
+
+Without `-y`, a TOON preview of all roles that will be deleted is shown before any changes are made.
 
 ### `version`
 
