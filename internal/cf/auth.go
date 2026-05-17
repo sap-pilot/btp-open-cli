@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var authHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var authHTTPClient = &http.Client{Timeout: 30 * time.Second, Transport: newTransport()}
 
 type cfInfoRaw struct {
 	AuthorizationEndpoint string `json:"authorization_endpoint"`

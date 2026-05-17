@@ -21,7 +21,7 @@ func NewClient(apiBaseURL, accessToken string) *Client {
 	return &Client{
 		apiBaseURL:  strings.TrimRight(apiBaseURL, "/"),
 		accessToken: accessToken,
-		http:        &http.Client{Timeout: 60 * time.Second},
+		http:        &http.Client{Timeout: 60 * time.Second, Transport: newTransport()},
 	}
 }
 

@@ -114,6 +114,51 @@ bo org-space-users --filter space_developer
 bo org-space-users --regions us10,eu10
 ```
 
+### `add-org-users`
+
+Add users to every accessible CF organization from a CSV file.
+
+CSV format (`name,origin,roles`):
+```
+name,origin,roles
+user@example.com,sap.ids,organization_user;organization_manager
+```
+
+```bash
+bo add-org-users --file users.csv
+bo add-org-users --file users.csv --regions us10,eu10
+```
+
+### `add-space-users`
+
+Add users to every space in every accessible CF organization from a CSV file.
+
+CSV format (`name,origin,roles`):
+```
+name,origin,roles
+user@example.com,sap.ids,space_developer;space_manager
+```
+
+```bash
+bo add-space-users --file users.csv
+bo add-space-users --file users.csv --regions us10,eu10
+```
+
+### `delete-org-space-users`
+
+Remove users from every space (space roles first) then from the organization across all accessible CF orgs.
+
+CSV format (`name,origin`):
+```
+name,origin
+user@example.com,sap.ids
+```
+
+```bash
+bo delete-org-space-users --file users.csv
+bo delete-org-space-users --file users.csv --regions us10,eu10
+```
+
 ### `version`
 
 Print version information.
@@ -129,6 +174,44 @@ bo version
 | `-v`, `--verbose` | Enable debug/verbose output |
 | `-h`, `--help` | Show help |
 
+## Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `HTTPS_PROXY` | Route all HTTPS requests through a proxy (e.g. `http://127.0.0.1:8080`) |
+| `HTTPS_PROXY_INSECURE` | Set to `true` to skip TLS verification — required when using mitmproxy |
+
+## Debugging with mitmproxy
+
+[mitmproxy](https://mitmproxy.org) lets you inspect every HTTP request and response the CLI makes, which is useful for understanding the CF API or troubleshooting errors.
+
+### Install mitmproxy (macOS)
+
+```bash
+brew install mitmproxy
+```
+
+### Install mitmproxy (Ubuntu)
+
+```bash
+pip3 install mitmproxy
+```
+
+### Intercept traffic
+
+```bash
+# Terminal 1 — start the proxy with a web UI at http://127.0.0.1:8081
+mitmweb --listen-port 8080
+
+# Terminal 2 — run any bo command through the proxy
+HTTPS_PROXY=http://127.0.0.1:8080 HTTPS_PROXY_INSECURE=true bo org-users
+HTTPS_PROXY=http://127.0.0.1:8080 HTTPS_PROXY_INSECURE=true bo login --regions us10
+```
+
+Open `http://127.0.0.1:8081` in a browser to browse captured requests interactively.
+
+> **Note:** `HTTPS_PROXY_INSECURE=true` disables TLS certificate verification so mitmproxy's intercepted certificate is accepted. Do not use this in production.
+
 ## More help
 
 Run `bo <command> --help` for full flag descriptions and usage examples for any command:
@@ -137,4 +220,7 @@ Run `bo <command> --help` for full flag descriptions and usage examples for any 
 bo login --help
 bo org-users --help
 bo org-space-users --help
+bo add-org-users --help
+bo add-space-users --help
+bo delete-org-space-users --help
 ```
