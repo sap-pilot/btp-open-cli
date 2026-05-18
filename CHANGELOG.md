@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2 — 2026-05-18
+
+### Added
+- **`users`** — new command to list users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations; automatically provisions the `btp-xsuaa` service instance and `btp-open-cli-sk` service key in each org's `util` space if they do not exist (TOON preview + `y/N` confirmation before any CF resource is created, bypass with `-y`); XSUAA credentials are cached in `~/.bo/credentials.json` and reused on subsequent runs; access tokens are refreshed when within 60 seconds of expiry
+  - `--orgs` / `--excludeOrgs` CSV files (`region,id,name`) to target or skip specific orgs
+  - `--filter` — case-insensitive substring match on any user field (`id`, `externalId`, `origin`, `userName`, `lastLogonTime`, `groups`)
+  - `--fields` — comma-separated allowlist of fields to include in output
+  - `--excludeFields` — comma-separated denylist of fields to omit from output
+
+### Changed
+- **`logoff`** — now also clears cached XSUAA credentials (`clientid`, `clientsecret`, `url`, `access_token`) while preserving stored regions
+
+### Improvements
+- CF API rate limiting: HTTP 429 responses are handled with automatic retry; `Retry-After` header is honoured when present; falls back to randomised exponential backoff (base 2 s, cap 60 s, up to 5 retries) when the header is absent
+
 ## v0.1 — 2026-05-17
 
 ### Commands
