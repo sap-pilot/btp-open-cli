@@ -28,7 +28,7 @@ type orgsResponse struct {
 // to, iterating every page returned by the CF v3 API.
 func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) {
 	var all []Organization
-	nextURL := fmt.Sprintf("%s/v3/organizations?per_page=100", c.BaseURL())
+	nextURL := fmt.Sprintf("%s/v3/organizations?per_page=5000", c.BaseURL())
 
 	for nextURL != "" {
 		var page orgsResponse
