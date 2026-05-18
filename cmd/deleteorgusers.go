@@ -66,7 +66,7 @@ func parseDeleteUsersCSV(path string) ([]csvUser, error) {
 
 // delUserEntry pairs a CF user record with the role GUIDs to be removed.
 type delUserEntry struct {
-	User  cf.User
+	User  cf.CfUser
 	Roles []cf.Role
 }
 
@@ -210,7 +210,7 @@ If --regions is omitted, the regions from the last login are used.`,
 					var orgUserEntries []delUserEntry
 
 					for _, u := range csvUsers {
-						cfUser, err := client.FindUser(ctx, u.Name, u.Origin)
+						cfUser, err := client.FindCfUser(ctx, u.Name, u.Origin)
 						if err != nil {
 							slog.Debug("user not found", "user", u.Name, "region", regionName, "org", org.Name)
 							continue
