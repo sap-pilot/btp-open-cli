@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -25,10 +27,22 @@ jobs:
         run: |
           COMMIT=$(echo "$GITHUB_SHA" | cut -c1-9)
           DATE=$(date -u +%Y-%m-%d)
-          TAG="v0.1+${COMMIT}.${DATE}"
-          echo "commit=$COMMIT"  >> "$GITHUB_OUTPUT"
-          echo "date=$DATE"      >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"        >> "$GITHUB_OUTPUT"
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAG="$VERSION"
+            PRERELEASE=false
+          else
+            VERSION="preview"
+            TAG="preview+${COMMIT}.${DATE}"
+            PRERELEASE=true
+          fi
+
+          echo "version=$VERSION"       >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT"         >> "$GITHUB_OUTPUT"
+          echo "date=$DATE"             >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"               >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Vet
         run: go vet ./...
@@ -37,6 +51,7 @@ jobs:
         env:
           LDFLAGS: >-
             -s -w
+            -X 'btp-open-cli/cmd.Version=${{ steps.build.outputs.version }}'
             -X 'btp-open-cli/cmd.Commit=${{ steps.build.outputs.commit }}'
             -X 'btp-open-cli/cmd.Date=${{ steps.build.outputs.date }}'
         run: |
@@ -58,5 +73,6 @@ jobs:
           tag_name: ${{ steps.build.outputs.tag }}
           name: ${{ steps.build.outputs.tag }}
           body_path: release-notes.md
+          prerelease: ${{ steps.build.outputs.prerelease }}
           files: dist/*
           fail_on_unmatched_files: true
