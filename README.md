@@ -118,6 +118,27 @@ Clear stored OAuth tokens (regions are preserved for the next login).
 bo logoff
 ```
 
+### `orgs`
+
+List all accessible CF organizations across one or more regions and output them as CSV.
+The output format (`region,id,name`) is compatible with the `--orgs` and `--excludeOrgs` flags
+accepted by `create-org-space-users`, `delete-org-space-users`, and `users`.
+
+```bash
+# List orgs for stored regions
+bo orgs
+
+# Specific regions
+bo orgs --regions us10,eu10
+
+# Save to a file for use as --orgs / --excludeOrgs input
+bo orgs --regions us10 > my-orgs.csv
+
+# Exclude production orgs when creating users
+bo orgs --regions us10 | grep prod > prod-orgs.csv
+bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
+```
+
 ### `org-users`
 
 List all users across every accessible CF organization.
@@ -326,6 +347,7 @@ Run `bo <command> --help` for full flag descriptions and usage examples for any 
 
 ```bash
 bo login --help
+bo orgs --help
 bo org-users --help
 bo org-space-users --help
 bo create-org-space-users --help
