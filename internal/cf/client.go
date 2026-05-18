@@ -6,9 +6,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+)
+
+const (
+	maxRetries     = 5
+	backoffBase    = 2 * time.Second
+	backoffMaxWait = 60 * time.Second
 )
 
 type Client struct {
@@ -29,23 +38,82 @@ func (c *Client) BaseURL() string {
 	return c.apiBaseURL
 }
 
-func (c *Client) get(ctx context.Context, fullURL string, out interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
-	req.Header.Set("Accept", "application/json")
+// doWithRetry executes makeReq and retries on HTTP 429 (Too Many Requests).
+// If the response includes a Retry-After header the delay is taken from it;
+// otherwise randomised exponential backoff is used. The context is respected
+// during waits so Ctrl-C cancels promptly.
+func (c *Client) doWithRetry(ctx context.Context, makeReq func() (*http.Request, error)) (*http.Response, []byte, error) {
+	for attempt := 0; ; attempt++ {
+		req, err := makeReq()
+		if err != nil {
+			return nil, nil, err
+		}
 
-	resp, err := c.http.Do(req)
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
+			return resp, body, nil
+		}
+
+		wait := retryAfterDelay(resp.Header.Get("Retry-After"), attempt)
+		slog.Warn("CF API rate limit hit; retrying", "attempt", attempt+1, "wait", wait.Round(time.Millisecond))
+
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// retryAfterDelay returns how long to wait before the next attempt.
+// If the Retry-After header is present it is respected (seconds or HTTP-date);
+// otherwise randomised exponential backoff is applied.
+func retryAfterDelay(header string, attempt int) time.Duration {
+	if header != "" {
+		// Seconds form: "Retry-After: 30"
+		if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		// HTTP-date form: "Retry-After: Wed, 21 Oct 2025 07:28:00 GMT"
+		if t, err := http.ParseTime(header); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+		}
+	}
+	// Exponential backoff: base * 2^attempt, capped, plus random jitter in [0, base).
+	exp := backoffBase * (1 << attempt)
+	if exp > backoffMaxWait {
+		exp = backoffMaxWait
+	}
+	jitter := time.Duration(rand.Int63n(int64(backoffBase)))
+	return exp + jitter
+}
+
+func (c *Client) get(ctx context.Context, fullURL string, out interface{}) error {
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", fullURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	}
+
+	resp, body, err := c.doWithRetry(ctx, makeReq)
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", fullURL, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %s returned HTTP %d: %s", fullURL, resp.StatusCode, body)
@@ -72,23 +140,21 @@ func (c *Client) post(ctx context.Context, fullURL string, body, out interface{}
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(data))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.http.Do(req)
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	}
+
+	resp, respBody, err := c.doWithRetry(ctx, makeReq)
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", fullURL, err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
 	}
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		return &APIError{StatusCode: resp.StatusCode, Body: respBody}
@@ -101,21 +167,18 @@ func (c *Client) post(ctx context.Context, fullURL string, body, out interface{}
 
 // deleteRequest sends DELETE to fullURL and returns *APIError for non-2xx responses.
 func (c *Client) deleteRequest(ctx context.Context, fullURL string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE", fullURL, nil)
-	if err != nil {
-		return err
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", fullURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		return req, nil
 	}
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 
-	resp, err := c.http.Do(req)
+	resp, body, err := c.doWithRetry(ctx, makeReq)
 	if err != nil {
 		return fmt.Errorf("DELETE %s: %w", fullURL, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
 	}
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusNoContent, http.StatusAccepted:
