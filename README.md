@@ -310,6 +310,26 @@ bo version
 | `HTTPS_PROXY` | Route all HTTPS requests through a proxy (e.g. `http://127.0.0.1:8080`) |
 | `HTTPS_PROXY_INSECURE` | Set to `true` to skip TLS verification — required when using mitmproxy |
 
+## Command history and logs
+
+Every `bo` invocation appends its full output to a daily log file in the `log/` folder of the current working directory:
+
+```
+log/bo_YYYY-MM-DD.log
+```
+
+Each entry is separated by a header line that includes the timestamp and the exact command that was run:
+
+```
+=== 2026-05-18 14:30:00 bo org-users --regions us10 ===
+... command output ...
+
+=== 2026-05-18 14:31:05 bo users --filter sap.ids ===
+... command output ...
+```
+
+The `log/` folder is created automatically on first use. Use it to review what was run, audit changes, or retrieve previous command output.
+
 ## Debugging with mitmproxy
 
 [mitmproxy](https://mitmproxy.org) lets you inspect every HTTP request and response the CLI makes, which is useful for understanding the CF API or troubleshooting errors.
