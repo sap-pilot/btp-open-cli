@@ -15,6 +15,12 @@ type roleRelationships struct {
 	User struct {
 		Data roleRelationshipData `json:"data"`
 	} `json:"user"`
+	Organization struct {
+		Data *roleRelationshipData `json:"data"`
+	} `json:"organization"`
+	Space struct {
+		Data *roleRelationshipData `json:"data"`
+	} `json:"space"`
 }
 
 type Role struct {
@@ -26,6 +32,54 @@ type Role struct {
 type rolesResponse struct {
 	Pagination pagination `json:"pagination"`
 	Resources  []Role     `json:"resources"`
+}
+
+// AllRoles holds every role assignment for a CF region indexed by scope GUID.
+type AllRoles struct {
+	OrgRoles   map[string]map[string][]string // orgGUID   → userGUID → []roleType
+	SpaceRoles map[string]map[string][]string // spaceGUID → userGUID → []roleType
+}
+
+// ListAllRoles fetches all role assignments for the region in bulk (per_page=5000)
+// and returns them indexed by org and space GUID. Call once per region instead
+// of once per org/space to avoid hitting API rate limits.
+func (c *Client) ListAllRoles(ctx context.Context) (AllRoles, error) {
+	all := AllRoles{
+		OrgRoles:   make(map[string]map[string][]string),
+		SpaceRoles: make(map[string]map[string][]string),
+	}
+	nextURL := fmt.Sprintf("%s/v3/roles?per_page=5000", c.BaseURL())
+	for nextURL != "" {
+		var page rolesResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return all, err
+		}
+		for _, r := range page.Resources {
+			userGUID := r.Relationships.User.Data.GUID
+			if d := r.Relationships.Organization.Data; d != nil {
+				m := all.OrgRoles[d.GUID]
+				if m == nil {
+					m = make(map[string][]string)
+					all.OrgRoles[d.GUID] = m
+				}
+				m[userGUID] = append(m[userGUID], r.Type)
+			}
+			if d := r.Relationships.Space.Data; d != nil {
+				m := all.SpaceRoles[d.GUID]
+				if m == nil {
+					m = make(map[string][]string)
+					all.SpaceRoles[d.GUID] = m
+				}
+				m[userGUID] = append(m[userGUID], r.Type)
+			}
+		}
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
 }
 
 // ListOrganizationRoles fetches all role assignments for the given org and
