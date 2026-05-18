@@ -21,12 +21,12 @@ type cfUsersResponse struct {
 
 // ListOrganizationUsers fetches all users in a given org, iterating every page.
 func (c *Client) ListOrganizationUsers(ctx context.Context, orgGUID string) ([]CfUser, error) {
-	return c.listCfUsers(ctx, fmt.Sprintf("%s/v3/organizations/%s/users?per_page=100", c.BaseURL(), orgGUID))
+	return c.listCfUsers(ctx, fmt.Sprintf("%s/v3/organizations/%s/users?per_page=5000", c.BaseURL(), orgGUID))
 }
 
 // ListSpaceUsers fetches all users in a given space, iterating every page.
 func (c *Client) ListSpaceUsers(ctx context.Context, spaceGUID string) ([]CfUser, error) {
-	return c.listCfUsers(ctx, fmt.Sprintf("%s/v3/spaces/%s/users?per_page=100", c.BaseURL(), spaceGUID))
+	return c.listCfUsers(ctx, fmt.Sprintf("%s/v3/spaces/%s/users?per_page=5000", c.BaseURL(), spaceGUID))
 }
 
 // CreateCfUser creates a user in CF via POST /v3/users. If the user already
