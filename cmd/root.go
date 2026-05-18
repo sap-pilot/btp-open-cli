@@ -12,7 +12,7 @@ var rootCmd = &cobra.Command{
 	Use:   "bo",
 	Short: "Open CLI for SAP BTP",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(versionInfo + " — Open CLI for SAP BTP")
+		fmt.Println(versionString() + " — Open CLI for SAP BTP")
 		fmt.Println()
 		cmd.Usage()
 	},

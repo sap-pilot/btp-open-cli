@@ -1,32 +1,28 @@
 package cmd
 
 import (
-	_ "embed"
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-//go:embed version.txt
-var versionFile string
+// Build-time variables — overridden via -ldflags during release builds.
+var (
+	Version = "dev"
+	Commit  = "none"
+	Date    = "unknown"
+)
 
-// versionInfo is the trimmed content of version.txt, available package-wide.
-var versionInfo = strings.TrimSpace(versionFile)
+// versionString returns the full version line shown to users.
+func versionString() string {
+	return fmt.Sprintf("bo %s+%s.%s", Version, Commit, Date)
+}
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version info",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println(versionInfo)
-		fmt.Println()
-		fmt.Println("Commands:")
-		fmt.Println("  login           Authenticate against SAP BTP CF regions (password, SSO, CI/CD)")
-		fmt.Println("  logoff          Clear stored tokens (regions preserved)")
-		fmt.Println("  org-users       List users across all CF organizations with roles")
-		fmt.Println("  org-space-users List users at org and space level with roles")
-		fmt.Println()
-		fmt.Println("Run 'bo <command> --help' for usage details.")
+		fmt.Println(versionString())
 	},
 }
 

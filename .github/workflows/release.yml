@@ -20,23 +20,32 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Read version
-        id: version
+      - name: Set build info
+        id: build
         run: |
-          VERSION=$(sed 's/^bo //' cmd/version.txt | tr -d '[:space:]')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          COMMIT=$(echo "$GITHUB_SHA" | cut -c1-9)
+          DATE=$(date -u +%Y-%m-%d)
+          TAG="v0.1+${COMMIT}.${DATE}"
+          echo "commit=$COMMIT"  >> "$GITHUB_OUTPUT"
+          echo "date=$DATE"      >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"        >> "$GITHUB_OUTPUT"
 
       - name: Vet
         run: go vet ./...
 
       - name: Build binaries
+        env:
+          LDFLAGS: >-
+            -s -w
+            -X 'btp-open-cli/cmd.Commit=${{ steps.build.outputs.commit }}'
+            -X 'btp-open-cli/cmd.Date=${{ steps.build.outputs.date }}'
         run: |
           mkdir dist
-          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/bo-linux-amd64    .
-          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/bo-linux-arm64    .
-          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/bo-darwin-amd64   .
-          GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/bo-darwin-arm64   .
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/bo-windows-amd64.exe .
+          GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/bo-linux-amd64    .
+          GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/bo-linux-arm64    .
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/bo-darwin-amd64   .
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/bo-darwin-arm64   .
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/bo-windows-amd64.exe .
 
       - name: Extract release notes
         run: |
@@ -46,8 +55,8 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.version }}
-          name: ${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.build.outputs.tag }}
+          name: ${{ steps.build.outputs.tag }}
           body_path: release-notes.md
           files: dist/*
           fail_on_unmatched_files: true
