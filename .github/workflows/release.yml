@@ -25,7 +25,7 @@ jobs:
       - name: Set build info
         id: build
         run: |
-          COMMIT=$(echo "$GITHUB_SHA" | cut -c1-9)
+          COMMIT=$(echo "$GITHUB_SHA" | cut -c1-7)
           DATE=$(date -u +%Y-%m-%d)
 
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
@@ -61,6 +61,9 @@ jobs:
           GOOS=darwin  GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/bo-darwin-amd64   .
           GOOS=darwin  GOARCH=arm64 go build -ldflags="$LDFLAGS" -o dist/bo-darwin-arm64   .
           GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o dist/bo-windows-amd64.exe .
+
+      - name: Generate checksums
+        run: sha256sum dist/* > dist/checksums.txt
 
       - name: Extract release notes
         run: |

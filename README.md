@@ -4,13 +4,71 @@ Open-source CLI for SAP BTP — bulk-manage users and services across multiple C
 
 ## Installation
 
-### 1. Install Go (Ubuntu)
+### Option A — Download pre-built binary (recommended)
 
-```bash
-sudo apt update && sudo apt install -y golang-go
+Pre-built binaries for every platform are attached to each [release](https://github.com/da-chen/btp-open-cli/releases/latest). A `checksums.txt` file is included in the assets — use it to verify your download before running.
+
+#### Windows
+
+Open PowerShell and run:
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/da-chen/btp-open-cli/releases/latest/download/bo-windows-amd64.exe" -OutFile "bo.exe"
 ```
 
-For a specific Go version (recommended: 1.22+):
+Verify the checksum (compare against `checksums.txt` in the release assets):
+
+```powershell
+Get-FileHash .\bo.exe -Algorithm SHA256
+```
+
+Start using the CLI:
+
+```powershell
+.\bo.exe login --regions us10
+```
+
+#### Linux
+
+```bash
+wget -O bo https://github.com/da-chen/btp-open-cli/releases/latest/download/bo-linux-amd64
+chmod +x ./bo
+./bo login --regions us10
+```
+
+Verify the checksum:
+
+```bash
+sha256sum ./bo
+# compare against checksums.txt in the release assets
+```
+
+#### macOS (Apple Silicon)
+
+```bash
+wget -O bo https://github.com/da-chen/btp-open-cli/releases/latest/download/bo-darwin-arm64
+chmod +x ./bo
+./bo login --regions us10
+```
+
+Verify the checksum:
+
+```bash
+sha256sum ./bo
+# compare against checksums.txt in the release assets
+```
+
+> **macOS Gatekeeper:** if macOS blocks the binary, run `xattr -d com.apple.quarantine ./bo` to remove the quarantine flag, then retry.
+
+Move the binary to your PATH (optional, Linux/macOS):
+
+```bash
+sudo mv bo /usr/local/bin/
+```
+
+### Option B — Build from source
+
+Requires Go 1.22+. Install Go on Ubuntu:
 
 ```bash
 wget https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
@@ -18,28 +76,16 @@ sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
-```
-
-Verify:
-
-```bash
 go version
 ```
 
-### 2. Build
-
-Clone the repository and compile:
+Clone and compile:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/da-chen/btp-open-cli.git
 cd btp-open-cli
 go build -o bo
-```
-
-Move the binary to your PATH (optional):
-
-```bash
-sudo mv bo /usr/local/bin/
+sudo mv bo /usr/local/bin/   # optional
 ```
 
 ## Commands
