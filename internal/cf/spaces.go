@@ -18,7 +18,7 @@ type spacesResponse struct {
 // ListOrganizationSpaces fetches all spaces in the given org, iterating every page.
 func (c *Client) ListOrganizationSpaces(ctx context.Context, orgGUID string) ([]Space, error) {
 	var all []Space
-	nextURL := fmt.Sprintf("%s/v3/spaces?organization_guids=%s&per_page=100", c.BaseURL(), orgGUID)
+	nextURL := fmt.Sprintf("%s/v3/spaces?organization_guids=%s&per_page=5000", c.BaseURL(), orgGUID)
 
 	for nextURL != "" {
 		var page spacesResponse
