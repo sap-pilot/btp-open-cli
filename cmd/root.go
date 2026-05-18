@@ -26,7 +26,9 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
+	teardown := initFileLog()
 	err := rootCmd.Execute()
+	teardown()
 	if err != nil {
 		os.Exit(1)
 	}
