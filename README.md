@@ -215,6 +215,58 @@ bo delete-org-space-users --users users.csv --regions us10,eu10
 
 Without `-y`, a TOON preview of all roles that will be deleted is shown before any changes are made.
 
+### `users`
+
+List users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
+
+For each organization the command checks whether the service instance `btp-xsuaa` (xsuaa / apiaccess plan) and service key `btp-open-cli-sk` exist in the `util` space. If they are missing, a TOON preview of what will be created is shown before any changes are made. Credentials retrieved from the service key are cached in `~/.bo/credentials.json` and reused on subsequent runs.
+
+```bash
+# List XSUAA users across all orgs in stored regions
+bo users
+
+# Skip service/key creation confirmation
+bo users -y
+
+# Scope to specific regions
+bo users --regions us10,eu10
+
+# Include only specific orgs (CSV: region,id,name)
+bo users --orgs target-orgs.csv
+
+# Exclude orgs such as production environments (CSV: region,id,name)
+bo users --excludeOrgs prod-orgs.csv
+
+# Filter output — only users matching a substring in any field
+bo users --filter "@example.com"
+bo users --filter "sap.ids"
+
+# Include only specific fields in output
+bo users --fields id,userName,origin
+
+# Exclude specific fields from output
+bo users --excludeFields lastLogonTime,groups
+
+# Combine filtering and field selection
+bo users --filter "sap.ids" --excludeFields groups --regions us10
+```
+
+Output format (TOON):
+```
+regions:
+  - id: us10
+    orgs:
+      - id: <org-guid>
+        name: my-org
+        users:
+          - id: <user-id>
+            externalId: user@example.com
+            origin: sap.ids
+            userName: user@example.com
+            lastLogonTime: 2026-01-15T08:30:00Z
+            groups: <group-values>
+```
+
 ### `version`
 
 Print version information.
@@ -278,4 +330,5 @@ bo org-users --help
 bo org-space-users --help
 bo create-org-space-users --help
 bo delete-org-space-users --help
+bo users --help
 ```
