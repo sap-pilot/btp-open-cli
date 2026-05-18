@@ -181,6 +181,16 @@ If --regions is omitted, the regions from the last login are used.`,
 				}
 				slog.Debug("orgs fetched", "region", regionName, "count", len(orgs))
 
+				allRoles, err := client.ListAllRoles(ctx)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not fetch roles for %s: %v\n", regionName, err)
+					allRoles = cf.AllRoles{
+						OrgRoles:   map[string]map[string][]string{},
+						SpaceRoles: map[string]map[string][]string{},
+					}
+				}
+				slog.Debug("roles fetched", "region", regionName)
+
 				var orgDetails []ospOrgDetail
 				for _, org := range orgs {
 					users, err := client.ListOrganizationUsers(ctx, org.GUID)
@@ -189,9 +199,8 @@ If --regions is omitted, the regions from the last login are used.`,
 						continue
 					}
 
-					roles, err := client.ListOrganizationRoles(ctx, org.GUID)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: could not fetch org roles for %q in %s: %v\n", org.Name, regionName, err)
+					roles := allRoles.OrgRoles[org.GUID]
+					if roles == nil {
 						roles = map[string][]string{}
 					}
 
@@ -209,9 +218,8 @@ If --regions is omitted, the regions from the last login are used.`,
 							fmt.Fprintf(os.Stderr, "warning: skipping space %q in org %q: %v\n", space.Name, org.Name, err)
 							continue
 						}
-						spaceRoles, err := client.ListSpaceRoles(ctx, space.GUID)
-						if err != nil {
-							fmt.Fprintf(os.Stderr, "warning: could not fetch space roles for %q in org %q: %v\n", space.Name, org.Name, err)
+						spaceRoles := allRoles.SpaceRoles[space.GUID]
+						if spaceRoles == nil {
 							spaceRoles = map[string][]string{}
 						}
 						spaceDetails = append(spaceDetails, ospSpaceDetail{
