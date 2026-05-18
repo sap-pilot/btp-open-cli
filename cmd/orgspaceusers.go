@@ -191,6 +191,13 @@ If --regions is omitted, the regions from the last login are used.`,
 				}
 				slog.Debug("roles fetched", "region", regionName)
 
+				spacesByOrg, err := client.ListAllSpaces(ctx)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not fetch spaces for %s: %v\n", regionName, err)
+					spacesByOrg = map[string][]cf.Space{}
+				}
+				slog.Debug("spaces fetched", "region", regionName)
+
 				var orgDetails []ospOrgDetail
 				for _, org := range orgs {
 					users, err := client.ListOrganizationUsers(ctx, org.GUID)
@@ -204,15 +211,8 @@ If --regions is omitted, the regions from the last login are used.`,
 						roles = map[string][]string{}
 					}
 
-					spaces, err := client.ListOrganizationSpaces(ctx, org.GUID)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: could not fetch spaces for org %q in %s: %v\n", org.Name, regionName, err)
-						spaces = nil
-					}
-
 					var spaceDetails []ospSpaceDetail
-					for _, space := range spaces {
-						slog.Debug("fetching space", "space", space.Name, "org", org.Name, "region", regionName)
+					for _, space := range spacesByOrg[org.GUID] {
 						spaceUsers, err := client.ListSpaceUsers(ctx, space.GUID)
 						if err != nil {
 							fmt.Fprintf(os.Stderr, "warning: skipping space %q in org %q: %v\n", space.Name, org.Name, err)
