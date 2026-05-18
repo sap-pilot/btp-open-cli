@@ -22,13 +22,13 @@ import (
 
 type ospSpaceDetail struct {
 	Space cf.Space
-	Users []cf.User
+	Users []cf.CfUser
 	Roles map[string][]string // userGUID → role types
 }
 
 type ospOrgDetail struct {
 	Org    cf.Organization
-	Users  []cf.User
+	Users  []cf.CfUser
 	Roles  map[string][]string // userGUID → role types
 	Spaces []ospSpaceDetail
 }

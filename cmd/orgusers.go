@@ -22,7 +22,7 @@ import (
 
 type orgDetail struct {
 	Org   cf.Organization
-	Users []cf.User
+	Users []cf.CfUser
 	Roles map[string][]string // userGUID → role types
 }
 
