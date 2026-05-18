@@ -18,6 +18,16 @@ type RegionToken struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
+// XsuaaData holds XSUAA service key credentials and a cached OAuth token for
+// one CF organization. Keyed by org GUID in Credentials.OrgXsuaa.
+type XsuaaData struct {
+	ClientID     string    `json:"client_id"`
+	ClientSecret string    `json:"client_secret"`
+	URL          string    `json:"url"` // XSUAA tenant URL — token endpoint base
+	AccessToken  string    `json:"access_token,omitempty"`
+	TokenExpiry  time.Time `json:"token_expiry,omitempty"`
+}
+
 // Credentials holds tokens for one or more CF API endpoints.
 // ActiveAPIURLs records the ordered list from the last login; commands use it
 // when no --regions flag is provided. Old tokens for other endpoints are kept
@@ -25,6 +35,7 @@ type RegionToken struct {
 type Credentials struct {
 	ActiveAPIURLs []string               `json:"active_api_urls"`
 	Tokens        map[string]RegionToken `json:"tokens"`
+	OrgXsuaa      map[string]XsuaaData   `json:"org_xsuaa,omitempty"` // orgGUID → xsuaa data
 }
 
 // RegionToAPIURL converts a region shorthand (e.g. "us10") to the standard
@@ -91,18 +102,18 @@ func Load() (*Credentials, error) {
 	return &c, nil
 }
 
-// ClearTokens removes all stored OAuth tokens while preserving ActiveAPIURLs
-// so the next login can reuse the same regions without requiring --regions.
+// ClearTokens removes all stored OAuth tokens and XSUAA credentials while
+// preserving ActiveAPIURLs so the next login can reuse the same regions.
 func ClearTokens() error {
 	creds, err := Load()
 	if err != nil {
-		// Nothing to clear if the file doesn't exist yet.
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
 	creds.Tokens = make(map[string]RegionToken)
+	creds.OrgXsuaa = nil
 	return Save(creds)
 }
 
