@@ -116,6 +116,10 @@ If --regions is omitted the regions from the last login are used.`,
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		filter, _ := cmd.Flags().GetString("filter")
+		fieldsCSV, _ := cmd.Flags().GetString("fields")
+		excludeFieldsCSV, _ := cmd.Flags().GetString("excludeFields")
+		fields := buildUsrFieldSet(fieldsCSV, excludeFieldsCSV)
 
 		creds, err := store.Load()
 		if err != nil {
@@ -539,14 +543,12 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 			var outUsers []usrOutUser
 			for _, u := range r.users {
-				outUsers = append(outUsers, usrOutUser{
-					ID:            u.ID,
-					ExternalID:    u.ExternalID,
-					Origin:        u.Origin,
-					UserName:      u.UserName,
-					LastLogonTime: xsuaa.MSToISO(u.LastLogonTime),
-					Groups:        xsuaa.GroupValues(u.Groups),
-				})
+				lastLogon := xsuaa.MSToISO(u.LastLogonTime)
+				groups := xsuaa.GroupValues(u.Groups)
+				if !usrMatchesFilter(u, lastLogon, groups, filter) {
+					continue
+				}
+				outUsers = append(outUsers, usrApplyFields(u, lastLogon, groups, fields))
 			}
 			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], usrOutOrg{
 				ID:    r.org.GUID,
@@ -615,4 +617,77 @@ func init() {
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,id,name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,id,name)")
 	usersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for service/key creation")
+	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (id, externalId, origin, userName, lastLogonTime, groups)")
+	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (id,externalId,origin,userName,lastLogonTime,groups)")
+	usersCmd.Flags().String("excludeFields", "", "Comma-separated fields to exclude from output")
+}
+
+// usrFieldSet tracks which output fields are active. nil means all fields included.
+type usrFieldSet map[string]bool
+
+func (f usrFieldSet) active(field string) bool {
+	return f == nil || f[field]
+}
+
+var usrAllFields = []string{"id", "externalId", "origin", "userName", "lastLogonTime", "groups"}
+
+// buildUsrFieldSet computes the active field set from --fields and --excludeFields.
+// If both are empty, nil is returned (all fields active).
+func buildUsrFieldSet(fieldsCSV, excludeCSV string) usrFieldSet {
+	if fieldsCSV == "" && excludeCSV == "" {
+		return nil
+	}
+	active := make(usrFieldSet)
+	if fieldsCSV != "" {
+		for _, f := range splitCSV(fieldsCSV) {
+			active[strings.TrimSpace(f)] = true
+		}
+	} else {
+		for _, f := range usrAllFields {
+			active[f] = true
+		}
+	}
+	for _, f := range splitCSV(excludeCSV) {
+		delete(active, strings.TrimSpace(f))
+	}
+	return active
+}
+
+// usrMatchesFilter reports whether a user matches the given substring filter
+// (case-insensitive, checked against all fields). Empty filter matches all users.
+func usrMatchesFilter(u xsuaa.User, lastLogon, groups, filter string) bool {
+	if filter == "" {
+		return true
+	}
+	fl := strings.ToLower(filter)
+	return strings.Contains(strings.ToLower(u.ID), fl) ||
+		strings.Contains(strings.ToLower(u.ExternalID), fl) ||
+		strings.Contains(strings.ToLower(u.Origin), fl) ||
+		strings.Contains(strings.ToLower(u.UserName), fl) ||
+		strings.Contains(strings.ToLower(lastLogon), fl) ||
+		strings.Contains(strings.ToLower(groups), fl)
+}
+
+// usrApplyFields builds a usrOutUser, omitting fields not in the active set.
+func usrApplyFields(u xsuaa.User, lastLogon, groups string, fields usrFieldSet) usrOutUser {
+	var out usrOutUser
+	if fields.active("id") {
+		out.ID = u.ID
+	}
+	if fields.active("externalId") {
+		out.ExternalID = u.ExternalID
+	}
+	if fields.active("origin") {
+		out.Origin = u.Origin
+	}
+	if fields.active("userName") {
+		out.UserName = u.UserName
+	}
+	if fields.active("lastLogonTime") {
+		out.LastLogonTime = lastLogon
+	}
+	if fields.active("groups") {
+		out.Groups = groups
+	}
+	return out
 }
