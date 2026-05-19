@@ -28,9 +28,10 @@ type appsOutApp struct {
 	State      string `json:"app_state"            toon:"app_state"`
 	CreatedAt  string `json:"app_created_at"       toon:"app_created_at"`
 	UpdatedAt  string `json:"app_updated_at"       toon:"app_updated_at"`
-	Instances  int    `json:"process_instances"    toon:"process_instances"`
-	MemoryInMB int    `json:"process_memory_in_mb" toon:"process_memory_in_mb"`
-	DiskInMB   int    `json:"process_disk_in_mb"   toon:"process_disk_in_mb"`
+	Instances     int `json:"process_instances"     toon:"process_instances"`
+	MemoryInMB    int `json:"process_memory_in_mb"  toon:"process_memory_in_mb"`
+	DiskInMB      int `json:"process_disk_in_mb"    toon:"process_disk_in_mb"`
+	TotalMemoryMB int `json:"app_total_memory_mb"   toon:"app_total_memory_mb"`
 }
 
 type appsOutSpace struct {
@@ -279,15 +280,16 @@ func buildAppsDoc(results []appsRegionResult, filter string) (appsOutDoc, []erro
 				for _, app := range appsBySpace[sp.GUID] {
 					proc := r.Procs[app.GUID]
 					a := appsOutApp{
-						MtaID:      app.Metadata.Annotations.MtaID,
-						ID:         app.GUID,
-						Name:       app.Name,
-						State:      app.State,
-						CreatedAt:  app.CreatedAt,
-						UpdatedAt:  app.UpdatedAt,
-						Instances:  proc.Instances,
-						MemoryInMB: proc.MemoryInMB,
-						DiskInMB:   proc.DiskInMB,
+						MtaID:         app.Metadata.Annotations.MtaID,
+						ID:            app.GUID,
+						Name:          app.Name,
+						State:         app.State,
+						CreatedAt:     app.CreatedAt,
+						UpdatedAt:     app.UpdatedAt,
+						Instances:     proc.Instances,
+						MemoryInMB:    proc.MemoryInMB,
+						DiskInMB:      proc.DiskInMB,
+						TotalMemoryMB: proc.Instances * proc.MemoryInMB,
 					}
 					if appsMatchesFilter(a, filter) {
 						os_.Apps = append(os_.Apps, a)
@@ -351,7 +353,7 @@ func writeAppsCSV(results []appsRegionResult, filter string) error {
 		"space_id", "space_name",
 		"app_mta_id", "app_id", "app_name", "app_state",
 		"app_created_at", "app_updated_at",
-		"process_instances", "process_memory_in_mb", "process_disk_in_mb",
+		"process_instances", "process_memory_in_mb", "process_disk_in_mb", "app_total_memory_mb",
 	}); err != nil {
 		return err
 	}
@@ -368,6 +370,7 @@ func writeAppsCSV(results []appsRegionResult, filter string) error {
 						strconv.Itoa(a.Instances),
 						strconv.Itoa(a.MemoryInMB),
 						strconv.Itoa(a.DiskInMB),
+						strconv.Itoa(a.TotalMemoryMB),
 					}); err != nil {
 						return err
 					}
