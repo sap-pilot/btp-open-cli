@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4 — 2026-05-19
+
+### Added
+- **`apps`** — new command to list Cloud Foundry applications across all accessible organizations and spaces; fetches organizations, spaces, apps, and web process metrics (instances, memory, disk) in parallel per region
+  - Output formats: TOON (default), JSON (`--format json`), CSV (`--format csv`)
+  - `--regions` — comma-separated CF regions; falls back to stored login regions if omitted
+  - `--org` — restrict to a single org by exact GUID
+  - `--orgs` / `--excludeOrgs` — CSV files (`region,id,name`) to include or skip specific orgs
+  - `--filter` — case-insensitive substring match on `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, `process_memory_in_mb`
+  - TOON/JSON output is hierarchical: `regions → orgs → spaces → apps`; CSV output is flat with one row per app
+  - App metadata annotations (`mta_id`) are sourced from `app.metadata.annotations.mta_id`
+  - Process metrics (`instances`, `memory_in_mb`, `disk_in_mb`) are sourced from the CF v3 `web` process for each app
+
 ## v0.3 — 2026-05-19
 
 ### Added
