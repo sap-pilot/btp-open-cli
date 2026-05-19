@@ -9,6 +9,10 @@
   - `--filter` — case-insensitive substring match on any user field (`id`, `externalId`, `origin`, `userName`, `lastLogonTime`, `groups`)
   - `--fields` — comma-separated allowlist of fields to include in output
   - `--excludeFields` — comma-separated denylist of fields to omit from output
+- **`role-collections`** — new command to list XSUAA roles and role collections (with their role references) across all accessible CF organizations; shares the same `btp-xsuaa` / `btp-open-cli-sk` service key setup and credential caching as `users` (TOON preview + `y/N` confirmation, bypass with `-y`); outputs TOON (default) or JSON (`--format json`)
+  - `--orgs` / `--excludeOrgs` CSV files (`region,id,name`) to target or skip specific orgs
+  - Roles include: `roleTemplateAppId`, `roleTemplateName`, `name`, `appName`, `description`, `isReadOnly`
+  - Role collections include: `name`, `description`, `isReadOnly`, and `roleReferences` (each with `roleTemplateAppId`, `roleTemplateName`, `name`, `description`)
 
 ### Changed
 - **`logoff`** — now also clears cached XSUAA credentials (`clientid`, `clientsecret`, `url`, `access_token`) while preserving stored regions
