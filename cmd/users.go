@@ -19,9 +19,9 @@ import (
 // ── output types ─────────────────────────────────────────────────────────────
 
 type usrOutUser struct {
-	ID            string `toon:"id"`
-	ExternalID    string `toon:"externalId"`
-	Origin        string `toon:"origin"`
+	ID            string `toon:"user_id"`
+	ExternalID    string `toon:"user_externalId"`
+	Origin        string `toon:"user_origin"`
 	UserName      string `toon:"userName"`
 	Email         string `toon:"email"`
 	LastLogonTime string `toon:"lastLogonTime"`
@@ -29,13 +29,13 @@ type usrOutUser struct {
 }
 
 type usrOutOrg struct {
-	ID    string       `toon:"id"`
-	Name  string       `toon:"name"`
+	ID    string       `toon:"org_id"`
+	Name  string       `toon:"org_name"`
 	Users []usrOutUser `toon:"users"`
 }
 
 type usrOutRegion struct {
-	ID   string      `toon:"id"`
+	ID   string      `toon:"region"`
 	Orgs []usrOutOrg `toon:"orgs"`
 }
 
@@ -252,11 +252,11 @@ func init() {
 	rootCmd.AddCommand(usersCmd)
 	usersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
-	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,id,name)")
-	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,id,name)")
+	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
+	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	usersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for service/key creation")
-	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (id, externalId, origin, userName, lastLogonTime, groups)")
-	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (id,externalId,origin,userName,lastLogonTime,groups)")
+	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, userName, lastLogonTime, groups)")
+	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups)")
 	usersCmd.Flags().String("excludeFields", "", "Comma-separated fields to exclude from output")
 }
 
@@ -267,7 +267,7 @@ func (f usrFieldSet) active(field string) bool {
 	return f == nil || f[field]
 }
 
-var usrAllFields = []string{"id", "externalId", "origin", "userName", "email", "lastLogonTime", "groups"}
+var usrAllFields = []string{"user_id", "user_externalId", "user_origin", "userName", "email", "lastLogonTime", "groups"}
 
 // buildUsrFieldSet computes the active field set from --fields and --excludeFields.
 // Returns nil if both are empty (all fields active).
@@ -310,13 +310,13 @@ func usrMatchesFilter(u xsuaa.User, email, lastLogon, groups, filter string) boo
 // usrApplyFields builds a usrOutUser, omitting fields not in the active set.
 func usrApplyFields(u xsuaa.User, email, lastLogon, groups string, fields usrFieldSet) usrOutUser {
 	var out usrOutUser
-	if fields.active("id") {
+	if fields.active("user_id") {
 		out.ID = u.ID
 	}
-	if fields.active("externalId") {
+	if fields.active("user_externalId") {
 		out.ExternalID = u.ExternalID
 	}
-	if fields.active("origin") {
+	if fields.active("user_origin") {
 		out.Origin = u.Origin
 	}
 	if fields.active("userName") {

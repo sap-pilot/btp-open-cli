@@ -35,21 +35,21 @@ type regionData struct {
 // ── shared output document model (JSON + TOON tags) ─────────────────────────
 
 type outUser struct {
-	ID     string `json:"id"     toon:"id"`
-	Name   string `json:"name"   toon:"name"`
-	Origin string `json:"origin" toon:"origin"`
-	Roles  string `json:"roles"  toon:"roles"`
+	ID     string `json:"cfuser_id"     toon:"cfuser_id"`
+	Name   string `json:"cfuser_name"   toon:"cfuser_name"`
+	Origin string `json:"cfuser_origin" toon:"cfuser_origin"`
+	Roles  string `json:"cfuser_roles"  toon:"cfuser_roles"`
 }
 
 type outOrg struct {
-	ID    string    `json:"id"    toon:"id"`
-	Name  string    `json:"name"  toon:"name"`
-	Users []outUser `json:"users" toon:"users"`
+	ID    string    `json:"org_id"   toon:"org_id"`
+	Name  string    `json:"org_name" toon:"org_name"`
+	Users []outUser `json:"users"    toon:"users"`
 }
 
 type outRegion struct {
-	ID   string   `json:"id"   toon:"id"`
-	Orgs []outOrg `json:"orgs" toon:"orgs"`
+	ID   string   `json:"region" toon:"region"`
+	Orgs []outOrg `json:"orgs"   toon:"orgs"`
 }
 
 type outDoc struct {
@@ -115,7 +115,7 @@ var orgUsersCmd = &cobra.Command{
 Output formats (--format):
   toon  Token-Oriented Object Notation — compact, human-readable (default)
   json  JSON document
-  csv   CSV rows: region,org_id,org_name,user_id,user_name,user_origin
+  csv   CSV rows: region,org_id,org_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -260,7 +260,7 @@ func writeOrgUsersCSV(results []regionData, filter string) error {
 	w := csv.NewWriter(os.Stdout)
 	defer w.Flush()
 
-	if err := w.Write([]string{"region", "org_id", "org_name", "user_id", "user_name", "user_origin", "user_roles"}); err != nil {
+	if err := w.Write([]string{"region", "org_id", "org_name", "cfuser_id", "cfuser_name", "cfuser_origin", "cfuser_roles"}); err != nil {
 		return err
 	}
 	for _, r := range doc.Regions {

@@ -398,8 +398,8 @@ func init() {
 	rootCmd.AddCommand(appsCmd)
 	appsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	appsCmd.Flags().String("org", "", "Org GUID to target; only apps from this org will be fetched")
-	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,id,name)")
-	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,id,name)")
+	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
+	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
 	appsCmd.Flags().String("filter", "", "Case-insensitive substring filter on mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, process_memory_in_mb")
 }

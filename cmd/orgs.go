@@ -18,7 +18,7 @@ var orgsCmd = &cobra.Command{
 	Short: "List all accessible CF organizations across one or more regions",
 	Long: `List all Cloud Foundry organizations the authenticated user can access.
 
-Output is CSV with columns: region,id,name
+Output is CSV with columns: region,org_id,org_name
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -72,7 +72,7 @@ If --regions is omitted, the regions from the last login are used.`,
 		w := csv.NewWriter(os.Stdout)
 		defer w.Flush()
 
-		if err := w.Write([]string{"region", "id", "name"}); err != nil {
+		if err := w.Write([]string{"region", "org_id", "org_name"}); err != nil {
 			return err
 		}
 		for _, r := range results {

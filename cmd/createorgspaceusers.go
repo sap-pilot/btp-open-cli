@@ -63,8 +63,8 @@ func parseCosOrgCSV(path string) (cosOrgSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
-	if len(header) < 3 || header[0] != "region" || header[1] != "id" || header[2] != "name" {
-		return nil, fmt.Errorf("invalid header — expected: region,id,name")
+	if len(header) < 3 || header[0] != "region" || header[1] != "org_id" || header[2] != "org_name" {
+		return nil, fmt.Errorf("invalid header — expected: region,org_id,org_name")
 	}
 
 	var refs cosOrgSet
@@ -91,18 +91,18 @@ func parseCosOrgCSV(path string) (cosOrgSet, error) {
 // ── preview document types (printed before user confirmation) ─────────────────
 
 type cosPreviewSpace struct {
-	ID   string `toon:"id"`
-	Name string `toon:"name"`
+	ID   string `toon:"space_id"`
+	Name string `toon:"space_name"`
 }
 
 type cosPreviewOrg struct {
-	ID     string            `toon:"id"`
-	Name   string            `toon:"name"`
+	ID     string            `toon:"org_id"`
+	Name   string            `toon:"org_name"`
 	Spaces []cosPreviewSpace `toon:"spaces"`
 }
 
 type cosPreviewRegion struct {
-	ID   string          `toon:"id"`
+	ID   string          `toon:"region"`
 	Orgs []cosPreviewOrg `toon:"orgs"`
 }
 
@@ -111,9 +111,9 @@ type cosPreviewScope struct {
 }
 
 type cosPreviewUser struct {
-	Name   string `toon:"name"`
-	Origin string `toon:"origin"`
-	Roles  string `toon:"roles"`
+	Name   string `toon:"cfuser_name"`
+	Origin string `toon:"cfuser_origin"`
+	Roles  string `toon:"cfuser_roles"`
 }
 
 type cosPreviewUsers struct {
@@ -140,14 +140,14 @@ var createOrgSpaceUsersCmd = &cobra.Command{
 	Short: "Add users with org and space roles across accessible CF orgs",
 	Long: `Add users from a CSV file to CF organizations and their spaces across one or more regions.
 
-The --users CSV must have the header: name,origin,roles
+The --users CSV must have the header: cfuser_name,cfuser_origin,cfuser_roles
 Roles are semicolon-separated and may mix org-level and space-level roles:
   organization_user;organization_manager;space_developer;space_manager
 
 Org-level roles (organization_*) are assigned to each target org.
 Space-level roles (space_*) are assigned to every space within each target org.
 
-Use --orgs to restrict to specific orgs (CSV: region,id,name).
+Use --orgs to restrict to specific orgs (CSV: region,org_id,org_name).
 Use --excludeOrgs to skip orgs such as production environments (same CSV format).
 
 Without -y, a TOON preview of the target orgs/spaces and users is shown, and
@@ -386,9 +386,9 @@ func cosPrintPreview(plans []cosRegionPlan, users []csvUser) error {
 func init() {
 	rootCmd.AddCommand(createOrgSpaceUsersCmd)
 	createOrgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	createOrgSpaceUsersCmd.Flags().String("users", "", "Path to users CSV file (required; columns: name,origin,roles)")
+	createOrgSpaceUsersCmd.Flags().String("users", "", "Path to users CSV file (required; columns: cfuser_name,cfuser_origin,cfuser_roles)")
 	createOrgSpaceUsersCmd.MarkFlagRequired("users")
-	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to target (columns: region,id,name); targets all orgs if omitted")
-	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,id,name)")
+	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to target (columns: region,org_id,org_name); targets all orgs if omitted")
+	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
 	createOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }

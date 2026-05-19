@@ -22,7 +22,7 @@ import (
 type rcOutRole struct {
 	RoleTemplateAppID string `json:"roleTemplateAppId" toon:"roleTemplateAppId"`
 	RoleTemplateName  string `json:"roleTemplateName"  toon:"roleTemplateName"`
-	Name              string `json:"name"              toon:"name"`
+	Name              string `json:"role_name"         toon:"role_name"`
 	AppName           string `json:"appName"           toon:"appName"`
 	Description       string `json:"description"       toon:"description"`
 	IsReadOnly        bool   `json:"isReadOnly"        toon:"isReadOnly"`
@@ -31,27 +31,27 @@ type rcOutRole struct {
 type rcOutRoleRef struct {
 	RoleTemplateAppID string `json:"roleTemplateAppId" toon:"roleTemplateAppId"`
 	RoleTemplateName  string `json:"roleTemplateName"  toon:"roleTemplateName"`
-	Name              string `json:"name"              toon:"name"`
+	Name              string `json:"role_name"         toon:"role_name"`
 	Description       string `json:"description"       toon:"description"`
 }
 
 type rcOutRoleCollection struct {
-	Name           string         `json:"name"           toon:"name"`
-	Description    string         `json:"description"    toon:"description"`
-	IsReadOnly     bool           `json:"isReadOnly"     toon:"isReadOnly"`
-	RoleReferences []rcOutRoleRef `json:"roleReferences" toon:"roleReferences"`
+	Name           string         `json:"rolecollection_name" toon:"rolecollection_name"`
+	Description    string         `json:"description"         toon:"description"`
+	IsReadOnly     bool           `json:"isReadOnly"          toon:"isReadOnly"`
+	RoleReferences []rcOutRoleRef `json:"roleReferences"      toon:"roleReferences"`
 }
 
 type rcOutOrg struct {
-	ID              string                `json:"id"              toon:"id"`
-	Name            string                `json:"name"            toon:"name"`
+	ID              string                `json:"org_id"          toon:"org_id"`
+	Name            string                `json:"org_name"        toon:"org_name"`
 	Roles           []rcOutRole           `json:"roles"           toon:"roles"`
 	RoleCollections []rcOutRoleCollection `json:"roleCollections" toon:"roleCollections"`
 }
 
 type rcOutRegion struct {
-	ID   string     `json:"id"   toon:"id"`
-	Orgs []rcOutOrg `json:"orgs" toon:"orgs"`
+	ID   string     `json:"region" toon:"region"`
+	Orgs []rcOutOrg `json:"orgs"   toon:"orgs"`
 }
 
 type rcOutDoc struct {
@@ -318,8 +318,8 @@ func init() {
 	rootCmd.AddCommand(roleCollectionsCmd)
 	roleCollectionsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	roleCollectionsCmd.Flags().String("org", "", "Org name or GUID to target (case-insensitive substring match on name, exact on GUID)")
-	roleCollectionsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,id,name)")
-	roleCollectionsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,id,name)")
+	roleCollectionsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
+	roleCollectionsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	roleCollectionsCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for service/key creation")
 	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
 }
