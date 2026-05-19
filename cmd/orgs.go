@@ -63,7 +63,9 @@ If --regions is omitted, the regions from the last login are used.`,
 						err: fmt.Errorf("no token — run: bo login --regions %s", regionName)}
 					return
 				}
-				orgs, err := cf.NewClient(url, tok.AccessToken).ListOrganizations(ctx)
+				client := cf.NewClient(url, tok.AccessToken)
+				client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
+				orgs, err := client.ListOrganizations(ctx)
 				results[idx] = regionOrgs{region: regionName, orgs: orgs, err: err}
 			}(i, apiURL)
 		}
