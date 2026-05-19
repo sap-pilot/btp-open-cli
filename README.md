@@ -6,7 +6,7 @@ Open-source CLI for SAP BTP — bulk-manage users, apps and services across mult
 
 ### Option A — Download pre-built binary (recommended)
 
-Pre-built binaries for every platform are attached to each [release](https://github.com/sap-pilot/btp-open-cli/releases/latest). A `checksums.txt` file is included in the assets — use it to verify your download before running.
+Pre-built binaries for every platform are attached to each [release](https://github.com/sap-pilot/btp-open-cli/releases/latest).
 
 #### Windows
 
@@ -14,12 +14,6 @@ Open PowerShell and run:
 
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-windows-amd64.exe" -OutFile "bo.exe"
-```
-
-Verify the checksum (compare against `checksums.txt` in the release assets):
-
-```powershell
-Get-FileHash .\bo.exe -Algorithm SHA256
 ```
 
 Start using the CLI:
@@ -36,26 +30,12 @@ chmod +x ./bo
 ./bo login --regions us10
 ```
 
-Verify the checksum:
-
-```bash
-sha256sum ./bo
-# compare against checksums.txt in the release assets
-```
-
 #### macOS (Apple Silicon)
 
 ```bash
 wget -O bo https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-darwin-arm64
 chmod +x ./bo
 ./bo login --regions us10
-```
-
-Verify the checksum:
-
-```bash
-sha256sum ./bo
-# compare against checksums.txt in the release assets
 ```
 
 > **macOS Gatekeeper:** if macOS blocks the binary, run `xattr -d com.apple.quarantine ./bo` to remove the quarantine flag, then retry.
