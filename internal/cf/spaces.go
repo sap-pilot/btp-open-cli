@@ -3,6 +3,7 @@ package cf
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type spaceRelationships struct {
@@ -28,6 +29,28 @@ type spacesResponse struct {
 func (c *Client) ListOrganizationSpaces(ctx context.Context, orgGUID string) ([]Space, error) {
 	var all []Space
 	nextURL := fmt.Sprintf("%s/v3/spaces?organization_guids=%s&per_page=5000", c.BaseURL(), orgGUID)
+
+	for nextURL != "" {
+		var page spacesResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
+// ListSpacesByOrgs fetches all spaces belonging to the given org GUIDs in a
+// single batched query, iterating all pages.
+func (c *Client) ListSpacesByOrgs(ctx context.Context, orgGUIDs []string) ([]Space, error) {
+	var all []Space
+	nextURL := fmt.Sprintf("%s/v3/spaces?organization_guids=%s&per_page=5000",
+		c.BaseURL(), strings.Join(orgGUIDs, ","))
 
 	for nextURL != "" {
 		var page spacesResponse

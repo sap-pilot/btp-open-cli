@@ -346,6 +346,69 @@ regions:
                 description: Manage authorizations, trusted identity providers, and users.
 ```
 
+### `apps`
+
+List Cloud Foundry applications across all accessible organizations and spaces.
+
+For each region the command fetches organizations, spaces, apps, and web process metrics in parallel, then assembles the result.
+
+```bash
+# List all apps across stored regions (TOON output)
+bo apps
+
+# JSON output
+bo apps --format json
+
+# CSV output (flat, one row per app)
+bo apps --format csv
+
+# Scope to specific regions
+bo apps --regions us10,eu10
+
+# Scope to a single org by GUID
+bo apps --org <org-guid>
+
+# Include only specific orgs (CSV: region,id,name)
+bo apps --orgs target-orgs.csv
+
+# Exclude orgs such as production environments (CSV: region,id,name)
+bo apps --excludeOrgs prod-orgs.csv
+
+# Filter output — only apps matching a substring in any listed field
+bo apps --filter myapp
+bo apps --filter STARTED
+bo apps --filter "my-mta-id"
+
+# Combine flags
+bo apps --regions us10 --orgs my-orgs.csv --format csv --filter STARTED
+```
+
+Output format (TOON):
+```
+regions:
+  - id: us10
+    orgs:
+      - id: <org-guid>
+        name: my-org
+        spaces:
+          - id: <space-guid>
+            name: dev
+            apps:
+              - mta_id: my-mta
+                app_id: <app-guid>
+                app_name: my-app
+                app_state: STARTED
+                app_created_at: 2026-01-10T12:00:00Z
+                app_updated_at: 2026-05-01T08:00:00Z
+                process_instances: 2
+                process_memory_in_mb: 512
+                process_disk_in_mb: 1024
+```
+
+CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
+
+The `--filter` flag matches case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+
 ### `upgrade`
 
 Check for the latest release on GitHub and upgrade the `bo` binary in place.
@@ -448,6 +511,7 @@ bo org-space-users --help
 bo create-org-space-users --help
 bo delete-org-space-users --help
 bo users --help
+bo apps --help
 bo role-collections --help
 bo upgrade --help
 ```
