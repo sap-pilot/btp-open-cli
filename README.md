@@ -1,6 +1,6 @@
 # btp-open-cli
 
-Open-source CLI for SAP BTP — bulk-manage users and services across multiple Cloud Foundry subaccounts and regions
+Open-source CLI for SAP BTP — bulk-manage users, apps and services across multiple Cloud Foundry subaccounts and regions
 
 ## Installation
 
