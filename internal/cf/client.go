@@ -20,10 +20,17 @@ const (
 	backoffMaxWait = 60 * time.Second
 )
 
+// TokenRefresher is called by the client when a 401 is received. It should
+// attempt to obtain a fresh access token (via refresh token or re-auth prompt)
+// and return it. Returning an error causes the 401 to be propagated to the caller.
+type TokenRefresher func(ctx context.Context) (string, error)
+
 type Client struct {
-	apiBaseURL  string
-	accessToken string
-	http        *http.Client
+	apiBaseURL     string
+	accessToken    string
+	http           *http.Client
+	tokenRefresher TokenRefresher
+	tokenRefreshed bool // prevents infinite refresh loops
 }
 
 func NewClient(apiBaseURL, accessToken string) *Client {
@@ -32,6 +39,12 @@ func NewClient(apiBaseURL, accessToken string) *Client {
 		accessToken: accessToken,
 		http:        &http.Client{Timeout: 60 * time.Second, Transport: newTransport()},
 	}
+}
+
+// SetTokenRefresher attaches a callback that is invoked once when the server
+// returns HTTP 401. The callback should return a fresh access token.
+func (c *Client) SetTokenRefresher(fn TokenRefresher) {
+	c.tokenRefresher = fn
 }
 
 func (c *Client) BaseURL() string {
@@ -58,6 +71,18 @@ func (c *Client) doWithRetry(ctx context.Context, makeReq func() (*http.Request,
 		resp.Body.Close()
 		if err != nil {
 			return nil, nil, err
+		}
+
+		// Handle 401: attempt token refresh exactly once per client lifetime.
+		if resp.StatusCode == http.StatusUnauthorized && c.tokenRefresher != nil && !c.tokenRefreshed {
+			c.tokenRefreshed = true
+			newToken, err := c.tokenRefresher(ctx)
+			if err != nil {
+				return resp, body, fmt.Errorf("re-authentication failed: %w", err)
+			}
+			c.accessToken = newToken
+			attempt-- // don't count this as a 429 backoff attempt
+			continue
 		}
 
 		if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {

@@ -173,6 +173,7 @@ If --regions is omitted, the regions from the last login are used.`,
 				}
 
 				client := cf.NewClient(url, tok.AccessToken)
+				client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
 
 				orgs, err := client.ListOrganizations(ctx)
 				if err != nil {
