@@ -21,13 +21,27 @@ type Group struct {
 	Display string `json:"display"`
 }
 
+type Email struct {
+	Value   string `json:"value"`
+	Primary bool   `json:"primary"`
+}
+
 type User struct {
 	ID            string  `json:"id"`
 	ExternalID    string  `json:"externalId"`
 	Origin        string  `json:"origin"`
 	UserName      string  `json:"userName"`
+	Emails        []Email `json:"emails"`
 	LastLogonTime int64   `json:"lastLogonTime"` // milliseconds since epoch
 	Groups        []Group `json:"groups"`
+}
+
+// PrimaryEmail returns the value of the first email entry, or an empty string.
+func PrimaryEmail(emails []Email) string {
+	if len(emails) == 0 {
+		return ""
+	}
+	return emails[0].Value
 }
 
 type usersPage struct {

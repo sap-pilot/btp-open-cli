@@ -23,6 +23,7 @@ type usrOutUser struct {
 	ExternalID    string `toon:"externalId"`
 	Origin        string `toon:"origin"`
 	UserName      string `toon:"userName"`
+	Email         string `toon:"email"`
 	LastLogonTime string `toon:"lastLogonTime"`
 	Groups        string `toon:"groups"`
 }
@@ -198,12 +199,13 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 			var outUsers []usrOutUser
 			for _, u := range r.users {
+				email := xsuaa.PrimaryEmail(u.Emails)
 				lastLogon := xsuaa.MSToISO(u.LastLogonTime)
 				groups := xsuaa.GroupValues(u.Groups)
-				if !usrMatchesFilter(u, lastLogon, groups, filter) {
+				if !usrMatchesFilter(u, email, lastLogon, groups, filter) {
 					continue
 				}
-				outUsers = append(outUsers, usrApplyFields(u, lastLogon, groups, fields))
+				outUsers = append(outUsers, usrApplyFields(u, email, lastLogon, groups, fields))
 			}
 			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], usrOutOrg{
 				ID:    r.orgGUID,
@@ -250,7 +252,7 @@ func (f usrFieldSet) active(field string) bool {
 	return f == nil || f[field]
 }
 
-var usrAllFields = []string{"id", "externalId", "origin", "userName", "lastLogonTime", "groups"}
+var usrAllFields = []string{"id", "externalId", "origin", "userName", "email", "lastLogonTime", "groups"}
 
 // buildUsrFieldSet computes the active field set from --fields and --excludeFields.
 // Returns nil if both are empty (all fields active).
@@ -276,7 +278,7 @@ func buildUsrFieldSet(fieldsCSV, excludeCSV string) usrFieldSet {
 
 // usrMatchesFilter reports whether a user matches the given substring filter.
 // Empty filter matches all users.
-func usrMatchesFilter(u xsuaa.User, lastLogon, groups, filter string) bool {
+func usrMatchesFilter(u xsuaa.User, email, lastLogon, groups, filter string) bool {
 	if filter == "" {
 		return true
 	}
@@ -285,12 +287,13 @@ func usrMatchesFilter(u xsuaa.User, lastLogon, groups, filter string) bool {
 		strings.Contains(strings.ToLower(u.ExternalID), fl) ||
 		strings.Contains(strings.ToLower(u.Origin), fl) ||
 		strings.Contains(strings.ToLower(u.UserName), fl) ||
+		strings.Contains(strings.ToLower(email), fl) ||
 		strings.Contains(strings.ToLower(lastLogon), fl) ||
 		strings.Contains(strings.ToLower(groups), fl)
 }
 
 // usrApplyFields builds a usrOutUser, omitting fields not in the active set.
-func usrApplyFields(u xsuaa.User, lastLogon, groups string, fields usrFieldSet) usrOutUser {
+func usrApplyFields(u xsuaa.User, email, lastLogon, groups string, fields usrFieldSet) usrOutUser {
 	var out usrOutUser
 	if fields.active("id") {
 		out.ID = u.ID
@@ -303,6 +306,9 @@ func usrApplyFields(u xsuaa.User, lastLogon, groups string, fields usrFieldSet) 
 	}
 	if fields.active("userName") {
 		out.UserName = u.UserName
+	}
+	if fields.active("email") {
+		out.Email = email
 	}
 	if fields.active("lastLogonTime") {
 		out.LastLogonTime = lastLogon
