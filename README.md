@@ -288,6 +288,57 @@ regions:
             groups: <group-values>
 ```
 
+### `role-collections`
+
+List XSUAA roles and role collections (with their role references) across all accessible CF organizations.
+
+For each organization the command checks whether the service instance `btp-xsuaa` (xsuaa / apiaccess plan) and service key `btp-open-cli-sk` exist in the `util` space. If they are missing, a TOON preview of what will be created is shown before any changes are made. Credentials retrieved from the service key are cached in `~/.bo/credentials.json` and reused on subsequent runs.
+
+```bash
+# List roles and role collections across all orgs in stored regions
+bo role-collections
+
+# Skip service/key creation confirmation
+bo role-collections -y
+
+# Scope to specific regions
+bo role-collections --regions us10,eu10
+
+# Include only specific orgs (CSV: region,id,name)
+bo role-collections --orgs target-orgs.csv
+
+# Exclude orgs such as production environments (CSV: region,id,name)
+bo role-collections --excludeOrgs prod-orgs.csv
+
+# JSON output
+bo role-collections --format json
+```
+
+Output format (TOON):
+```
+regions:
+  - id: us10
+    orgs:
+      - id: <org-guid>
+        name: my-org
+        roles:
+          - roleTemplateAppId: xsuaa!t1
+            roleTemplateName: xsuaa_admin
+            name: User and Role Administrator
+            appName: xsuaa
+            description: Manage authorizations, trusted identity providers, and users.
+            isReadOnly: true
+        roleCollections:
+          - name: Subaccount Administrator
+            description: Administrative access to the subaccount
+            isReadOnly: true
+            roleReferences:
+              - roleTemplateAppId: xsuaa!t1
+                roleTemplateName: xsuaa_admin
+                name: User and Role Administrator
+                description: Manage authorizations, trusted identity providers, and users.
+```
+
 ### `version`
 
 Print version information.
@@ -373,4 +424,5 @@ bo org-space-users --help
 bo create-org-space-users --help
 bo delete-org-space-users --help
 bo users --help
+bo role-collections --help
 ```
