@@ -44,13 +44,13 @@ type ospRegionData struct {
 type ospOutSpace struct {
 	ID    string    `json:"space_id"   toon:"space_id"`
 	Name  string    `json:"space_name" toon:"space_name"`
-	Users []outUser `json:"users"      toon:"users"`
+	Users []outUser `json:"cfusers"    toon:"cfusers"`
 }
 
 type ospOutOrg struct {
 	ID     string        `json:"org_id"   toon:"org_id"`
 	Name   string        `json:"org_name" toon:"org_name"`
-	Users  []outUser     `json:"users"    toon:"users"`
+	Users  []outUser     `json:"cfusers"  toon:"cfusers"`
 	Spaces []ospOutSpace `json:"spaces"   toon:"spaces"`
 }
 

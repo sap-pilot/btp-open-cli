@@ -44,7 +44,7 @@ type outUser struct {
 type outOrg struct {
 	ID    string    `json:"org_id"   toon:"org_id"`
 	Name  string    `json:"org_name" toon:"org_name"`
-	Users []outUser `json:"users"    toon:"users"`
+	Users []outUser `json:"cfusers"  toon:"cfusers"`
 }
 
 type outRegion struct {
