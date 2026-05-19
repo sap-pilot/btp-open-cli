@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.3 — 2026-05-19
+
+### Changed
+- **`users`** — added `email` field to user output (sourced from `emails[0].value`); appears after `userName` and participates in `--filter`, `--fields`, and `--excludeFields`
+- **`users`** — added `--org` flag to restrict fetching to a single org by exact GUID
+- **`role-collections`** — added `--org` flag to restrict fetching to a single org; matches by case-insensitive name substring or exact GUID
+
 ## v0.2 — 2026-05-18
 
 ### Added
