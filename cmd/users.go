@@ -62,6 +62,7 @@ If --regions is omitted the regions from the last login are used.`,
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
+		orgGUID, _ := cmd.Flags().GetString("org")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 		filter, _ := cmd.Flags().GetString("filter")
 		fieldsCSV, _ := cmd.Flags().GetString("fields")
@@ -106,6 +107,19 @@ If --regions is omitted the regions from the last login are used.`,
 
 		// Phase 1: discover orgs and check xsuaa service/key status.
 		plans := discoverXsuaaPlans(ctx, apiURLs, creds, includeOrgs, excludeOrgs)
+
+		// Apply --org filter: retain only the org whose GUID matches exactly.
+		if orgGUID != "" {
+			for i := range plans {
+				var matched []xsuaaOrgPlan
+				for _, op := range plans[i].Orgs {
+					if op.Org.GUID == orgGUID {
+						matched = append(matched, op)
+					}
+				}
+				plans[i].Orgs = matched
+			}
+		}
 
 		// Phase 2+3: preview, confirm, create instances/keys, cache credentials.
 		creds, proceed, err := ensureXsuaaCredentials(ctx, plans, creds, skipConfirm)
@@ -237,6 +251,7 @@ If --regions is omitted the regions from the last login are used.`,
 func init() {
 	rootCmd.AddCommand(usersCmd)
 	usersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
+	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,id,name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,id,name)")
 	usersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for service/key creation")
