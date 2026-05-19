@@ -2,6 +2,9 @@
 
 ## v0.3 — 2026-05-19
 
+### Added
+- **`upgrade`** — new command to self-update `bo` to the latest GitHub release; compares local version against the latest tag, prompts `y/N` before downloading (bypass with `-y`); on Linux/macOS atomically replaces the running binary via temp-file rename; on Windows renames `bo.exe` to `bo-{version}.exe` first then downloads the new release as `bo.exe`
+
 ### Changed
 - **`users`** — added `email` field to user output (sourced from `emails[0].value`); appears after `userName` and participates in `--filter`, `--fields`, and `--excludeFields`
 - **`users`** — added `--org` flag to restrict fetching to a single org by exact GUID
