@@ -24,16 +24,21 @@ type rcOutRole struct {
 	RoleTemplateName  string `json:"roleTemplateName"  toon:"roleTemplateName"`
 	Name              string `json:"name"              toon:"name"`
 	AppName           string `json:"appName"           toon:"appName"`
+	Description       string `json:"description"       toon:"description"`
+	IsReadOnly        bool   `json:"isReadOnly"        toon:"isReadOnly"`
 }
 
 type rcOutRoleRef struct {
 	RoleTemplateAppID string `json:"roleTemplateAppId" toon:"roleTemplateAppId"`
 	RoleTemplateName  string `json:"roleTemplateName"  toon:"roleTemplateName"`
 	Name              string `json:"name"              toon:"name"`
+	Description       string `json:"description"       toon:"description"`
 }
 
 type rcOutRoleCollection struct {
 	Name           string         `json:"name"           toon:"name"`
+	Description    string         `json:"description"    toon:"description"`
+	IsReadOnly     bool           `json:"isReadOnly"     toon:"isReadOnly"`
 	RoleReferences []rcOutRoleRef `json:"roleReferences" toon:"roleReferences"`
 }
 
@@ -229,6 +234,8 @@ If --regions is omitted the regions from the last login are used.`,
 					RoleTemplateName:  role.RoleTemplateName,
 					Name:              role.Name,
 					AppName:           role.AppName,
+					Description:       role.Description,
+					IsReadOnly:        role.IsReadOnly,
 				})
 			}
 
@@ -240,10 +247,13 @@ If --regions is omitted the regions from the last login are used.`,
 						RoleTemplateAppID: ref.RoleTemplateAppID,
 						RoleTemplateName:  ref.RoleTemplateName,
 						Name:              ref.Name,
+						Description:       ref.Description,
 					})
 				}
 				outRCs = append(outRCs, rcOutRoleCollection{
 					Name:           rc.Name,
+					Description:    rc.Description,
+					IsReadOnly:     rc.IsReadOnly,
 					RoleReferences: refs,
 				})
 			}

@@ -144,6 +144,8 @@ type Role struct {
 	RoleTemplateName  string `json:"roleTemplateName"`
 	Name              string `json:"name"`
 	AppName           string `json:"appName"`
+	Description       string `json:"description"`
+	IsReadOnly        bool   `json:"isReadOnly"`
 }
 
 // RoleReference is a role reference inside a role collection.
@@ -151,114 +153,77 @@ type RoleReference struct {
 	RoleTemplateAppID string `json:"roleTemplateAppId"`
 	RoleTemplateName  string `json:"roleTemplateName"`
 	Name              string `json:"name"`
+	Description       string `json:"description"`
 }
 
 // RoleCollection is an XSUAA role collection with its role references.
 type RoleCollection struct {
 	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	IsReadOnly     bool            `json:"isReadOnly"`
 	RoleReferences []RoleReference `json:"roleReferences"`
 }
 
-type rolesPage struct {
-	TotalResults int    `json:"totalResults"`
-	StartIndex   int    `json:"startIndex"`
-	ItemsPerPage int    `json:"itemsPerPage"`
-	Resources    []Role `json:"Resources"`
-}
-
-type roleCollectionsPage struct {
-	TotalResults int              `json:"totalResults"`
-	StartIndex   int              `json:"startIndex"`
-	ItemsPerPage int              `json:"itemsPerPage"`
-	Resources    []RoleCollection `json:"Resources"`
-}
-
-// ListRoles fetches all roles from the XSUAA Authorization API, paginating
-// through all pages using startIndex + count=500.
+// ListRoles fetches all roles from the XSUAA Authorization API.
+// The API returns a flat JSON array (no pagination envelope).
 func ListRoles(ctx context.Context, apiBaseURL, accessToken string) ([]Role, error) {
 	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
-	base := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/roles"
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/roles"
 
-	var all []Role
-	startIndex := 1
-	const pageSize = 500
-
-	for {
-		u := fmt.Sprintf("%s?startIndex=%d&count=%d", base, startIndex, pageSize)
-		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("GET %s: %w", u, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("XSUAA roles API returned HTTP %d: %s", resp.StatusCode, body)
-		}
-
-		var page rolesPage
-		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, fmt.Errorf("parsing XSUAA roles response: %w", err)
-		}
-
-		all = append(all, page.Resources...)
-		if len(all) >= page.TotalResults || len(page.Resources) == 0 {
-			break
-		}
-		startIndex += len(page.Resources)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("XSUAA roles API returned HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var roles []Role
+	if err := json.Unmarshal(body, &roles); err != nil {
+		return nil, fmt.Errorf("parsing XSUAA roles response: %w", err)
+	}
+	return roles, nil
 }
 
 // ListRoleCollections fetches all role collections from the XSUAA Authorization
-// API (with showRoles=true), paginating through all pages.
+// API with showRoles=true. The API returns a flat JSON array (no pagination envelope).
 func ListRoleCollections(ctx context.Context, apiBaseURL, accessToken string) ([]RoleCollection, error) {
 	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
-	base := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections"
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections?showRoles=true"
 
-	var all []RoleCollection
-	startIndex := 1
-	const pageSize = 500
-
-	for {
-		u := fmt.Sprintf("%s?showRoles=true&startIndex=%d&count=%d", base, startIndex, pageSize)
-		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("GET %s: %w", u, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("XSUAA role collections API returned HTTP %d: %s", resp.StatusCode, body)
-		}
-
-		var page roleCollectionsPage
-		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, fmt.Errorf("parsing XSUAA role collections response: %w", err)
-		}
-
-		all = append(all, page.Resources...)
-		if len(all) >= page.TotalResults || len(page.Resources) == 0 {
-			break
-		}
-		startIndex += len(page.Resources)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
 	}
-	return all, nil
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("XSUAA role collections API returned HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var rcs []RoleCollection
+	if err := json.Unmarshal(body, &rcs); err != nil {
+		return nil, fmt.Errorf("parsing XSUAA role collections response: %w", err)
+	}
+	return rcs, nil
 }
 
 // MSToISO converts a Unix timestamp in milliseconds to an ISO 8601 string.
