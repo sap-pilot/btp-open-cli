@@ -121,8 +121,8 @@ bo logoff
 ### `orgs`
 
 List all accessible CF organizations across one or more regions and output them as CSV.
-The output format (`region,id,name`) is compatible with the `--orgs` and `--excludeOrgs` flags
-accepted by `create-org-space-users`, `delete-org-space-users`, and `users`.
+The output format (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags
+accepted by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, and `role-collections`.
 
 ```bash
 # List orgs for stored regions
@@ -185,9 +185,9 @@ bo org-space-users --regions us10,eu10
 
 Add users with org and space roles to target CF organizations and their spaces from a CSV file.
 
-CSV format (`name,origin,roles`):
+CSV format (`cfuser_name,cfuser_origin,cfuser_roles`):
 ```
-name,origin,roles
+cfuser_name,cfuser_origin,cfuser_roles
 user@example.com,sap.ids,organization_user;organization_manager;space_developer;space_manager
 ```
 
@@ -201,10 +201,10 @@ bo create-org-space-users --users users.csv
 # Skip confirmation prompt
 bo create-org-space-users --users users.csv -y
 
-# Target specific orgs only (CSV: region,id,name)
+# Target specific orgs only (CSV: region,org_id,org_name)
 bo create-org-space-users --users users.csv --orgs target-orgs.csv
 
-# Exclude orgs such as production environments (CSV: region,id,name)
+# Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
 
 # Specific regions
@@ -217,9 +217,9 @@ Without `-y`, a TOON preview of target orgs/spaces and users is shown before any
 
 Remove users from every space (space roles first, then org roles after a 5-second pause) across all accessible CF orgs.
 
-CSV format (`name,origin`):
+CSV format (`cfuser_name,cfuser_origin`):
 ```
-name,origin
+cfuser_name,cfuser_origin
 user@example.com,sap.ids
 ```
 
@@ -255,10 +255,10 @@ bo users --regions us10,eu10
 # Fetch users from a single org by GUID
 bo users --org <org-guid>
 
-# Include only specific orgs (CSV: region,id,name)
+# Include only specific orgs (CSV: region,org_id,org_name)
 bo users --orgs target-orgs.csv
 
-# Exclude orgs such as production environments (CSV: region,id,name)
+# Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo users --excludeOrgs prod-orgs.csv
 
 # Filter output — only users matching a substring in any field
@@ -266,7 +266,7 @@ bo users --filter "@example.com"
 bo users --filter "sap.ids"
 
 # Include only specific fields in output
-bo users --fields id,userName,email,origin
+bo users --fields user_id,userName,email,user_origin
 
 # Exclude specific fields from output
 bo users --excludeFields lastLogonTime,groups
@@ -278,14 +278,14 @@ bo users --filter "sap.ids" --excludeFields groups --regions us10
 Output format (TOON):
 ```
 regions:
-  - id: us10
+  - region: us10
     orgs:
-      - id: <org-guid>
-        name: my-org
+      - org_id: <org-guid>
+        org_name: my-org
         users:
-          - id: <user-id>
-            externalId: user@example.com
-            origin: sap.ids
+          - user_id: <user-id>
+            user_externalId: user@example.com
+            user_origin: sap.ids
             userName: user@example.com
             email: user@example.com
             lastLogonTime: 2026-01-15T08:30:00Z
@@ -311,10 +311,10 @@ bo role-collections --regions us10,eu10
 # Fetch roles and role collections from a single org by name or GUID
 bo role-collections --org <org-name-or-guid>
 
-# Include only specific orgs (CSV: region,id,name)
+# Include only specific orgs (CSV: region,org_id,org_name)
 bo role-collections --orgs target-orgs.csv
 
-# Exclude orgs such as production environments (CSV: region,id,name)
+# Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo role-collections --excludeOrgs prod-orgs.csv
 
 # JSON output
@@ -324,25 +324,25 @@ bo role-collections --format json
 Output format (TOON):
 ```
 regions:
-  - id: us10
+  - region: us10
     orgs:
-      - id: <org-guid>
-        name: my-org
+      - org_id: <org-guid>
+        org_name: my-org
         roles:
           - roleTemplateAppId: xsuaa!t1
             roleTemplateName: xsuaa_admin
-            name: User and Role Administrator
+            role_name: User and Role Administrator
             appName: xsuaa
             description: Manage authorizations, trusted identity providers, and users.
             isReadOnly: true
         roleCollections:
-          - name: Subaccount Administrator
+          - rolecollection_name: Subaccount Administrator
             description: Administrative access to the subaccount
             isReadOnly: true
             roleReferences:
               - roleTemplateAppId: xsuaa!t1
                 roleTemplateName: xsuaa_admin
-                name: User and Role Administrator
+                role_name: User and Role Administrator
                 description: Manage authorizations, trusted identity providers, and users.
 ```
 
@@ -368,10 +368,10 @@ bo apps --regions us10,eu10
 # Scope to a single org by GUID
 bo apps --org <org-guid>
 
-# Include only specific orgs (CSV: region,id,name)
+# Include only specific orgs (CSV: region,org_id,org_name)
 bo apps --orgs target-orgs.csv
 
-# Exclude orgs such as production environments (CSV: region,id,name)
+# Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo apps --excludeOrgs prod-orgs.csv
 
 # Filter output — only apps matching a substring in any listed field
@@ -386,13 +386,13 @@ bo apps --regions us10 --orgs my-orgs.csv --format csv --filter STARTED
 Output format (TOON):
 ```
 regions:
-  - id: us10
+  - region: us10
     orgs:
-      - id: <org-guid>
-        name: my-org
+      - org_id: <org-guid>
+        org_name: my-org
         spaces:
-          - id: <space-guid>
-            name: dev
+          - space_id: <space-guid>
+            space_name: dev
             apps:
               - mta_id: my-mta
                 app_id: <app-guid>

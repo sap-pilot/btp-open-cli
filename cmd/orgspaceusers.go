@@ -42,21 +42,21 @@ type ospRegionData struct {
 // ── output document model ────────────────────────────────────────────────────
 
 type ospOutSpace struct {
-	ID    string    `json:"id"    toon:"id"`
-	Name  string    `json:"name"  toon:"name"`
-	Users []outUser `json:"users" toon:"users"`
+	ID    string    `json:"space_id"   toon:"space_id"`
+	Name  string    `json:"space_name" toon:"space_name"`
+	Users []outUser `json:"users"      toon:"users"`
 }
 
 type ospOutOrg struct {
-	ID     string        `json:"id"     toon:"id"`
-	Name   string        `json:"name"   toon:"name"`
-	Users  []outUser     `json:"users"  toon:"users"`
-	Spaces []ospOutSpace `json:"spaces" toon:"spaces"`
+	ID     string        `json:"org_id"   toon:"org_id"`
+	Name   string        `json:"org_name" toon:"org_name"`
+	Users  []outUser     `json:"users"    toon:"users"`
+	Spaces []ospOutSpace `json:"spaces"   toon:"spaces"`
 }
 
 type ospOutRegion struct {
-	ID   string      `json:"id"   toon:"id"`
-	Orgs []ospOutOrg `json:"orgs" toon:"orgs"`
+	ID   string      `json:"region" toon:"region"`
+	Orgs []ospOutOrg `json:"orgs"   toon:"orgs"`
 }
 
 type ospOutDoc struct {
@@ -126,7 +126,7 @@ var orgSpaceUsersCmd = &cobra.Command{
 Output formats (--format):
   toon  Token-Oriented Object Notation — compact, human-readable (default)
   json  JSON document
-  csv   CSV rows: region,org_id,org_name,scope,scope_id,scope_name,user_id,user_name,user_origin,user_roles
+  csv   CSV rows: region,org_id,org_name,scope,scope_id,scope_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -296,7 +296,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 	if err := w.Write([]string{
 		"region", "org_id", "org_name",
 		"scope", "scope_id", "scope_name",
-		"user_id", "user_name", "user_origin", "user_roles",
+		"cfuser_id", "cfuser_name", "cfuser_origin", "cfuser_roles",
 	}); err != nil {
 		return err
 	}

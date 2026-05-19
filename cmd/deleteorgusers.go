@@ -33,8 +33,8 @@ func parseDeleteUsersCSV(path string) ([]csvUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
-	if len(header) < 2 || header[0] != "name" || header[1] != "origin" {
-		return nil, fmt.Errorf("invalid header — expected: name,origin")
+	if len(header) < 2 || header[0] != "cfuser_name" || header[1] != "cfuser_origin" {
+		return nil, fmt.Errorf("invalid header — expected: cfuser_name,cfuser_origin")
 	}
 
 	var users []csvUser
@@ -90,27 +90,27 @@ type delRegionPlan struct {
 // ── preview TOON types ────────────────────────────────────────────────────────
 
 type delPreviewUser struct {
-	ID     string `toon:"id"`
-	Name   string `toon:"name"`
-	Origin string `toon:"origin"`
-	Roles  string `toon:"roles"`
+	ID     string `toon:"cfuser_id"`
+	Name   string `toon:"cfuser_name"`
+	Origin string `toon:"cfuser_origin"`
+	Roles  string `toon:"cfuser_roles"`
 }
 
 type delPreviewSpace struct {
-	ID    string           `toon:"id"`
-	Name  string           `toon:"name"`
+	ID    string           `toon:"space_id"`
+	Name  string           `toon:"space_name"`
 	Users []delPreviewUser `toon:"users"`
 }
 
 type delPreviewOrg struct {
-	ID     string            `toon:"id"`
-	Name   string            `toon:"name"`
+	ID     string            `toon:"org_id"`
+	Name   string            `toon:"org_name"`
 	Users  []delPreviewUser  `toon:"users"`
 	Spaces []delPreviewSpace `toon:"spaces"`
 }
 
 type delPreviewRegion struct {
-	ID   string          `toon:"id"`
+	ID   string          `toon:"region"`
 	Orgs []delPreviewOrg `toon:"orgs"`
 }
 
@@ -125,7 +125,7 @@ var deleteOrgSpaceUsersCmd = &cobra.Command{
 	Short: "Remove users from all spaces and organizations across accessible CF orgs",
 	Long: `Remove users from every space and organization across one or more regions.
 
-The --users CSV must have the header: name,origin
+The --users CSV must have the header: cfuser_name,cfuser_origin
 
 Space-level role assignments are deleted first; after a 5-second pause (to allow
 CF's async role processing to settle) org-level roles are then removed.
@@ -413,7 +413,7 @@ func joinRoleTypes(roles []cf.Role) string {
 func init() {
 	rootCmd.AddCommand(deleteOrgSpaceUsersCmd)
 	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	deleteOrgSpaceUsersCmd.Flags().String("users", "", "Path to the CSV file (required; columns: name,origin)")
+	deleteOrgSpaceUsersCmd.Flags().String("users", "", "Path to the CSV file (required; columns: cfuser_name,cfuser_origin)")
 	deleteOrgSpaceUsersCmd.MarkFlagRequired("users")
 	deleteOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }

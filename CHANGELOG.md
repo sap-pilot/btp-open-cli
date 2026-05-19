@@ -13,6 +13,21 @@
   - App metadata annotations (`mta_id`) are sourced from `app.metadata.annotations.mta_id`
   - Process metrics (`instances`, `memory_in_mb`, `disk_in_mb`) are sourced from the CF v3 `web` process for each app
 
+### Changed
+- **Field naming standardised across all commands** — output fields (TOON/JSON/CSV) and CSV input headers now use entity-prefixed names for clarity:
+  - Region key: `region` (was `id` in TOON/JSON output)
+  - Org fields: `org_id`, `org_name` (was `id`, `name`)
+  - Space fields: `space_id`, `space_name` (was `id`, `name`)
+  - Role name: `role_name` (was `name` in `role-collections` output)
+  - Role collection name: `rolecollection_name` (was `name`)
+  - CF user fields (`org-users`, `org-space-users`, create/delete commands): `cfuser_id`, `cfuser_name`, `cfuser_origin`, `cfuser_roles` (was `id`, `name`, `origin`, `roles`)
+  - XSUAA user fields (`users` command): `user_id`, `user_externalId`, `user_origin` (was `id`, `externalId`, `origin`)
+- **`--orgs` / `--excludeOrgs` CSV input** — header now `region,org_id,org_name` (was `region,id,name`); applies to `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, and `role-collections`
+- **`create-org-space-users --users` CSV input** — header now `cfuser_name,cfuser_origin,cfuser_roles` (was `name,origin,roles`)
+- **`delete-org-space-users --users` CSV input** — header now `cfuser_name,cfuser_origin` (was `name,origin`)
+- **`orgs` CSV output** — columns now `region,org_id,org_name` (was `region,id,name`)
+- **`users --fields` / `--excludeFields`** — field names updated to `user_id`, `user_externalId`, `user_origin` to match new output keys
+
 ## v0.3 — 2026-05-19
 
 ### Added

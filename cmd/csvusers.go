@@ -29,8 +29,8 @@ func parseUsersCSV(path string) ([]csvUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
-	if len(header) < 3 || header[0] != "name" || header[1] != "origin" || header[2] != "roles" {
-		return nil, fmt.Errorf("invalid header — expected: name,origin,roles")
+	if len(header) < 3 || header[0] != "cfuser_name" || header[1] != "cfuser_origin" || header[2] != "cfuser_roles" {
+		return nil, fmt.Errorf("invalid header — expected: cfuser_name,cfuser_origin,cfuser_roles")
 	}
 
 	var users []csvUser
