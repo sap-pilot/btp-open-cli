@@ -252,6 +252,9 @@ bo users -y
 # Scope to specific regions
 bo users --regions us10,eu10
 
+# Fetch users from a single org by GUID
+bo users --org <org-guid>
+
 # Include only specific orgs (CSV: region,id,name)
 bo users --orgs target-orgs.csv
 
@@ -263,7 +266,7 @@ bo users --filter "@example.com"
 bo users --filter "sap.ids"
 
 # Include only specific fields in output
-bo users --fields id,userName,origin
+bo users --fields id,userName,email,origin
 
 # Exclude specific fields from output
 bo users --excludeFields lastLogonTime,groups
@@ -284,6 +287,7 @@ regions:
             externalId: user@example.com
             origin: sap.ids
             userName: user@example.com
+            email: user@example.com
             lastLogonTime: 2026-01-15T08:30:00Z
             groups: <group-values>
 ```
@@ -303,6 +307,9 @@ bo role-collections -y
 
 # Scope to specific regions
 bo role-collections --regions us10,eu10
+
+# Fetch roles and role collections from a single org by name or GUID
+bo role-collections --org <org-name-or-guid>
 
 # Include only specific orgs (CSV: region,id,name)
 bo role-collections --orgs target-orgs.csv
