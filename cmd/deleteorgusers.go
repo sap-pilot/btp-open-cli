@@ -99,13 +99,13 @@ type delPreviewUser struct {
 type delPreviewSpace struct {
 	ID    string           `toon:"space_id"`
 	Name  string           `toon:"space_name"`
-	Users []delPreviewUser `toon:"users"`
+	Users []delPreviewUser `toon:"cfusers"`
 }
 
 type delPreviewOrg struct {
 	ID     string            `toon:"org_id"`
 	Name   string            `toon:"org_name"`
-	Users  []delPreviewUser  `toon:"users"`
+	Users  []delPreviewUser  `toon:"cfusers"`
 	Spaces []delPreviewSpace `toon:"spaces"`
 }
 
@@ -267,7 +267,7 @@ If --regions is omitted, the regions from the last login are used.`,
 			if err := delPrintPreview(plans); err != nil {
 				return err
 			}
-			fmt.Fprint(os.Stderr, "Proceed with role deletion? [y/N] ")
+			fmt.Fprint(os.Stderr, "Proceed with cfuser deletion? [y/N] ")
 			scanner := bufio.NewScanner(os.Stdin)
 			if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
 				fmt.Fprintln(os.Stdout, "Aborted.")
@@ -277,7 +277,7 @@ If --regions is omitted, the regions from the last login are used.`,
 		}
 
 		// Phase 3a: delete all space-level roles.
-		fmt.Fprintln(os.Stdout, "Deleting space roles...")
+		fmt.Fprintln(os.Stdout, "Deleting space cfusers...")
 		for _, plan := range plans {
 			if plan.APIURL == "" {
 				continue
@@ -321,7 +321,7 @@ If --regions is omitted, the regions from the last login are used.`,
 		}
 
 		// Phase 3b: delete all org-level roles.
-		fmt.Fprintln(os.Stdout, "Deleting org roles...")
+		fmt.Fprintln(os.Stdout, "Deleting org cfusers...")
 		for _, plan := range plans {
 			if plan.APIURL == "" {
 				continue
@@ -396,7 +396,7 @@ func delPrintPreview(plans []delRegionPlan) error {
 	if err != nil {
 		return fmt.Errorf("encoding preview: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, "Roles to be deleted:")
+	fmt.Fprintln(os.Stdout, "cfusers to be deleted:")
 	os.Stdout.Write(out)
 	fmt.Fprintln(os.Stdout)
 	return nil
