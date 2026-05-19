@@ -6,14 +6,14 @@ Open-source CLI for SAP BTP — bulk-manage users and services across multiple C
 
 ### Option A — Download pre-built binary (recommended)
 
-Pre-built binaries for every platform are attached to each [release](https://github.com/da-chen/btp-open-cli/releases/latest). A `checksums.txt` file is included in the assets — use it to verify your download before running.
+Pre-built binaries for every platform are attached to each [release](https://github.com/sap-pilot/btp-open-cli/releases/latest). A `checksums.txt` file is included in the assets — use it to verify your download before running.
 
 #### Windows
 
 Open PowerShell and run:
 
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/da-chen/btp-open-cli/releases/latest/download/bo-windows-amd64.exe" -OutFile "bo.exe"
+Invoke-WebRequest -Uri "https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-windows-amd64.exe" -OutFile "bo.exe"
 ```
 
 Verify the checksum (compare against `checksums.txt` in the release assets):
@@ -31,7 +31,7 @@ Start using the CLI:
 #### Linux
 
 ```bash
-wget -O bo https://github.com/da-chen/btp-open-cli/releases/latest/download/bo-linux-amd64
+wget -O bo https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-linux-amd64
 chmod +x ./bo
 ./bo login --regions us10
 ```
@@ -46,7 +46,7 @@ sha256sum ./bo
 #### macOS (Apple Silicon)
 
 ```bash
-wget -O bo https://github.com/da-chen/btp-open-cli/releases/latest/download/bo-darwin-arm64
+wget -O bo https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-darwin-arm64
 chmod +x ./bo
 ./bo login --regions us10
 ```
@@ -82,7 +82,7 @@ go version
 Clone and compile:
 
 ```bash
-git clone https://github.com/da-chen/btp-open-cli.git
+git clone https://github.com/sap-pilot/btp-open-cli.git
 cd btp-open-cli
 go build -o bo
 sudo mv bo /usr/local/bin/   # optional
