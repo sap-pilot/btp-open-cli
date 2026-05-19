@@ -346,6 +346,23 @@ regions:
                 description: Manage authorizations, trusted identity providers, and users.
 ```
 
+### `upgrade`
+
+Check for the latest release on GitHub and upgrade the `bo` binary in place.
+
+```bash
+# Check for updates and confirm before downloading
+bo upgrade
+
+# Skip confirmation prompt
+bo upgrade -y
+```
+
+The command compares the local version against the latest GitHub release. If a newer version is available it downloads the platform-matching binary (`bo-{os}-{arch}`) and replaces the running executable:
+
+- **Linux / macOS** — downloads to a temp file in the same directory, then atomically renames it over the current binary.
+- **Windows** — renames `bo.exe` to `bo-{version}.exe` first (Windows cannot overwrite a running executable), then downloads the new release as `bo.exe`.
+
 ### `version`
 
 Print version information.
@@ -432,4 +449,5 @@ bo create-org-space-users --help
 bo delete-org-space-users --help
 bo users --help
 bo role-collections --help
+bo upgrade --help
 ```
