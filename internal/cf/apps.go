@@ -90,7 +90,7 @@ func (c *Client) ListAppsBySpaces(ctx context.Context, spaceGUIDs []string) ([]A
 // returns a map of appGUID → Process. Only the "web" process type is fetched.
 func (c *Client) ListProcessesBySpaces(ctx context.Context, spaceGUIDs []string) (map[string]Process, error) {
 	byApp := make(map[string]Process)
-	nextURL := fmt.Sprintf("%s/v3/processes?space_guids=%s&type=web&per_page=5000",
+	nextURL := fmt.Sprintf("%s/v3/processes?space_guids=%s&types=web&per_page=5000",
 		c.BaseURL(), strings.Join(spaceGUIDs, ","))
 
 	for nextURL != "" {
