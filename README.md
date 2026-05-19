@@ -110,6 +110,18 @@ bo login --sso --regions us10,eu10
 
 Regions are persisted — subsequent commands reuse them if `--regions` is not specified.
 
+#### Automatic token refresh
+
+OAuth access tokens expire after a few hours. When any command receives an HTTP 401 from the CF API, `bo` automatically attempts to recover without interrupting the operation:
+
+1. **Silent refresh** — tries the stored OAuth refresh token to obtain a new access token without any prompts. If this succeeds the command continues transparently.
+2. **Interactive re-authentication** — if the refresh token is also expired or invalid, `bo` prints a message and prompts for credentials using the same method as the last login:
+   - Password login: prompts for email and password
+   - SSO login: shows the passcode URL and prompts for a new one-time passcode
+3. If re-authentication succeeds the command resumes; if it fails (or you press Ctrl-C) the affected region is skipped with a warning.
+
+All interactive prompts — email, password, SSO passcode, and `[y/N]` confirmations — respect **Ctrl-C** and exit cleanly.
+
 ### `logoff`
 
 Clear stored OAuth tokens (regions are preserved for the next login).

@@ -13,6 +13,14 @@
   - App metadata annotations (`mta_id`) are sourced from `app.metadata.annotations.mta_id`
   - Process metrics (`instances`, `memory_in_mb`, `disk_in_mb`) are sourced from the CF v3 `web` process for each app
 
+### Improvements
+- **Automatic token refresh on HTTP 401** — all CF API commands (`orgs`, `org-users`, `org-space-users`, `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, `role-collections`) now recover automatically from expired access tokens:
+  1. Silent refresh via stored OAuth refresh token (no prompts)
+  2. If the refresh token is also expired: interactive re-authentication using the same method as the last login (password or SSO passcode)
+  3. Only one refresh attempt per region per command run; subsequent 401s propagate as warnings
+- **Ctrl-C exits cleanly** in all interactive prompts — email, password, SSO passcode, and `[y/N]` confirmations now respect context cancellation
+- **`login_type` stored per region** — the credential store now records whether each region was authenticated with `password` or `sso` so the correct prompt can be shown during re-authentication
+
 ### Changed
 - **Field naming standardised across all commands** — output fields (TOON/JSON/CSV) and CSV input headers now use entity-prefixed names for clarity:
   - Region key: `region` (was `id` in TOON/JSON output)
