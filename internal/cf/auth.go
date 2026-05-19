@@ -74,6 +74,17 @@ func GetEndpoints(ctx context.Context, cfAPIBaseURL string) (*Endpoints, error) 
 	return ep, nil
 }
 
+// RefreshToken exchanges a refresh token for a new set of OAuth tokens.
+func RefreshToken(ctx context.Context, tokenEndpoint, refreshToken string) (*TokenResponse, error) {
+	return doTokenRequest(ctx, tokenEndpoint+"/oauth/token",
+		url.Values{
+			"grant_type":    {"refresh_token"},
+			"refresh_token": {refreshToken},
+		},
+		"token refresh",
+	)
+}
+
 // ExchangePasscode trades a one-time SSO passcode for OAuth tokens via the
 // login/authorization server. Passcodes are issued and validated there, not
 // by the UAA server.

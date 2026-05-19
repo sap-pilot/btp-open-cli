@@ -16,6 +16,7 @@ type RegionToken struct {
 	RefreshToken string    `json:"refresh_token"`
 	TokenType    string    `json:"token_type"`
 	ExpiresAt    time.Time `json:"expires_at"`
+	LoginType    string    `json:"login_type,omitempty"` // "password" or "sso"
 }
 
 // XsuaaData holds XSUAA service key credentials and a cached OAuth token for

@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"log/slog"
 	"os"
@@ -96,9 +95,12 @@ Omit region flags to reuse the regions from the previous login.`,
 			// Fall back to interactive prompts for any missing value.
 			if username == "" {
 				fmt.Fprintf(os.Stdout, "Email> ")
-				scanner := bufio.NewScanner(os.Stdin)
-				scanner.Scan()
-				username = strings.TrimSpace(scanner.Text())
+				text, ok := readLine(ctx)
+				if !ok {
+					fmt.Fprintln(os.Stdout, "Aborted.")
+					return nil
+				}
+				username = text
 			}
 			if username == "" {
 				return fmt.Errorf("email cannot be empty")
@@ -108,6 +110,10 @@ Omit region flags to reuse the regions from the previous login.`,
 				pwBytes, err = term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Fprintln(os.Stdout)
 				if err != nil {
+					if ctx.Err() != nil {
+						fmt.Fprintln(os.Stdout, "Aborted.")
+						return nil
+					}
 					return fmt.Errorf("reading password: %w", err)
 				}
 			}
@@ -139,6 +145,10 @@ Omit region flags to reuse the regions from the previous login.`,
 				codeBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 				fmt.Fprintln(os.Stdout)
 				if err != nil {
+					if ctx.Err() != nil {
+						fmt.Fprintln(os.Stdout, "Aborted.")
+						return nil
+					}
 					return fmt.Errorf("reading passcode for %s: %w", regionName, err)
 				}
 				code := strings.TrimSpace(string(codeBytes))
@@ -175,7 +185,7 @@ Omit region flags to reuse the regions from the previous login.`,
 						authResults[idx] = authResult{apiURL: s.apiURL, err: e}
 						return
 					}
-					tok := buildRegionToken(s.apiURL, tr)
+					tok := buildRegionTokenWithType(s.apiURL, tr, "sso")
 					authResults[idx] = authResult{apiURL: s.apiURL, token: &tok}
 				}(i, sc)
 			}
@@ -192,7 +202,7 @@ Omit region flags to reuse the regions from the previous login.`,
 						authResults[idx] = authResult{apiURL: ep.apiURL, err: e}
 						return
 					}
-					tok := buildRegionToken(ep.apiURL, tr)
+					tok := buildRegionTokenWithType(ep.apiURL, tr, "password")
 					authResults[idx] = authResult{apiURL: ep.apiURL, token: &tok}
 				}(i, r)
 			}
@@ -266,6 +276,12 @@ func buildRegionToken(apiURL string, tr *cf.TokenResponse) store.RegionToken {
 		TokenType:    tr.TokenType,
 		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
 	}
+}
+
+func buildRegionTokenWithType(apiURL string, tr *cf.TokenResponse, loginType string) store.RegionToken {
+	tok := buildRegionToken(apiURL, tr)
+	tok.LoginType = loginType
+	return tok
 }
 
 // splitCSV parses a comma-separated string, trimming whitespace from each element.

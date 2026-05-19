@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -184,6 +183,7 @@ If --regions is omitted, the regions from the last login are used.`,
 				}
 
 				client := cf.NewClient(url, tok.AccessToken)
+				client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
 				orgs, err := client.ListOrganizations(ctx)
 				if err != nil {
 					mu.Lock()
@@ -268,8 +268,8 @@ If --regions is omitted, the regions from the last login are used.`,
 				return err
 			}
 			fmt.Fprint(os.Stderr, "Proceed with cfuser deletion? [y/N] ")
-			scanner := bufio.NewScanner(os.Stdin)
-			if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+			text, ok := readLine(ctx)
+			if !ok || strings.ToLower(text) != "y" {
 				fmt.Fprintln(os.Stdout, "Aborted.")
 				return nil
 			}
@@ -287,6 +287,7 @@ If --regions is omitted, the regions from the last login are used.`,
 				continue
 			}
 			client := cf.NewClient(plan.APIURL, tok.AccessToken)
+			client.SetTokenRefresher(makeTokenRefresher(plan.APIURL, tok.AccessToken))
 
 			for _, op := range plan.Orgs {
 				for _, sp := range op.Spaces {
@@ -331,6 +332,7 @@ If --regions is omitted, the regions from the last login are used.`,
 				continue
 			}
 			client := cf.NewClient(plan.APIURL, tok.AccessToken)
+			client.SetTokenRefresher(makeTokenRefresher(plan.APIURL, tok.AccessToken))
 
 			for _, op := range plan.Orgs {
 				for _, ue := range op.Users {

@@ -142,6 +142,7 @@ If --regions is omitted the regions from the last login are used.`,
 				}
 
 				client := cf.NewClient(url, tok.AccessToken)
+				client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
 
 				// Step 1: orgs.
 				orgs, err := client.ListOrganizations(ctx)

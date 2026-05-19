@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"log/slog"
@@ -90,6 +89,7 @@ func discoverXsuaaPlans(ctx context.Context, apiURLs []string, creds *store.Cred
 			}
 
 			client := cf.NewClient(url, tok.AccessToken)
+			client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
 
 			orgs, err := client.ListOrganizations(ctx)
 			if err != nil {
@@ -226,8 +226,8 @@ func ensureXsuaaCredentials(ctx context.Context, plans []xsuaaRegionPlan, creds 
 			return creds, false, err
 		}
 		fmt.Fprint(os.Stderr, "Proceed with service/key creation? [y/N] ")
-		scanner := bufio.NewScanner(os.Stdin)
-		if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+		text, ok := readLine(ctx)
+		if !ok || strings.ToLower(text) != "y" {
 			fmt.Fprintln(os.Stdout, "Aborted.")
 			return creds, false, nil
 		}
@@ -272,6 +272,7 @@ func ensureXsuaaCredentials(ctx context.Context, plans []xsuaaRegionPlan, creds 
 			continue
 		}
 		client := cf.NewClient(plan.APIURL, tok.AccessToken)
+		client.SetTokenRefresher(makeTokenRefresher(plan.APIURL, tok.AccessToken))
 
 		for oi := range plan.Orgs {
 			op := &plan.Orgs[oi]
