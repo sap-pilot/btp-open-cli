@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 
@@ -254,6 +255,12 @@ If --regions is omitted the regions from the last login are used.`,
 					IsReadOnly:        role.IsReadOnly,
 				})
 			}
+			sort.Slice(outRoles, func(i, j int) bool {
+				if outRoles[i].RoleTemplateAppID != outRoles[j].RoleTemplateAppID {
+					return outRoles[i].RoleTemplateAppID < outRoles[j].RoleTemplateAppID
+				}
+				return outRoles[i].RoleTemplateName < outRoles[j].RoleTemplateName
+			})
 
 			var outRCs []rcOutRoleCollection
 			for _, rc := range r.roleCollections {
@@ -266,6 +273,12 @@ If --regions is omitted the regions from the last login are used.`,
 						Description:       ref.Description,
 					})
 				}
+				sort.Slice(refs, func(i, j int) bool {
+					if refs[i].RoleTemplateAppID != refs[j].RoleTemplateAppID {
+						return refs[i].RoleTemplateAppID < refs[j].RoleTemplateAppID
+					}
+					return refs[i].RoleTemplateName < refs[j].RoleTemplateName
+				})
 				outRCs = append(outRCs, rcOutRoleCollection{
 					Name:           rc.Name,
 					Description:    rc.Description,
@@ -273,6 +286,9 @@ If --regions is omitted the regions from the last login are used.`,
 					RoleReferences: refs,
 				})
 			}
+			sort.Slice(outRCs, func(i, j int) bool {
+				return outRCs[i].Name < outRCs[j].Name
+			})
 
 			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], rcOutOrg{
 				ID:              r.orgGUID,

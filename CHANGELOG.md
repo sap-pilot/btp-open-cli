@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5 — 2026-05-20
+
+### Changed
+- **`role-collections` — deterministic sort order** — output is now sorted for easier diff and comparison across orgs:
+  - `roles` sorted by `roleTemplateAppId` then `roleTemplateName`
+  - `roleCollections` sorted by `rolecollection_name`
+  - Each role collection's `roleReferences` sorted by `roleTemplateAppId` then `roleTemplateName`
+
 ## v0.4 — 2026-05-19
 
 ### Added
