@@ -2,6 +2,15 @@
 
 ## v0.5 — 2026-05-20
 
+### Added
+- **`delete-users`** — new command to delete XSUAA users across all accessible organizations via the `apiaccess` service plan
+  - CSV input (`--users`): columns `origin,userName`; users matched case-insensitively by origin + userName
+  - TOON preview shows full user details (`user_id`, `user_externalId`, `user_origin`, `userName`, `email`, `lastLogonTime`, `groups`) for all matched users before any deletions are made
+  - `Proceed with user deletion? [y/N]` confirmation prompt (skipped with `-y`)
+  - `--regions` — comma-separated CF regions; falls back to stored login regions if omitted
+  - `--orgs` / `--excludeOrgs` — CSV files (`region,org_id,org_name`) to include or skip specific orgs
+  - Reuses the XSUAA `btp-xsuaa` service instance and `btp-open-cli-sk` service key setup and credential caching from `users` and `role-collections`
+
 ### Changed
 - **`role-collections` — deterministic sort order** — output is now sorted for easier diff and comparison across orgs:
   - `roles` sorted by `roleTemplateAppId` then `roleTemplateName`

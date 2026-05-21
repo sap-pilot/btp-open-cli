@@ -240,6 +240,31 @@ func ListRoleCollections(ctx context.Context, apiBaseURL, accessToken string) ([
 	return rcs, nil
 }
 
+// DeleteUser sends DELETE /Users/{userID} to remove a user from the XSUAA
+// tenant. A 200 or 204 response is treated as success.
+func DeleteUser(ctx context.Context, apiBaseURL, accessToken, userID string) error {
+	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	u := strings.TrimRight(apiBaseURL, "/") + "/Users/" + userID
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("XSUAA delete user failed (HTTP %d): %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 // MSToISO converts a Unix timestamp in milliseconds to an ISO 8601 string.
 // Returns an empty string for zero values.
 func MSToISO(ms int64) string {
