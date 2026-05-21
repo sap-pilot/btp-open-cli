@@ -114,7 +114,7 @@ bo logoff
 
 List all accessible CF organizations across one or more regions and output them as CSV.
 The output format (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags
-accepted by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, and `role-collections`.
+accepted by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`.
 
 ```bash
 # List orgs for stored regions
@@ -283,6 +283,57 @@ regions:
             lastLogonTime: 2026-01-15T08:30:00Z
             groups: <group-values>
 ```
+
+### `delete-users`
+
+Delete users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
+
+For each organization the command checks whether the service instance `btp-xsuaa` (xsuaa / apiaccess plan) and service key `btp-open-cli-sk` exist in the `util` space. If they are missing, a TOON preview of what will be created is shown before any changes are made. Credentials retrieved from the service key are cached in `~/.bo/credentials.json` and reused on subsequent runs.
+
+CSV format (`origin,userName`):
+```
+origin,userName
+sap.default,user@example.com
+```
+
+Users are matched by `origin` + `userName` (case-insensitive). A TOON preview of all matched users is shown before any deletions are made.
+
+```bash
+# Preview users to be deleted, then confirm (y/N)
+bo delete-users --users delete-users.csv
+
+# Skip all confirmation prompts
+bo delete-users --users delete-users.csv -y
+
+# Scope to specific regions
+bo delete-users --users delete-users.csv --regions us10,eu10
+
+# Include only specific orgs (CSV: region,org_id,org_name)
+bo delete-users --users delete-users.csv --orgs target-orgs.csv
+
+# Exclude orgs such as production environments (CSV: region,org_id,org_name)
+bo delete-users --users delete-users.csv --excludeOrgs prod-orgs.csv
+```
+
+Preview output format (TOON):
+```
+Users to be deleted:
+regions:
+  - region: us10
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+        users:
+          - user_id: <user-id>
+            user_externalId: user@example.com
+            user_origin: sap.default
+            userName: user@example.com
+            email: user@example.com
+            lastLogonTime: 2026-01-15T08:30:00Z
+            groups: <group-values>
+```
+
+Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is prompted before any changes are made.
 
 ### `role-collections`
 
@@ -503,6 +554,7 @@ bo org-space-users --help
 bo create-org-space-users --help
 bo delete-org-space-users --help
 bo users --help
+bo delete-users --help
 bo apps --help
 bo role-collections --help
 bo upgrade --help
