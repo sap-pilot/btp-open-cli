@@ -7,7 +7,9 @@
   - **Subaccount metadata** — fetched from the CIS Accounts Service (`/accounts/v1/subaccounts/{orgGUID}`) using a `cis/central-viewer` service key auto-discovered from any accessible org/space; credentials cached in `~/.bo/credentials.json`
   - **Destinations** — fetches subaccount-level destinations from the `destination/lite` service key found in the target org; sensitive fields (`Password`, `ClientSecret`, etc.) are redacted
   - **Role collections** — XSUAA role collections from the target org (same `btp-xsuaa` apiaccess key setup as `users` and `role-collections`)
-  - Output: `{subaccount, destinations, rolecollections}` in TOON (default) or JSON (`--format json`)
+  - Output: `{subaccount, spaces, destinations, rolecollections}` in TOON (default) or JSON (`--format json`)
+  - **`--subaccount`** flag — overrides the BTP subaccount GUID used in the CIS API call (defaults to the CF org GUID)
+  - **`spaces`** — lists all CF spaces in the org with their managed service instances; each service shows `id`, `name`, `service` (offering), `plan`, and `state`; resolved in a single API round-trip using `include=service_offering` on the service plans endpoint
   - `--regions`, `-y` flags; destinations and role collections degrade gracefully if the respective services are unavailable
 - **`delete-users`** — new command to delete XSUAA users across all accessible organizations via the `apiaccess` service plan
   - CSV input (`--users`): columns `origin,userName`; users matched case-insensitively by origin + userName
