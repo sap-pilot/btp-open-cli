@@ -30,6 +30,17 @@ type XsuaaData struct {
 	TokenExpiry  time.Time `json:"token_expiry,omitempty"`
 }
 
+// CISViewerData holds CIS central-viewer service key credentials and a cached
+// OAuth token used to query the SAP BTP Accounts Service API.
+type CISViewerData struct {
+	ClientID           string    `json:"client_id"`
+	ClientSecret       string    `json:"client_secret"`
+	TokenURL           string    `json:"token_url"`            // uaa.url from service key
+	AccountsServiceURL string    `json:"accounts_service_url"` // endpoints.accounts_service_url
+	AccessToken        string    `json:"access_token,omitempty"`
+	TokenExpiry        time.Time `json:"token_expiry,omitempty"`
+}
+
 // Credentials holds tokens for one or more CF API endpoints.
 // ActiveAPIURLs records the ordered list from the last login; commands use it
 // when no --regions flag is provided. Old tokens for other endpoints are kept
@@ -37,7 +48,8 @@ type XsuaaData struct {
 type Credentials struct {
 	ActiveAPIURLs []string               `json:"active_api_urls"`
 	Tokens        map[string]RegionToken `json:"tokens"`
-	OrgXsuaa      map[string]XsuaaData   `json:"org_xsuaa,omitempty"` // orgGUID → xsuaa data
+	OrgXsuaa      map[string]XsuaaData   `json:"org_xsuaa,omitempty"`  // orgGUID → xsuaa data
+	CISViewer     *CISViewerData         `json:"cis_viewer,omitempty"` // CIS central-viewer service key
 }
 
 // RegionToAPIURL converts a region shorthand (e.g. "us10") to the standard
