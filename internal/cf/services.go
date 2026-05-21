@@ -150,3 +150,44 @@ func (c *Client) GetServiceCredentialDetails(ctx context.Context, bindingGUID st
 	}
 	return details.Credentials, nil
 }
+
+// ListServiceInstancesByPlanGUID lists all managed service instances with the
+// given plan GUID. If orgGUID is non-empty, results are restricted to that org.
+func (c *Client) ListServiceInstancesByPlanGUID(ctx context.Context, planGUID, orgGUID string) ([]ServiceInstance, error) {
+	base := fmt.Sprintf("%s/v3/service_instances?service_plan_guids=%s&type=managed&per_page=5000",
+		c.BaseURL(), planGUID)
+	if orgGUID != "" {
+		base += "&organization_guids=" + orgGUID
+	}
+
+	var all []ServiceInstance
+	nextURL := base
+	for nextURL != "" {
+		var page serviceInstancesResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
+// FindAnyServiceCredentialBinding returns the first service key found for a
+// service instance, or nil if no keys exist.
+func (c *Client) FindAnyServiceCredentialBinding(ctx context.Context, instanceGUID string) (*ServiceCredentialBinding, error) {
+	url := fmt.Sprintf("%s/v3/service_credential_bindings?service_instance_guids=%s&type=key&per_page=1",
+		c.BaseURL(), instanceGUID)
+	var page serviceCredentialBindingsResponse
+	if err := c.get(ctx, url, &page); err != nil {
+		return nil, err
+	}
+	if len(page.Resources) == 0 {
+		return nil, nil
+	}
+	return &page.Resources[0], nil
+}

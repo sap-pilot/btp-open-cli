@@ -389,6 +389,67 @@ regions:
                 description: Manage authorizations, trusted identity providers, and users.
 ```
 
+### `describe-subaccount`
+
+Describe a single BTP subaccount in detail: CIS account metadata, subaccount-level destinations (passwords redacted), and XSUAA role collections.
+
+The `--org` value is matched by exact GUID or case-insensitive substring on the org name. The CIS `central-viewer` service key is auto-discovered once from any accessible org/space and cached; subsequent runs reuse the cached credentials.
+
+**Prerequisites:**
+- A `cis` service instance with plan `central-viewer` and at least one service key must exist in any accessible org/space. If not found, the command prints instructions and exits.
+- The `btp-xsuaa` (xsuaa / apiaccess) service key setup in the target org's `util` space (same requirement as `users` and `role-collections`).
+
+```bash
+# Describe a subaccount by org name (TOON output)
+bo describe-subaccount --org my-org-name
+
+# Describe a subaccount by org GUID
+bo describe-subaccount --org <org-guid>
+
+# JSON output
+bo describe-subaccount --org my-org-name --format json
+
+# Skip XSUAA service/key creation confirmation
+bo describe-subaccount --org my-org-name -y
+
+# Scope region search
+bo describe-subaccount --org my-org-name --regions us10,eu10
+```
+
+Output format (TOON):
+```
+subaccount:
+  guid: <subaccount-guid>
+  displayName: My Org
+  globalAccountGUID: <global-account-guid>
+  subdomain: my-org-subdomain
+  region: eu10
+  state: OK
+  betaEnabled: false
+  usedForProduction: NOT_USED_FOR_PRODUCTION
+  createdDate: 2024-03-01T10:00:00Z
+  modifiedDate: 2026-05-01T08:00:00Z
+destinations:
+  - name: my-destination
+    properties:
+      - key: Authentication
+        value: NoAuthentication
+      - key: ProxyType
+        value: Internet
+      - key: Type
+        value: HTTP
+      - key: URL
+        value: https://target.example.com
+rolecollections:
+  - rolecollection_name: Subaccount Administrator
+    description: Administrative access to the subaccount
+    isReadOnly: true
+    roleReferences:
+      - roleTemplateAppId: xsuaa!t1
+        roleTemplateName: xsuaa_admin
+        role_name: User and Role Administrator
+```
+
 ### `apps`
 
 List Cloud Foundry applications across all accessible organizations and spaces.
@@ -555,6 +616,7 @@ bo create-org-space-users --help
 bo delete-org-space-users --help
 bo users --help
 bo delete-users --help
+bo describe-subaccount --help
 bo apps --help
 bo role-collections --help
 bo upgrade --help
