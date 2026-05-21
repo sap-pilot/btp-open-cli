@@ -395,6 +395,8 @@ Describe a single BTP subaccount in detail: CIS account metadata, subaccount-lev
 
 The `--org` value is matched by exact GUID or case-insensitive substring on the org name. The CIS `central-viewer` service key is auto-discovered once from any accessible org/space and cached; subsequent runs reuse the cached credentials.
 
+By default the CF org GUID is used as the BTP subaccount ID in the CIS API call. Use `--subaccount` to specify a different subaccount GUID when the CF org GUID and BTP subaccount GUID differ.
+
 **Prerequisites:**
 - A `cis` service instance with plan `central-viewer` and at least one service key must exist in any accessible org/space. If not found, the command prints instructions and exits.
 - The `btp-xsuaa` (xsuaa / apiaccess) service key setup in the target org's `util` space (same requirement as `users` and `role-collections`).
@@ -405,6 +407,9 @@ bo describe-subaccount --org my-org-name
 
 # Describe a subaccount by org GUID
 bo describe-subaccount --org <org-guid>
+
+# Override the BTP subaccount GUID used in the CIS API call
+bo describe-subaccount --org my-org-name --subaccount <btp-subaccount-guid>
 
 # JSON output
 bo describe-subaccount --org my-org-name --format json
@@ -429,6 +434,20 @@ subaccount:
   usedForProduction: NOT_USED_FOR_PRODUCTION
   createdDate: 2024-03-01T10:00:00Z
   modifiedDate: 2026-05-01T08:00:00Z
+spaces:
+  - space_id: <space-guid>
+    space_name: dev
+    services:
+      - id: <instance-guid>
+        name: my-xsuaa
+        service: xsuaa
+        plan: apiaccess
+        state: succeeded
+      - id: <instance-guid>
+        name: my-destination
+        service: destination
+        plan: lite
+        state: succeeded
 destinations:
   - name: my-destination
     properties:

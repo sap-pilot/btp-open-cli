@@ -50,9 +50,24 @@ type dscDestination struct {
 	Properties []dscDestProp `json:"properties" toon:"properties"`
 }
 
+type dscServiceInstance struct {
+	ID      string `json:"id"      toon:"id"`
+	Name    string `json:"name"    toon:"name"`
+	Service string `json:"service" toon:"service"`
+	Plan    string `json:"plan"    toon:"plan"`
+	State   string `json:"state"   toon:"state"`
+}
+
+type dscSpace struct {
+	ID       string               `json:"space_id"   toon:"space_id"`
+	Name     string               `json:"space_name" toon:"space_name"`
+	Services []dscServiceInstance `json:"services"   toon:"services"`
+}
+
 type dscOutDoc struct {
-	Subaccount      dscSubaccount        `json:"subaccount"      toon:"subaccount"`
-	Destinations    []dscDestination     `json:"destinations"    toon:"destinations"`
+	Subaccount      dscSubaccount         `json:"subaccount"      toon:"subaccount"`
+	Spaces          []dscSpace            `json:"spaces"          toon:"spaces"`
+	Destinations    []dscDestination      `json:"destinations"    toon:"destinations"`
 	RoleCollections []rcOutRoleCollection `json:"rolecollections" toon:"rolecollections"`
 }
 
@@ -109,6 +124,7 @@ in ~/.bo/credentials.json for subsequent runs.
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		orgFilter, _ := cmd.Flags().GetString("org")
+		subaccountFlag, _ := cmd.Flags().GetString("subaccount")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
@@ -264,10 +280,87 @@ If --regions is omitted the regions from the last login are used.`,
 
 		// ── Phase 4: get subaccount details ───────────────────────────────────
 
-		sa, err := cis.GetSubaccount(ctx, cisData.AccountsServiceURL, cisData.AccessToken, target.Org.GUID)
-		if err != nil {
-			return fmt.Errorf("getting subaccount %s: %w", target.Org.GUID, err)
+		subaccountID := target.Org.GUID
+		if subaccountFlag != "" {
+			subaccountID = subaccountFlag
 		}
+
+		sa, err := cis.GetSubaccount(ctx, cisData.AccountsServiceURL, cisData.AccessToken, subaccountID)
+		if err != nil {
+			return fmt.Errorf("getting subaccount %s: %w", subaccountID, err)
+		}
+
+		// ── Phase 4.5: list spaces and their service instances ────────────────
+
+		var spaces []dscSpace
+		func() {
+			tok, ok := creds.Tokens[target.APIURL]
+			if !ok {
+				return
+			}
+			targetClient := cf.NewClient(target.APIURL, tok.AccessToken)
+			targetClient.SetTokenRefresher(makeTokenRefresher(target.APIURL, tok.AccessToken))
+
+			cfSpaces, err := targetClient.ListOrganizationSpaces(ctx, target.Org.GUID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: listing spaces: %v\n", err)
+				return
+			}
+
+			instances, err := targetClient.ListServiceInstancesByOrg(ctx, target.Org.GUID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: listing service instances: %v\n", err)
+				return
+			}
+
+			planGUIDSet := make(map[string]struct{})
+			for _, inst := range instances {
+				if g := inst.Relationships.ServicePlan.Data.GUID; g != "" {
+					planGUIDSet[g] = struct{}{}
+				}
+			}
+			planGUIDs := make([]string, 0, len(planGUIDSet))
+			for g := range planGUIDSet {
+				planGUIDs = append(planGUIDs, g)
+			}
+
+			planDetails, err := targetClient.ListServicePlanDetails(ctx, planGUIDs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: fetching service plan details: %v\n", err)
+			}
+
+			bySpace := make(map[string][]dscServiceInstance, len(cfSpaces))
+			for _, inst := range instances {
+				spaceGUID := inst.Relationships.Space.Data.GUID
+				planGUID := inst.Relationships.ServicePlan.Data.GUID
+				svc := dscServiceInstance{
+					ID:    inst.GUID,
+					Name:  inst.Name,
+					State: inst.LastOperation.State,
+				}
+				if pd, ok := planDetails[planGUID]; ok {
+					svc.Service = pd.ServiceName
+					svc.Plan = pd.Name
+				}
+				bySpace[spaceGUID] = append(bySpace[spaceGUID], svc)
+			}
+
+			sort.Slice(cfSpaces, func(i, j int) bool { return cfSpaces[i].Name < cfSpaces[j].Name })
+			for _, sp := range cfSpaces {
+				svcs := bySpace[sp.GUID]
+				sort.Slice(svcs, func(i, j int) bool {
+					if svcs[i].Service != svcs[j].Service {
+						return svcs[i].Service < svcs[j].Service
+					}
+					return svcs[i].Name < svcs[j].Name
+				})
+				spaces = append(spaces, dscSpace{
+					ID:       sp.GUID,
+					Name:     sp.Name,
+					Services: svcs,
+				})
+			}
+		}()
 
 		// ── Phase 5: find destination service in target org ───────────────────
 
@@ -412,6 +505,7 @@ If --regions is omitted the regions from the last login are used.`,
 
 		doc := dscOutDoc{
 			Subaccount:      cisSubaccountToOut(sa),
+			Spaces:          spaces,
 			Destinations:    destinations,
 			RoleCollections: roleCollections,
 		}
@@ -442,6 +536,7 @@ func init() {
 	rootCmd.AddCommand(describeSubaccountCmd)
 	describeSubaccountCmd.Flags().String("org", "", "Org name (case-insensitive substring) or GUID to describe (required)")
 	describeSubaccountCmd.MarkFlagRequired("org")
+	describeSubaccountCmd.Flags().String("subaccount", "", "BTP subaccount GUID to use in the CIS API query (defaults to the CF org GUID)")
 	describeSubaccountCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	describeSubaccountCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
 	describeSubaccountCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for XSUAA service/key creation")

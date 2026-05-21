@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // ── types ─────────────────────────────────────────────────────────────────────
@@ -175,6 +176,119 @@ func (c *Client) ListServiceInstancesByPlanGUID(ctx context.Context, planGUID, o
 		}
 	}
 	return all, nil
+}
+
+// ── service instances with relationships ─────────────────────────────────────
+
+// ServiceInstanceFull includes space and service-plan GUIDs from CF relationships.
+type ServiceInstanceFull struct {
+	GUID          string `json:"guid"`
+	Name          string `json:"name"`
+	LastOperation struct {
+		State string `json:"state"`
+	} `json:"last_operation"`
+	Relationships struct {
+		Space struct {
+			Data struct {
+				GUID string `json:"guid"`
+			} `json:"data"`
+		} `json:"space"`
+		ServicePlan struct {
+			Data struct {
+				GUID string `json:"guid"`
+			} `json:"data"`
+		} `json:"service_plan"`
+	} `json:"relationships"`
+}
+
+// ServicePlanDetail pairs a plan name with its service offering name.
+type ServicePlanDetail struct {
+	Name        string
+	ServiceName string
+}
+
+type serviceInstancesFullResponse struct {
+	Pagination pagination            `json:"pagination"`
+	Resources  []ServiceInstanceFull `json:"resources"`
+}
+
+type servicePlanWithOfferingEntry struct {
+	GUID          string `json:"guid"`
+	Name          string `json:"name"`
+	Relationships struct {
+		ServiceOffering struct {
+			Data struct {
+				GUID string `json:"guid"`
+			} `json:"data"`
+		} `json:"service_offering"`
+	} `json:"relationships"`
+}
+
+type serviceOfferingEntry struct {
+	GUID string `json:"guid"`
+	Name string `json:"name"`
+}
+
+type servicePlansWithOfferingResponse struct {
+	Pagination pagination                     `json:"pagination"`
+	Resources  []servicePlanWithOfferingEntry `json:"resources"`
+	Included   struct {
+		ServiceOfferings []serviceOfferingEntry `json:"service_offerings"`
+	} `json:"included"`
+}
+
+// ListServiceInstancesByOrg fetches all managed service instances in an org,
+// including space and service-plan GUIDs from relationships.
+func (c *Client) ListServiceInstancesByOrg(ctx context.Context, orgGUID string) ([]ServiceInstanceFull, error) {
+	var all []ServiceInstanceFull
+	nextURL := fmt.Sprintf("%s/v3/service_instances?organization_guids=%s&type=managed&per_page=5000",
+		c.BaseURL(), orgGUID)
+	for nextURL != "" {
+		var page serviceInstancesFullResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
+// ListServicePlanDetails fetches plan names and offering names for the given
+// plan GUIDs. Returns a map of plan GUID → ServicePlanDetail.
+func (c *Client) ListServicePlanDetails(ctx context.Context, planGUIDs []string) (map[string]ServicePlanDetail, error) {
+	result := make(map[string]ServicePlanDetail, len(planGUIDs))
+	if len(planGUIDs) == 0 {
+		return result, nil
+	}
+	const batchSize = 50
+	for i := 0; i < len(planGUIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(planGUIDs) {
+			end = len(planGUIDs)
+		}
+		u := fmt.Sprintf("%s/v3/service_plans?guids=%s&include=service_offering&per_page=5000",
+			c.BaseURL(), strings.Join(planGUIDs[i:end], ","))
+		var page servicePlansWithOfferingResponse
+		if err := c.get(ctx, u, &page); err != nil {
+			return nil, err
+		}
+		offeringNames := make(map[string]string, len(page.Included.ServiceOfferings))
+		for _, o := range page.Included.ServiceOfferings {
+			offeringNames[o.GUID] = o.Name
+		}
+		for _, plan := range page.Resources {
+			result[plan.GUID] = ServicePlanDetail{
+				Name:        plan.Name,
+				ServiceName: offeringNames[plan.Relationships.ServiceOffering.Data.GUID],
+			}
+		}
+	}
+	return result, nil
 }
 
 // FindAnyServiceCredentialBinding returns the first service key found for a
