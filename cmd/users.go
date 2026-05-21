@@ -184,7 +184,7 @@ If --regions is omitted the regions from the last login are used.`,
 				}
 				slog.Debug("fetching XSUAA users", "region", w.regionName, "org", w.orgName)
 
-				apiBaseURL := xsuaa.APIBaseURL(w.regionName)
+				apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, w.regionName)
 				users, err := xsuaa.ListUsers(ctx, apiBaseURL, xd.AccessToken)
 				if err != nil {
 					results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, err: err}

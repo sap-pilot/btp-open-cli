@@ -345,6 +345,7 @@ func ensureXsuaaCredentials(ctx context.Context, plans []xsuaaRegionPlan, creds 
 			clientID, _ := details["clientid"].(string)
 			clientSecret, _ := details["clientsecret"].(string)
 			xsuaaURL, _ := details["url"].(string)
+			xsuaaAPIURL, _ := details["apiurl"].(string)
 			if clientID == "" || clientSecret == "" || xsuaaURL == "" {
 				fmt.Fprintf(os.Stderr, "[%s] %s: incomplete credentials in service key\n",
 					plan.Region, op.Org.Name)
@@ -355,6 +356,7 @@ func ensureXsuaaCredentials(ctx context.Context, plans []xsuaaRegionPlan, creds 
 				ClientID:     clientID,
 				ClientSecret: clientSecret,
 				URL:          xsuaaURL,
+				APIURL:       xsuaaAPIURL,
 			}
 			if err := store.Save(creds); err != nil {
 				fmt.Fprintf(os.Stderr, "[%s] %s: failed to save credentials: %v\n",

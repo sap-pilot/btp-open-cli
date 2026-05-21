@@ -285,6 +285,16 @@ func GroupValues(groups []Group) string {
 
 // APIBaseURL returns the XSUAA admin API base URL for a CF region,
 // e.g. "us10" → "https://api.authentication.us10.hana.ondemand.com".
+// Prefer ResolveAPIBaseURL when a stored apiurl is available.
 func APIBaseURL(region string) string {
 	return "https://api.authentication." + region + ".hana.ondemand.com"
+}
+
+// ResolveAPIBaseURL returns stored if non-empty (value from the service key's
+// "apiurl" field), otherwise falls back to constructing it from region.
+func ResolveAPIBaseURL(stored, region string) string {
+	if stored != "" {
+		return strings.TrimRight(stored, "/")
+	}
+	return APIBaseURL(region)
 }
