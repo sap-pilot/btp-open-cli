@@ -201,7 +201,7 @@ If --regions is omitted the regions from the last login are used.`,
 				}
 				slog.Debug("fetching XSUAA users for deletion", "region", w.regionName, "org", w.orgName)
 
-				apiBaseURL := xsuaa.APIBaseURL(w.regionName)
+				apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, w.regionName)
 				allUsers, err := xsuaa.ListUsers(ctx, apiBaseURL, xd.AccessToken)
 				if err != nil {
 					results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, err: err}
@@ -308,7 +308,7 @@ If --regions is omitted the regions from the last login are used.`,
 				continue
 			}
 
-			apiBaseURL := xsuaa.APIBaseURL(r.regionName)
+			apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, r.regionName)
 			for _, u := range r.matched {
 				if err := xsuaa.DeleteUser(ctx, apiBaseURL, xd.AccessToken, u.ID); err != nil {
 					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s (%s): %v\n",

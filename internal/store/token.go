@@ -24,7 +24,8 @@ type RegionToken struct {
 type XsuaaData struct {
 	ClientID     string    `json:"client_id"`
 	ClientSecret string    `json:"client_secret"`
-	URL          string    `json:"url"` // XSUAA tenant URL — token endpoint base
+	URL          string    `json:"url"`    // XSUAA tenant URL — token endpoint base
+	APIURL       string    `json:"apiurl"` // XSUAA admin API base URL (from service key "apiurl")
 	AccessToken  string    `json:"access_token,omitempty"`
 	TokenExpiry  time.Time `json:"token_expiry,omitempty"`
 }

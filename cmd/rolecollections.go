@@ -200,7 +200,7 @@ If --regions is omitted the regions from the last login are used.`,
 				}
 				slog.Debug("fetching XSUAA roles", "region", w.regionName, "org", w.orgName)
 
-				apiBaseURL := xsuaa.APIBaseURL(w.regionName)
+				apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, w.regionName)
 
 				roles, err := xsuaa.ListRoles(ctx, apiBaseURL, xd.AccessToken)
 				if err != nil {
