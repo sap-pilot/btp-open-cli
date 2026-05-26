@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// initFileLog opens (or creates) the daily log file at ./log/bo_YYYY-MM-DD.log,
+// initFileLog opens (or creates) the daily log file at ~/.bo/log/bo_YYYY-MM-DD.log,
 // writes a header line with the current timestamp and command arguments, then
 // replaces os.Stdout and os.Stderr with pipes whose read ends are tee'd into
 // both the original terminal FDs and the log file concurrently.
@@ -22,7 +22,11 @@ import (
 // On any setup error the function degrades gracefully: logging is skipped and
 // a no-op teardown is returned so the CLI continues to work normally.
 func initFileLog() func() {
-	logDir := "log"
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return func() {}
+	}
+	logDir := filepath.Join(home, ".bo", "log")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return func() {}
 	}
