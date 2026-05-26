@@ -709,10 +709,10 @@ bo version
 
 ## Command history and logs
 
-Every `bo` invocation appends its full output to a daily log file in the `log/` folder of the current working directory:
+Every `bo` invocation appends its full output to a daily log file under `~/.bo/log/`:
 
 ```
-log/bo_YYYY-MM-DD.log
+~/.bo/log/bo_YYYY-MM-DD.log
 ```
 
 Each entry is separated by a header line that includes the timestamp and the exact command that was run:
@@ -725,7 +725,7 @@ Each entry is separated by a header line that includes the timestamp and the exa
 ... command output ...
 ```
 
-The `log/` folder is created automatically on first use. Use it to review what was run, audit changes, or retrieve previous command output.
+The `~/.bo/log/` folder is created automatically on first use. Use it to review what was run, audit changes, or retrieve previous command output.
 
 ## Debugging with mitmproxy
 

@@ -38,6 +38,10 @@
 
 - **XSUAA API URL for non-standard regions** — `users`, `delete-users`, and `role-collections` previously constructed the XSUAA admin API URL from the CF region name (e.g. `api.authentication.us10-001.hana.ondemand.com`) which does not exist for split regions. The `apiurl` field from the XSUAA service key is now stored in `~/.bo/credentials.json` under `XsuaaData.APIURL` and used directly; falls back to the constructed URL for existing cached credentials without the field. Fixes HTTP 404 errors on regions like `us10-001`.
 
+### Changed
+
+- **Log file location** — daily logs are now written to `~/.bo/log/bo_YYYY-MM-DD.log` instead of `./log/bo_YYYY-MM-DD.log` in the current working directory. Logs accumulate in one predictable place regardless of where `bo` is invoked from.
+
 ### Internals
 
 - `internal/destination/client.go`: added `BulkResponseItem` type and four new functions for the instance-level destinations API: `ListInstanceDestinations`, `CreateInstanceDestinations`, `UpdateInstanceDestinations`, `DeleteInstanceDestination`
