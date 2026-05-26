@@ -67,6 +67,20 @@ func (c *Client) ListSpacesByOrgs(ctx context.Context, orgGUIDs []string) ([]Spa
 	return all, nil
 }
 
+// FindSpaceByGUID looks up a single space by GUID. Returns nil, nil if not found.
+func (c *Client) FindSpaceByGUID(ctx context.Context, spaceGUID string) (*Space, error) {
+	url := fmt.Sprintf("%s/v3/spaces?guids=%s&per_page=1", c.BaseURL(), spaceGUID)
+	var page spacesResponse
+	if err := c.get(ctx, url, &page); err != nil {
+		return nil, err
+	}
+	if len(page.Resources) == 0 {
+		return nil, nil
+	}
+	s := page.Resources[0]
+	return &s, nil
+}
+
 // ListAllSpaces fetches every space in the region with per_page=5000 and
 // returns a map of orgGUID → []Space. Call once per region instead of once
 // per org to minimise API round trips.

@@ -1,6 +1,7 @@
 package destination
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
@@ -71,6 +72,160 @@ var sensitiveDestinationKeys = map[string]bool{
 	"clientsecret":               true,
 	"tokenservicepassword":       true,
 	"tokenserviceclientpassword": true,
+}
+
+// BulkResponseItem is one entry in a bulk create/update response from the
+// destination service (e.g. POST /v1/instanceDestinations with a JSON array).
+type BulkResponseItem struct {
+	Name   string `json:"name"`
+	Status int    `json:"status"`
+	ETag   string `json:"etag,omitempty"`
+	Cause  string `json:"cause,omitempty"`
+}
+
+// instanceDestURL returns the base URL for instance-level destination APIs.
+func instanceDestURL(destURI string) string {
+	return strings.TrimRight(destURI, "/") + "/destination-configuration/v1/instanceDestinations"
+}
+
+// ListInstanceDestinations fetches all instance-level destinations.
+// GET /destination-configuration/v1/instanceDestinations
+// Sensitive credential fields are removed from the response.
+func ListInstanceDestinations(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
+	u := instanceDestURL(destURI)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("destination service returned HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var raw []map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("parsing instance destinations response: %w", err)
+	}
+
+	out := make([]map[string]string, 0, len(raw))
+	for _, entry := range raw {
+		m := make(map[string]string, len(entry))
+		for k, v := range entry {
+			if sensitiveDestinationKeys[strings.ToLower(k)] {
+				continue
+			}
+			m[k] = fmt.Sprintf("%v", v)
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// CreateInstanceDestinations posts new destinations to service instance level.
+// POST /destination-configuration/v1/instanceDestinations
+// body should be a JSON array (or object) matching the destination service schema.
+// Returns per-item results when the API provides them (bulk array response),
+// or nil for a simple 201 with no body.
+func CreateInstanceDestinations(ctx context.Context, destURI, accessToken string, body json.RawMessage) ([]BulkResponseItem, error) {
+	u := instanceDestURL(destURI)
+	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusMultiStatus {
+		return nil, fmt.Errorf("POST instanceDestinations returned HTTP %d: %s", resp.StatusCode, respBody)
+	}
+
+	trimmed := bytes.TrimSpace(respBody)
+	if len(trimmed) == 0 || string(trimmed) == `""` {
+		return nil, nil
+	}
+	var items []BulkResponseItem
+	_ = json.Unmarshal(trimmed, &items)
+	return items, nil
+}
+
+// UpdateInstanceDestinations overwrites existing destinations at service instance level.
+// PUT /destination-configuration/v1/instanceDestinations
+// body should be a JSON array (or object) matching the destination service schema.
+func UpdateInstanceDestinations(ctx context.Context, destURI, accessToken string, body json.RawMessage) ([]BulkResponseItem, error) {
+	u := instanceDestURL(destURI)
+	req, err := http.NewRequestWithContext(ctx, "PUT", u, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
+		return nil, fmt.Errorf("PUT instanceDestinations returned HTTP %d: %s", resp.StatusCode, respBody)
+	}
+
+	trimmed := bytes.TrimSpace(respBody)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	// The API may return either [{name,status,etag}] or {Count:N}.
+	// Try array first; fall back gracefully to the scalar form.
+	var items []BulkResponseItem
+	if err := json.Unmarshal(trimmed, &items); err != nil {
+		return nil, nil // {Count:N} or unknown — treat as success
+	}
+	return items, nil
+}
+
+// DeleteInstanceDestination deletes a single instance-level destination by name.
+// DELETE /destination-configuration/v1/instanceDestinations/{name}
+// A 404 is treated as success (already gone) and does not return an error.
+func DeleteInstanceDestination(ctx context.Context, destURI, accessToken, name string) error {
+	u := instanceDestURL(destURI) + "/" + url.PathEscape(name)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
+		return fmt.Errorf("DELETE instanceDestinations/%s returned HTTP %d: %s", name, resp.StatusCode, body)
+	}
 }
 
 // ListSubaccountDestinations fetches all subaccount-level destinations and
