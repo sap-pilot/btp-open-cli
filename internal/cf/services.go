@@ -291,6 +291,32 @@ func (c *Client) ListServicePlanDetails(ctx context.Context, planGUIDs []string)
 	return result, nil
 }
 
+// ListServiceInstancesInSpace lists all managed service instances with the given
+// plan GUID in the specified space. Pass an empty planGUID to list all managed
+// instances regardless of plan.
+func (c *Client) ListServiceInstancesInSpace(ctx context.Context, spaceGUID, planGUID string) ([]ServiceInstance, error) {
+	base := fmt.Sprintf("%s/v3/service_instances?space_guids=%s&type=managed&per_page=5000",
+		c.BaseURL(), spaceGUID)
+	if planGUID != "" {
+		base += "&service_plan_guids=" + planGUID
+	}
+	var all []ServiceInstance
+	nextURL := base
+	for nextURL != "" {
+		var page serviceInstancesResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
 // FindAnyServiceCredentialBinding returns the first service key found for a
 // service instance, or nil if no keys exist.
 func (c *Client) FindAnyServiceCredentialBinding(ctx context.Context, instanceGUID string) (*ServiceCredentialBinding, error) {
