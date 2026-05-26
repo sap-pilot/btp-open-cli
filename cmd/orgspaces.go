@@ -171,13 +171,6 @@ If --regions is omitted, the regions from the last login are used.`,
 			}
 			for _, reg := range outRegions {
 				for _, org := range reg.Orgs {
-					if len(org.Spaces) == 0 {
-						// Org with no spaces — emit a row with empty space fields.
-						if err := w.Write([]string{reg.ID, org.ID, org.Name, "", ""}); err != nil {
-							return err
-						}
-						continue
-					}
 					for _, sp := range org.Spaces {
 						if err := w.Write([]string{reg.ID, org.ID, org.Name, sp.ID, sp.Name}); err != nil {
 							return err
