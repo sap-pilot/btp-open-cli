@@ -51,11 +51,13 @@ var usersCmd = &cobra.Command{
 	Long: `List users from the XSUAA (Authorization and Trust Management) apiaccess service
 across one or more regions and organizations.
 
-For each org the command ensures the service instance 'btp-xsuaa' (xsuaa/apiaccess)
-and service key 'btp-open-cli-sk' exist in the 'util' space. If they do not exist,
-a TOON preview is shown and confirmation is required before creating them.
+For each org the command finds any xsuaa/apiaccess service instance (in any space)
+and uses the first available service key to obtain an access token. If no instance
+or key exists, a prompt offers instructions to create them manually (suppress with
+--no-prompt to skip the org silently instead).
 
-Credentials are cached in ~/.bo/credentials.json and reused across runs.
+Only the access token is cached in ~/.bo/credentials.json — service key credentials
+are fetched from CF on demand and never stored locally.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,7 +65,7 @@ If --regions is omitted the regions from the last login are used.`,
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgGUID, _ := cmd.Flags().GetString("org")
-		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		filter, _ := cmd.Flags().GetString("filter")
 		fieldsCSV, _ := cmd.Flags().GetString("fields")
 		excludeFieldsCSV, _ := cmd.Flags().GetString("excludeFields")
@@ -105,62 +107,24 @@ If --regions is omitted the regions from the last login are used.`,
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		// Phase 1: discover orgs and check xsuaa service/key status.
-		plans := discoverXsuaaPlans(ctx, apiURLs, creds, includeOrgs, excludeOrgs)
-
-		// Apply --org filter: retain only the org whose GUID matches exactly.
-		if orgGUID != "" {
-			for i := range plans {
-				var matched []xsuaaOrgPlan
-				for _, op := range plans[i].Orgs {
-					if op.Org.GUID == orgGUID {
-						matched = append(matched, op)
-					}
-				}
-				plans[i].Orgs = matched
-			}
-		}
-
-		// Phase 2+3: preview, confirm, create instances/keys, cache credentials.
-		creds, proceed, err := ensureXsuaaCredentials(ctx, plans, creds, skipConfirm)
+		// Phase 1: resolve XSUAA tokens for all accessible orgs.
+		clients, _, err := resolveXsuaaClients(ctx, apiURLs, creds, includeOrgs, excludeOrgs, noPrompt)
 		if err != nil {
 			return err
 		}
-		if !proceed {
-			return nil
-		}
 
-		// Phase 4: reload credentials, then fetch XSUAA users for each org in parallel.
-		creds, err = store.Load()
-		if err != nil {
-			return fmt.Errorf("loading credentials: %w", err)
-		}
-
-		type orgWorkItem struct {
-			regionName string
-			orgGUID    string
-			orgName    string
-		}
-		var work []orgWorkItem
-		for _, plan := range plans {
-			if plan.APIURL == "" {
-				continue
-			}
-			for _, op := range plan.Orgs {
-				xd, ok := creds.OrgXsuaa[op.Org.GUID]
-				if !ok || xd.ClientID == "" || xd.ClientSecret == "" || xd.URL == "" {
-					fmt.Fprintf(os.Stderr, "[%s] %s: no XSUAA credentials — skipping\n",
-						plan.Region, op.Org.Name)
-					continue
+		// Apply --org filter (exact GUID match).
+		if orgGUID != "" {
+			var filtered []xsuaaOrgClient
+			for _, c := range clients {
+				if c.OrgGUID == orgGUID {
+					filtered = append(filtered, c)
 				}
-				work = append(work, orgWorkItem{
-					regionName: plan.Region,
-					orgGUID:    op.Org.GUID,
-					orgName:    op.Org.Name,
-				})
 			}
+			clients = filtered
 		}
 
+		// Phase 2: fetch XSUAA users for each org in parallel.
 		type orgResult struct {
 			regionName string
 			orgGUID    string
@@ -168,40 +132,33 @@ If --regions is omitted the regions from the last login are used.`,
 			users      []xsuaa.User
 			err        error
 		}
-		results := make([]orgResult, len(work))
+		results := make([]orgResult, len(clients))
 		var wg sync.WaitGroup
-		var credsMu sync.Mutex
 
-		for i, w := range work {
+		for i, w := range clients {
 			wg.Add(1)
-			go func(idx int, w orgWorkItem) {
+			go func(idx int, w xsuaaOrgClient) {
 				defer wg.Done()
-
-				xd, err := xsuaaRefreshToken(ctx, w.orgGUID, creds, &credsMu)
-				if err != nil {
-					results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, err: err}
-					return
+				slog.Debug("fetching XSUAA users", "region", w.RegionName, "org", w.OrgName)
+				users, err := xsuaa.ListUsers(ctx, w.APIURL, w.Token)
+				results[idx] = orgResult{
+					regionName: w.RegionName,
+					orgGUID:    w.OrgGUID,
+					orgName:    w.OrgName,
+					users:      users,
+					err:        err,
 				}
-				slog.Debug("fetching XSUAA users", "region", w.regionName, "org", w.orgName)
-
-				apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, w.regionName)
-				users, err := xsuaa.ListUsers(ctx, apiBaseURL, xd.AccessToken)
-				if err != nil {
-					results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, err: err}
-					return
-				}
-				results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, users: users}
 			}(i, w)
 		}
 		wg.Wait()
 
-		// Phase 5: assemble and print TOON output, preserving region order.
-		regionOrder := make([]string, 0, len(plans))
+		// Phase 3: assemble and print TOON output, preserving region order.
+		regionOrder := make([]string, 0)
 		regionSeen := make(map[string]bool)
-		for _, plan := range plans {
-			if plan.APIURL != "" && !regionSeen[plan.Region] {
-				regionOrder = append(regionOrder, plan.Region)
-				regionSeen[plan.Region] = true
+		for _, c := range clients {
+			if !regionSeen[c.RegionName] {
+				regionOrder = append(regionOrder, c.RegionName)
+				regionSeen[c.RegionName] = true
 			}
 		}
 
@@ -254,7 +211,7 @@ func init() {
 	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
-	usersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for service/key creation")
+	usersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, userName, lastLogonTime, groups)")
 	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups)")
 	usersCmd.Flags().String("excludeFields", "", "Comma-separated fields to exclude from output")

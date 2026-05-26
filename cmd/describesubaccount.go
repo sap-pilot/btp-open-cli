@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	toonenc "github.com/toon-format/toon-go"
@@ -127,7 +126,7 @@ If --regions is omitted the regions from the last login are used.`,
 		subaccountFlag, _ := cmd.Flags().GetString("subaccount")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
-		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -438,36 +437,18 @@ If --regions is omitted the regions from the last login are used.`,
 
 		func() {
 			includeTargetOrg := cosOrgSet{cosOrgRef{ID: target.Org.GUID}}
-			xsuaaPlans := discoverXsuaaPlans(ctx, []string{target.APIURL}, creds, includeTargetOrg, nil)
-
-			updatedCreds, proceed, err := ensureXsuaaCredentials(ctx, xsuaaPlans, creds, skipConfirm)
+			xsuaaClients, _, err := resolveXsuaaClients(ctx, []string{target.APIURL}, creds,
+				includeTargetOrg, nil, noPrompt)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: XSUAA setup: %v\n", err)
 				return
 			}
-			if !proceed {
+			if len(xsuaaClients) == 0 {
 				return
 			}
-			creds = updatedCreds
+			xc := xsuaaClients[0]
 
-			reloadedCreds, err := store.Load()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: reloading credentials: %v\n", err)
-				return
-			}
-			creds = reloadedCreds
-
-			var mu sync.Mutex
-			xd, err := xsuaaRefreshToken(ctx, target.Org.GUID, creds, &mu)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: XSUAA token: %v\n", err)
-				return
-			}
-
-			regionName := store.APIURLToRegion(target.APIURL)
-			apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, regionName)
-
-			rcs, err := xsuaa.ListRoleCollections(ctx, apiBaseURL, xd.AccessToken)
+			rcs, err := xsuaa.ListRoleCollections(ctx, xc.APIURL, xc.Token)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: listing role collections: %v\n", err)
 				return
@@ -539,5 +520,5 @@ func init() {
 	describeSubaccountCmd.Flags().String("subaccount", "", "BTP subaccount GUID to use in the CIS API query (defaults to the CF org GUID)")
 	describeSubaccountCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	describeSubaccountCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
-	describeSubaccountCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for XSUAA service/key creation")
+	describeSubaccountCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no XSUAA service instance or key are silently skipped")
 }

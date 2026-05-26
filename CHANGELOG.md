@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7 — 2026-05-26
+
+### Changed
+
+- **`users`, `delete-users`, `role-collections`, `describe-subaccount` — XSUAA credential handling rewritten**
+  - Previously each command looked for a hardcoded service instance (`btp-xsuaa`) and service key (`btp-open-cli-sk`) in a hardcoded `util` space and offered to create them if missing
+  - Now each command searches **all spaces** in the target org for any `xsuaa` service instance with the `apiaccess` plan, and uses the **first available service key** — no hardcoded names, no service creation
+  - If no instance or key is found, the command prints CF CLI instructions (`cf create-service xsuaa apiaccess <name>` / `cf create-service-key`) and prompts the user to create them manually, then retries once on Enter; Ctrl-C skips the org
+  - **`--no-prompt`** flag — skip the interactive prompt entirely; orgs without a service instance or key are silently skipped
+  - **Service key credentials are no longer stored locally.** Only the access token (plus APIURL and expiry) is cached in `~/.bo/credentials.json` under `org_xsuaa[orgGUID]`. Client ID, client secret, and token URL are fetched from CF on demand each time a token refresh is needed and discarded immediately after.
+  - `-y` / `--yes` flag removed from `users`, `role-collections`, and `describe-subaccount` (it was only used to skip service/key creation confirmation, which no longer happens); `-y` is retained in `delete-users` for the user deletion confirmation prompt
+
+### Internals
+
+- `cmd/xsuaasetup.go`: removed `discoverXsuaaPlans`, `ensureXsuaaCredentials`, `xsuaaRefreshToken`, `xsuaaPrintSetupPreview` and the `xsuaaOrgPlan`/`xsuaaRegionPlan` types; replaced with `resolveXsuaaClients` (returns `[]xsuaaOrgClient` with ready-to-use token + APIURL) and the `xsuaaPromptRetryInstance`/`xsuaaPromptRetryKey` prompt helpers
+- `internal/store/token.go`: removed `ClientID`, `ClientSecret`, `URL` fields from `XsuaaData` (only `APIURL`, `AccessToken`, `TokenExpiry` remain)
+
 ## v0.6 — 2026-05-26
 
 ### Added

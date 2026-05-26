@@ -19,15 +19,16 @@ type RegionToken struct {
 	LoginType    string    `json:"login_type,omitempty"` // "password" or "sso"
 }
 
-// XsuaaData holds XSUAA service key credentials and a cached OAuth token for
-// one CF organization. Keyed by org GUID in Credentials.OrgXsuaa.
+// XsuaaData holds a cached OAuth token for the XSUAA admin API of one CF org.
+// Keyed by org GUID in Credentials.OrgXsuaa.
+//
+// Service key credentials (client ID, secret, token URL) are intentionally
+// NOT stored here — they are fetched from CF on demand and discarded after
+// obtaining a token, so they never touch the local disk.
 type XsuaaData struct {
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret"`
-	URL          string    `json:"url"`    // XSUAA tenant URL — token endpoint base
-	APIURL       string    `json:"apiurl"` // XSUAA admin API base URL (from service key "apiurl")
-	AccessToken  string    `json:"access_token,omitempty"`
-	TokenExpiry  time.Time `json:"token_expiry,omitempty"`
+	APIURL      string    `json:"apiurl,omitempty"`          // XSUAA admin API base URL (from service key "apiurl")
+	AccessToken string    `json:"access_token,omitempty"`
+	TokenExpiry time.Time `json:"token_expiry,omitempty"`
 }
 
 // CISViewerData holds CIS central-viewer service key credentials and a cached
