@@ -42,15 +42,17 @@ type CISViewerData struct {
 	TokenExpiry        time.Time `json:"token_expiry,omitempty"`
 }
 
-// DestInstanceCache caches the destination service credentials and OAuth token
-// for one destination service instance. Stored under Credentials.SpaceDestServices
+// DestInstanceCache caches the destination service OAuth token for one
+// destination service instance. Stored under Credentials.SpaceDestServices
 // keyed by spaceGUID → instanceGUID.
+//
+// Service key credentials (client ID, client secret) are intentionally NOT
+// stored — they are fetched from CF on demand whenever a new token is needed
+// and discarded immediately after, so they never touch the local disk.
 type DestInstanceCache struct {
 	InstanceName string    `json:"instance_name"`
-	ClientID     string    `json:"client_id"`
-	ClientSecret string    `json:"client_secret"`
-	TokenURL     string    `json:"token_url"`
-	URI          string    `json:"uri"`
+	TokenURL     string    `json:"token_url"`            // uaa token endpoint (from service key "url")
+	URI          string    `json:"uri"`                  // destination service base URI
 	AccessToken  string    `json:"access_token,omitempty"`
 	TokenExpiry  time.Time `json:"token_expiry,omitempty"`
 }
@@ -143,6 +145,7 @@ func ClearTokens() error {
 	}
 	creds.Tokens = make(map[string]RegionToken)
 	creds.OrgXsuaa = nil
+	creds.SpaceDestServices = nil
 	return Save(creds)
 }
 

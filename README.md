@@ -104,11 +104,13 @@ All interactive prompts — email, password, SSO passcode, and `[y/N]` confirmat
 
 ### `logoff`
 
-Clear stored OAuth tokens (regions are preserved for the next login).
+Clear all stored OAuth tokens and cached service credentials (regions are preserved for the next login).
 
 ```bash
 bo logoff
 ```
+
+Clears: CF region tokens, XSUAA access tokens, destination service access tokens. Regions are preserved so the next `bo login` reuses the same region list.
 
 ### `orgs`
 
@@ -482,7 +484,7 @@ rolecollections:
 
 List all instance-level destinations across every destination service instance found in a given CF space.
 
-Credentials (clientId, clientSecret, tokenURL, URI) are auto-fetched from the first available service key of each destination service instance and cached in `~/.bo/credentials.json`. Access tokens are refreshed automatically when within 60 seconds of expiry. If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
+The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
 
 ```bash
 # List destinations in a space (TOON output)
@@ -524,7 +526,7 @@ With `--all`, each destination gains a `properties` section containing all remai
 
 Create instance-level destinations in every destination service instance within a given CF space.
 
-Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/instanceDestinations`) to each destination service instance in the space. Credential caching and the no-key interactive prompt work the same way as `get-space-destinations`.
+Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/instanceDestinations`) to each destination service instance in the space. Credential handling (fetch key on demand, cache only the token) and the no-key interactive prompt work the same way as `get-space-destinations`.
 
 ```bash
 bo create-space-destinations --space <space-guid> --destinations ./destinations.json
@@ -677,6 +679,18 @@ old_path,new_path
 
 Cross-page references (a page referencing an attachment owned by another page) are updated to the correct relative path (e.g. `../design/architecture-diagram.pdf`). Collision-safe: if the target filename already exists, `-2`, `-3`, … is appended before the extension.
 
+### `clear-logs`
+
+Delete all daily log files stored under `~/.bo/log/`.
+
+```bash
+# Show count and confirm before deleting
+bo clear-logs
+
+# Skip confirmation prompt
+bo clear-logs -y
+```
+
 ### `upgrade`
 
 Check for the latest release on GitHub and upgrade the `bo` binary in place.
@@ -788,5 +802,6 @@ bo delete-space-destinations --help
 bo apps --help
 bo role-collections --help
 bo reorg-wiki-attachments --help
+bo clear-logs --help
 bo upgrade --help
 ```
