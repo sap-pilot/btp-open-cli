@@ -469,6 +469,105 @@ rolecollections:
         role_name: User and Role Administrator
 ```
 
+### `get-space-destinations`
+
+List all instance-level destinations across every destination service instance found in a given CF space.
+
+Credentials (clientId, clientSecret, tokenURL, URI) are auto-fetched from the first available service key of each destination service instance and cached in `~/.bo/credentials.json`. Access tokens are refreshed automatically when within 60 seconds of expiry. If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
+
+```bash
+# List destinations in a space (TOON output)
+bo get-space-destinations --space <space-guid>
+
+# JSON output
+bo get-space-destinations --space <space-guid> --format json
+
+# Include all non-sensitive destination properties (not just the 5 standard fields)
+bo get-space-destinations --space <space-guid> --all
+
+# Scope region search
+bo get-space-destinations --space <space-guid> --regions us10,eu10
+```
+
+Output format (TOON, default):
+```
+space_id: <space-guid>
+space_name: dev
+destination_service_instances:
+  - destination_service_id: <instance-guid>
+    destination_service_name: my-dest-service
+    destinations:
+      - Name: API_S4_HTTP_PP
+        Type: HTTP
+        Authentication: PrincipalPropagation
+        URL: http://qr1:443
+        sap-client: "100"
+      - Name: API_MDG_HTTP_PP
+        Type: HTTP
+        Authentication: PrincipalPropagation
+        URL: http://qrg:443
+        sap-client: "100"
+```
+
+With `--all`, each destination gains a `properties` section containing all remaining non-sensitive keys (e.g. `ProxyType`, `WebIDESystem`, `HTML5.DynamicDestination`), sorted alphabetically.
+
+### `create-space-destinations`
+
+Create instance-level destinations in every destination service instance within a given CF space.
+
+Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/instanceDestinations`) to each destination service instance in the space. Credential caching and the no-key interactive prompt work the same way as `get-space-destinations`.
+
+```bash
+bo create-space-destinations --space <space-guid> --destinations ./destinations.json
+
+# Scope region search
+bo create-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,eu10
+```
+
+The JSON file format (`--destinations`):
+```json
+[
+  {
+    "Name": "API_S4_HTTP_PP",
+    "Type": "HTTP",
+    "URL": "http://qr1:443",
+    "Authentication": "PrincipalPropagation",
+    "ProxyType": "OnPremise",
+    "sap-client": "100"
+  }
+]
+```
+
+### `update-space-destinations`
+
+Update (overwrite) instance-level destinations in every destination service instance within a given CF space.
+
+Reads a JSON array from `--destinations` and PUTs them (`PUT /v1/instanceDestinations`) to each destination service instance. Existing destinations with matching names are overwritten; others are left unchanged.
+
+```bash
+bo update-space-destinations --space <space-guid> --destinations ./destinations.json
+
+# Scope region search
+bo update-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,eu10
+```
+
+The `--destinations` JSON format is the same as `create-space-destinations`.
+
+### `delete-space-destinations`
+
+Delete named instance-level destinations from every destination service instance within a given CF space.
+
+Reads the `Name` field from each entry in the `--destinations` JSON array and issues a `DELETE /v1/instanceDestinations/{name}` for each name against every destination service instance in the space. Non-existent destinations are silently ignored (idempotent).
+
+```bash
+bo delete-space-destinations --space <space-guid> --destinations ./destinations.json
+
+# Scope region search
+bo delete-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,eu10
+```
+
+Only the `Name` field is read from the JSON file; all other properties are ignored.
+
 ### `apps`
 
 List Cloud Foundry applications across all accessible organizations and spaces.
@@ -531,6 +630,43 @@ regions:
 CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
 
 The `--filter` flag matches case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+
+### `reorg-wiki-attachments`
+
+Reorganize Azure DevOps (or any similar) wiki attachments by moving files out of the flat `.attachments/` folder and placing them next to the wiki page that first references them. Meaningless filenames are renamed to `{wiki-page-name}-image-N.ext`.
+
+```bash
+bo reorg-wiki-attachments /path/to/wiki
+```
+
+The command:
+1. Inventories all files in `/path/to/wiki/.attachments/`
+2. Scans every `.md` file in the wiki tree (alphabetical order)
+3. For each `/.attachments/filename` reference found in a page:
+   - Moves the file to the same folder as that wiki page
+   - Renames it to `{wiki-page-name}-image-N.ext` if the original name is meaningless (starts with `image` or `==image`, or is a UUID/GUID)
+   - Updates the reference in the `.md` file to a relative path
+4. Runs a second pass to update cross-page references pointing to moved files
+5. Prints a CSV summary of all moves: `old_path,new_path`
+
+```
+Attachments found in .attachments/: 12
+Wiki pages found:              8
+
+  moved: .attachments/image.png
+      -> design/overview-image-1.png
+  moved: .attachments/ab12cd34-ef56-7890-ab12-cd34ef567890.png
+      -> design/overview-image-2.png
+  moved: .attachments/architecture-diagram.pdf
+      -> design/architecture-diagram.pdf
+
+old_path,new_path
+.attachments/ab12cd34-ef56-7890-ab12-cd34ef567890.png,design/overview-image-2.png
+.attachments/architecture-diagram.pdf,design/architecture-diagram.pdf
+.attachments/image.png,design/overview-image-1.png
+```
+
+Cross-page references (a page referencing an attachment owned by another page) are updated to the correct relative path (e.g. `../design/architecture-diagram.pdf`). Collision-safe: if the target filename already exists, `-2`, `-3`, … is appended before the extension.
 
 ### `upgrade`
 
@@ -636,7 +772,12 @@ bo delete-org-space-users --help
 bo users --help
 bo delete-users --help
 bo describe-subaccount --help
+bo get-space-destinations --help
+bo create-space-destinations --help
+bo update-space-destinations --help
+bo delete-space-destinations --help
 bo apps --help
 bo role-collections --help
+bo reorg-wiki-attachments --help
 bo upgrade --help
 ```
