@@ -165,7 +165,7 @@ regions:
             space_name: prod
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space. Orgs with no spaces emit a single row with empty `space_id` and `space_name` columns.
+CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space; `region`, `org_id`, and `org_name` are repeated for every space in the same org. Orgs with no spaces are omitted from the CSV output.
 
 ### `org-users`
 
