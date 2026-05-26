@@ -156,18 +156,24 @@ func resolveSpaceDestClients(
 	}
 	spaceCache := creds.SpaceDestServices[spaceGUID]
 
-	// ── per-instance: load or fetch credentials, refresh token ────────────────
+	// ── per-instance: refresh token if needed, fetching key from CF each time ─
+	// Client ID and client secret are intentionally NOT cached locally.
+	// They are fetched from CF on demand whenever a new token is needed and
+	// discarded immediately — only the token (+ tokenURL + URI) is persisted.
 	for _, inst := range instances {
-		cached, hasCreds := spaceCache[inst.GUID]
-		if !hasCreds || cached.ClientID == "" {
-			// Fetch credentials from CF
+		cached := spaceCache[inst.GUID]
+		needToken := cached == nil || cached.AccessToken == "" ||
+			time.Now().Add(60*time.Second).After(cached.TokenExpiry)
+
+		if needToken {
+			// Always fetch the service key from CF to get credentials.
 			key, keyErr := cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
 			if keyErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: finding service key for %q: %v\n", inst.Name, keyErr)
 				continue
 			}
 			if key == nil {
-				// No key — warn and offer interactive prompt to create one
+				// No key — warn and offer an interactive prompt to create one.
 				fmt.Fprintf(cmd.ErrOrStderr(),
 					"\nWARNING: No service key found for destination service instance %q (%s)\n"+
 						"  Create one manually, e.g. via CF CLI:\n"+
@@ -178,7 +184,6 @@ func resolveSpaceDestClients(
 				if !ok {
 					continue
 				}
-				// Retry once after the user creates the key
 				key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
 				if keyErr != nil || key == nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q — skipping\n", inst.Name)
@@ -199,30 +204,34 @@ func resolveSpaceDestClients(
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: incomplete credentials in service key for %q\n", inst.Name)
 				continue
 			}
-			cached = &store.DestInstanceCache{
-				InstanceName: inst.Name,
-				ClientID:     clientID,
-				ClientSecret: clientSecret,
-				TokenURL:     tokenURL,
-				URI:          uri,
-			}
-			spaceCache[inst.GUID] = cached
-		}
 
-		// Refresh access token if missing or within 60 s of expiry
-		if cached.AccessToken == "" || time.Now().Add(60*time.Second).After(cached.TokenExpiry) {
-			newToken, expiry, tokErr := destination.GetAccessToken(ctx, cached.TokenURL, cached.ClientID, cached.ClientSecret)
+			// Get a new token — credentials are discarded after this call.
+			newToken, expiry, tokErr := destination.GetAccessToken(ctx, tokenURL, clientID, clientSecret)
 			if tokErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: token for destination instance %q: %v\n", inst.Name, tokErr)
 				continue
 			}
+
+			// Persist only: instanceName, tokenURL, URI, accessToken, tokenExpiry.
+			if cached == nil {
+				cached = &store.DestInstanceCache{}
+				spaceCache[inst.GUID] = cached
+			}
+			cached.InstanceName = inst.Name
+			cached.TokenURL = tokenURL
+			cached.URI = uri
 			cached.AccessToken = newToken
 			cached.TokenExpiry = expiry
+			// clientID and clientSecret intentionally NOT stored.
+		}
+
+		if cached == nil || cached.URI == "" {
+			continue // token fetch must have failed above
 		}
 
 		clients = append(clients, sdDestClient{
 			InstanceGUID: inst.GUID,
-			InstanceName: inst.Name,
+			InstanceName: cached.InstanceName,
 			URI:          cached.URI,
 			Token:        cached.AccessToken,
 		})

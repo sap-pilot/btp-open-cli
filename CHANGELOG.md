@@ -2,6 +2,12 @@
 
 ## v0.7 — 2026-05-26
 
+### Added
+
+- **`clear-logs`** — new command to delete all daily log files under `~/.bo/log/`
+  - Shows a count and asks `Proceed? [y/N]` before deleting
+  - `-y` skips the confirmation prompt
+
 ### Changed
 
 - **`users`, `delete-users`, `role-collections`, `describe-subaccount` — XSUAA credential handling rewritten**
@@ -9,13 +15,20 @@
   - Now each command searches **all spaces** in the target org for any `xsuaa` service instance with the `apiaccess` plan, and uses the **first available service key** — no hardcoded names, no service creation
   - If no instance or key is found, the command prints CF CLI instructions (`cf create-service xsuaa apiaccess <name>` / `cf create-service-key`) and prompts the user to create them manually, then retries once on Enter; Ctrl-C skips the org
   - **`--no-prompt`** flag — skip the interactive prompt entirely; orgs without a service instance or key are silently skipped
-  - **Service key credentials are no longer stored locally.** Only the access token (plus APIURL and expiry) is cached in `~/.bo/credentials.json` under `org_xsuaa[orgGUID]`. Client ID, client secret, and token URL are fetched from CF on demand each time a token refresh is needed and discarded immediately after.
+  - **XSUAA service key credentials are no longer stored locally.** Only the access token (plus APIURL and expiry) is cached in `~/.bo/credentials.json` under `org_xsuaa[orgGUID]`. Client ID, client secret, and token URL are fetched from CF on demand each time a token refresh is needed and discarded immediately after.
   - `-y` / `--yes` flag removed from `users`, `role-collections`, and `describe-subaccount` (it was only used to skip service/key creation confirmation, which no longer happens); `-y` is retained in `delete-users` for the user deletion confirmation prompt
+
+- **`get/create/update/delete-space-destinations` — destination service key credentials no longer stored locally**
+  - Previously the destination service `clientId`, `clientSecret`, `tokenURL`, and `URI` were all cached in `~/.bo/credentials.json` under `space_dest_services`
+  - Now only the access token, `tokenURL`, and `URI` are persisted; `clientId` and `clientSecret` are fetched from CF on demand whenever a new token is needed and discarded immediately after — they never touch the local disk
+  - Token refresh behaviour (60-second expiry window) and the no-key interactive prompt are unchanged
+
+- **`logoff`** — now also clears cached destination service access tokens (`space_dest_services`) in addition to CF region tokens and XSUAA tokens
 
 ### Internals
 
 - `cmd/xsuaasetup.go`: removed `discoverXsuaaPlans`, `ensureXsuaaCredentials`, `xsuaaRefreshToken`, `xsuaaPrintSetupPreview` and the `xsuaaOrgPlan`/`xsuaaRegionPlan` types; replaced with `resolveXsuaaClients` (returns `[]xsuaaOrgClient` with ready-to-use token + APIURL) and the `xsuaaPromptRetryInstance`/`xsuaaPromptRetryKey` prompt helpers
-- `internal/store/token.go`: removed `ClientID`, `ClientSecret`, `URL` fields from `XsuaaData` (only `APIURL`, `AccessToken`, `TokenExpiry` remain)
+- `internal/store/token.go`: removed `ClientID`/`ClientSecret`/`URL` fields from `XsuaaData` (only `APIURL`, `AccessToken`, `TokenExpiry` remain); removed `ClientID`/`ClientSecret` from `DestInstanceCache` (only `InstanceName`, `TokenURL`, `URI`, `AccessToken`, `TokenExpiry` remain); `ClearTokens()` now also zeroes `SpaceDestServices`
 
 ## v0.6 — 2026-05-26
 
