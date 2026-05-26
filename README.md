@@ -232,14 +232,16 @@ Without `-y`, a TOON preview of all roles that will be deleted is shown before a
 
 List users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
 
-For each organization the command checks whether the service instance `btp-xsuaa` (xsuaa / apiaccess plan) and service key `btp-open-cli-sk` exist in the `util` space. If they are missing, a TOON preview of what will be created is shown before any changes are made. Credentials retrieved from the service key are cached in `~/.bo/credentials.json` and reused on subsequent runs.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+
+Only the access token is cached in `~/.bo/credentials.json` — service key credentials (clientId, clientSecret) are fetched on demand and never stored locally.
 
 ```bash
 # List XSUAA users across all orgs in stored regions
 bo users
 
-# Skip service/key creation confirmation
-bo users -y
+# Skip interactive prompts for orgs with no service instance or key
+bo users --no-prompt
 
 # Scope to specific regions
 bo users --regions us10,eu10
@@ -288,7 +290,9 @@ regions:
 
 Delete users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
 
-For each organization the command checks whether the service instance `btp-xsuaa` (xsuaa / apiaccess plan) and service key `btp-open-cli-sk` exist in the `util` space. If they are missing, a TOON preview of what will be created is shown before any changes are made. Credentials retrieved from the service key are cached in `~/.bo/credentials.json` and reused on subsequent runs.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+
+Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
 
 CSV format (`origin,userName`):
 ```
@@ -302,8 +306,11 @@ Users are matched by `origin` + `userName` (case-insensitive). A TOON preview of
 # Preview users to be deleted, then confirm (y/N)
 bo delete-users --users delete-users.csv
 
-# Skip all confirmation prompts
+# Skip deletion confirmation prompt
 bo delete-users --users delete-users.csv -y
+
+# Skip interactive prompts for orgs with no service instance or key
+bo delete-users --users delete-users.csv --no-prompt
 
 # Scope to specific regions
 bo delete-users --users delete-users.csv --regions us10,eu10
@@ -339,14 +346,16 @@ Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is pr
 
 List XSUAA roles and role collections (with their role references) across all accessible CF organizations.
 
-For each organization the command checks whether the service instance `btp-xsuaa` (xsuaa / apiaccess plan) and service key `btp-open-cli-sk` exist in the `util` space. If they are missing, a TOON preview of what will be created is shown before any changes are made. Credentials retrieved from the service key are cached in `~/.bo/credentials.json` and reused on subsequent runs.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+
+Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
 
 ```bash
 # List roles and role collections across all orgs in stored regions
 bo role-collections
 
-# Skip service/key creation confirmation
-bo role-collections -y
+# Skip interactive prompts for orgs with no service instance or key
+bo role-collections --no-prompt
 
 # Scope to specific regions
 bo role-collections --regions us10,eu10
@@ -399,7 +408,7 @@ By default the CF org GUID is used as the BTP subaccount ID in the CIS API call.
 
 **Prerequisites:**
 - A `cis` service instance with plan `central-viewer` and at least one service key must exist in any accessible org/space. If not found, the command prints instructions and exits.
-- The `btp-xsuaa` (xsuaa / apiaccess) service key setup in the target org's `util` space (same requirement as `users` and `role-collections`).
+- An `xsuaa` service instance with the `apiaccess` plan and at least one service key must exist in any space of the target org (same requirement as `users` and `role-collections`). If not found, a prompt prints CF CLI instructions; use `--no-prompt` to skip silently.
 
 ```bash
 # Describe a subaccount by org name (TOON output)
@@ -414,8 +423,8 @@ bo describe-subaccount --org my-org-name --subaccount <btp-subaccount-guid>
 # JSON output
 bo describe-subaccount --org my-org-name --format json
 
-# Skip XSUAA service/key creation confirmation
-bo describe-subaccount --org my-org-name -y
+# Skip interactive prompts if no XSUAA service instance or key is found
+bo describe-subaccount --org my-org-name --no-prompt
 
 # Scope region search
 bo describe-subaccount --org my-org-name --regions us10,eu10

@@ -5,11 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"time"
-
-	toonenc "github.com/toon-format/toon-go"
 
 	"btp-open-cli/internal/cf"
 	"btp-open-cli/internal/store"
@@ -19,412 +16,246 @@ import (
 const (
 	xsuaaServiceOffering = "xsuaa"
 	xsuaaServicePlan     = "apiaccess"
-	xsuaaInstanceName    = "btp-xsuaa"
-	xsuaaKeyName         = "btp-open-cli-sk"
-	xsuaaUtilSpace       = "util"
 )
 
-// ── plan types ────────────────────────────────────────────────────────────────
-
-type xsuaaOrgPlan struct {
-	Org           cf.Organization
-	UtilSpaceGUID string
-	UtilSpaceName string
-	NeedsInstance bool
-	NeedsKey      bool
-	NeedsFetch    bool
-	InstanceGUID  string
-	KeyGUID       string
-	XsuaaReady    bool
+// xsuaaOrgClient holds a ready-to-use XSUAA access token and admin API URL
+// for one CF org.
+type xsuaaOrgClient struct {
+	OrgGUID    string
+	OrgName    string
+	RegionName string
+	APIURL     string // XSUAA admin API base URL (from service key "apiurl")
+	Token      string // valid access token
 }
 
-type xsuaaRegionPlan struct {
-	Region      string
-	APIURL      string
-	ServicePlan *cf.ServicePlan
-	Orgs        []xsuaaOrgPlan
-}
-
-// ── setup preview types ───────────────────────────────────────────────────────
-
-type xsuaaSetupSpace struct {
-	ID   string `toon:"id"`
-	Name string `toon:"name"`
-}
-
-type xsuaaSetupOrg struct {
-	ID     string            `toon:"id"`
-	Name   string            `toon:"name"`
-	Spaces []xsuaaSetupSpace `toon:"spaces"`
-}
-
-type xsuaaSetupRegion struct {
-	ID   string          `toon:"id"`
-	Orgs []xsuaaSetupOrg `toon:"orgs"`
-}
-
-type xsuaaSetupDoc struct {
-	Regions []xsuaaSetupRegion `toon:"regions"`
-}
-
-// discoverXsuaaPlans queries CF in parallel to determine which orgs need
-// service instance/key creation and which already have cached credentials.
-func discoverXsuaaPlans(ctx context.Context, apiURLs []string, creds *store.Credentials, includeOrgs, excludeOrgs cosOrgSet) []xsuaaRegionPlan {
-	plans := make([]xsuaaRegionPlan, len(apiURLs))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-
-	for i, apiURL := range apiURLs {
-		wg.Add(1)
-		go func(idx int, url string) {
-			defer wg.Done()
-			regionName := store.APIURLToRegion(url)
-
-			tok, ok := creds.Tokens[url]
-			if !ok {
-				mu.Lock()
-				fmt.Fprintf(os.Stderr, "[%s] no token — run: bo login --regions %s\n", regionName, regionName)
-				mu.Unlock()
-				return
-			}
-
-			client := cf.NewClient(url, tok.AccessToken)
-			client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
-
-			orgs, err := client.ListOrganizations(ctx)
-			if err != nil {
-				mu.Lock()
-				fmt.Fprintf(os.Stderr, "[%s] error listing orgs: %v\n", regionName, err)
-				mu.Unlock()
-				return
-			}
-			slog.Debug("orgs fetched", "region", regionName, "count", len(orgs))
-
-			var orgPlans []xsuaaOrgPlan
-			var needsInstanceCreate bool
-
-			for _, org := range orgs {
-				if len(includeOrgs) > 0 && !includeOrgs.matches(regionName, org.GUID, org.Name) {
-					continue
-				}
-				if len(excludeOrgs) > 0 && excludeOrgs.matches(regionName, org.GUID, org.Name) {
-					continue
-				}
-
-				plan := xsuaaOrgPlan{Org: org}
-
-				mu.Lock()
-				xd, hasXsuaa := creds.OrgXsuaa[org.GUID]
-				mu.Unlock()
-
-				if hasXsuaa && xd.ClientID != "" && xd.ClientSecret != "" && xd.URL != "" {
-					plan.XsuaaReady = true
-					orgPlans = append(orgPlans, plan)
-					continue
-				}
-
-				spaces, err := client.ListOrganizationSpaces(ctx, org.GUID)
-				if err != nil {
-					mu.Lock()
-					fmt.Fprintf(os.Stderr, "[%s] %s: error listing spaces: %v\n", regionName, org.Name, err)
-					mu.Unlock()
-					continue
-				}
-				var utilSpace *cf.Space
-				for i := range spaces {
-					if strings.EqualFold(spaces[i].Name, xsuaaUtilSpace) {
-						utilSpace = &spaces[i]
-						break
-					}
-				}
-				if utilSpace == nil {
-					mu.Lock()
-					fmt.Fprintf(os.Stderr, "[%s] %s: no '%s' space found — skipping\n", regionName, org.Name, xsuaaUtilSpace)
-					mu.Unlock()
-					continue
-				}
-				plan.UtilSpaceGUID = utilSpace.GUID
-				plan.UtilSpaceName = utilSpace.Name
-
-				inst, err := client.FindServiceInstance(ctx, xsuaaInstanceName, utilSpace.GUID)
-				if err != nil {
-					mu.Lock()
-					fmt.Fprintf(os.Stderr, "[%s] %s: error checking service instance: %v\n", regionName, org.Name, err)
-					mu.Unlock()
-					continue
-				}
-
-				if inst == nil {
-					plan.NeedsInstance = true
-					plan.NeedsKey = true
-					needsInstanceCreate = true
-				} else {
-					plan.InstanceGUID = inst.GUID
-
-					key, err := client.FindServiceCredentialBinding(ctx, xsuaaKeyName, inst.GUID)
-					if err != nil {
-						mu.Lock()
-						fmt.Fprintf(os.Stderr, "[%s] %s: error checking service key: %v\n", regionName, org.Name, err)
-						mu.Unlock()
-						continue
-					}
-					if key == nil {
-						plan.NeedsKey = true
-					} else {
-						plan.KeyGUID = key.GUID
-						plan.NeedsFetch = true
-					}
-				}
-
-				orgPlans = append(orgPlans, plan)
-			}
-
-			var servicePlan *cf.ServicePlan
-			if needsInstanceCreate {
-				sp, err := client.FindServicePlan(ctx, xsuaaServiceOffering, xsuaaServicePlan)
-				if err != nil {
-					mu.Lock()
-					fmt.Fprintf(os.Stderr, "[%s] error looking up service plan %s/%s: %v\n",
-						regionName, xsuaaServiceOffering, xsuaaServicePlan, err)
-					mu.Unlock()
-				} else {
-					servicePlan = sp
-				}
-			}
-
-			plans[idx] = xsuaaRegionPlan{
-				Region:      regionName,
-				APIURL:      url,
-				ServicePlan: servicePlan,
-				Orgs:        orgPlans,
-			}
-		}(i, apiURL)
-	}
-	wg.Wait()
-	return plans
-}
-
-// ensureXsuaaCredentials shows a preview, prompts for confirmation, then
-// creates any missing service instances/keys and caches the credentials.
-// Returns updated credentials and false if the user aborted.
-func ensureXsuaaCredentials(ctx context.Context, plans []xsuaaRegionPlan, creds *store.Credentials, skipConfirm bool) (*store.Credentials, bool, error) {
-	setupNeeded := false
-	for _, plan := range plans {
-		for _, op := range plan.Orgs {
-			if op.NeedsInstance || op.NeedsKey {
-				setupNeeded = true
-				break
-			}
-		}
-		if setupNeeded {
-			break
-		}
-	}
-
-	if setupNeeded && !skipConfirm {
-		if err := xsuaaPrintSetupPreview(plans); err != nil {
-			return creds, false, err
-		}
-		fmt.Fprint(os.Stderr, "Proceed with service/key creation? [y/N] ")
-		text, ok := readLine(ctx)
-		if !ok || strings.ToLower(text) != "y" {
-			fmt.Fprintln(os.Stdout, "Aborted.")
-			return creds, false, nil
-		}
-		fmt.Fprintln(os.Stdout)
-	}
-
-	anyPhase3 := setupNeeded
-	if !anyPhase3 {
-		for _, plan := range plans {
-			for _, op := range plan.Orgs {
-				if op.NeedsFetch {
-					anyPhase3 = true
-					break
-				}
-			}
-			if anyPhase3 {
-				break
-			}
-		}
-	}
-
-	if !anyPhase3 {
-		return creds, true, nil
-	}
-
-	var err error
-	creds, err = store.Load()
-	if err != nil {
-		return nil, false, fmt.Errorf("loading credentials: %w", err)
-	}
+// resolveXsuaaClients scans accessible orgs for any xsuaa/apiaccess service
+// instance (across all spaces) that has at least one service key. It uses a
+// cached token when still fresh (> 60 s remaining), otherwise fetches fresh
+// credentials from CF, obtains a new token, and caches only the token — the
+// service key credentials (client ID, secret, token URL) are never persisted.
+//
+// When no service instance or key is found for an org:
+//   - noPrompt=false: prints instructions and prompts the user to create the
+//     resource manually, then retries once on Enter; skips on Ctrl-C.
+//   - noPrompt=true: prints a warning and skips the org.
+func resolveXsuaaClients(
+	ctx context.Context,
+	apiURLs []string,
+	creds *store.Credentials,
+	includeOrgs, excludeOrgs cosOrgSet,
+	noPrompt bool,
+) ([]xsuaaOrgClient, *store.Credentials, error) {
 	if creds.OrgXsuaa == nil {
 		creds.OrgXsuaa = make(map[string]store.XsuaaData)
 	}
 
-	for ri := range plans {
-		plan := &plans[ri]
-		if plan.APIURL == "" {
-			continue
-		}
-		tok, ok := creds.Tokens[plan.APIURL]
+	var (
+		mu      sync.Mutex // guards creds.OrgXsuaa writes
+		clients []xsuaaOrgClient
+	)
+
+	for _, apiURL := range apiURLs {
+		tok, ok := creds.Tokens[apiURL]
 		if !ok {
+			regionName := store.APIURLToRegion(apiURL)
+			fmt.Fprintf(os.Stderr, "[%s] no token — run: bo login --regions %s\n", regionName, regionName)
 			continue
 		}
-		client := cf.NewClient(plan.APIURL, tok.AccessToken)
-		client.SetTokenRefresher(makeTokenRefresher(plan.APIURL, tok.AccessToken))
+		regionName := store.APIURLToRegion(apiURL)
+		cfClient := cf.NewClient(apiURL, tok.AccessToken)
+		cfClient.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
 
-		for oi := range plan.Orgs {
-			op := &plan.Orgs[oi]
-			if op.XsuaaReady || (!op.NeedsInstance && !op.NeedsKey && !op.NeedsFetch) {
+		orgs, listErr := cfClient.ListOrganizations(ctx)
+		if listErr != nil {
+			fmt.Fprintf(os.Stderr, "[%s] error listing orgs: %v\n", regionName, listErr)
+			continue
+		}
+		slog.Debug("orgs fetched", "region", regionName, "count", len(orgs))
+
+		// Fetch the xsuaa/apiaccess plan once per region (lazily).
+		var xsuaaPlan *cf.ServicePlan
+		planFetched := false
+
+		for _, org := range orgs {
+			if len(includeOrgs) > 0 && !includeOrgs.matches(regionName, org.GUID, org.Name) {
+				continue
+			}
+			if len(excludeOrgs) > 0 && excludeOrgs.matches(regionName, org.GUID, org.Name) {
 				continue
 			}
 
-			if op.NeedsInstance {
-				if plan.ServicePlan == nil {
-					fmt.Fprintf(os.Stderr, "[%s] %s: service plan %s/%s not found — skipping\n",
-						plan.Region, op.Org.Name, xsuaaServiceOffering, xsuaaServicePlan)
-					continue
-				}
-				fmt.Fprintf(os.Stdout, "[%s] %s: creating service instance '%s'...\n",
-					plan.Region, op.Org.Name, xsuaaInstanceName)
-				if err := client.CreateServiceInstance(ctx, xsuaaInstanceName, op.UtilSpaceGUID, plan.ServicePlan.GUID); err != nil {
-					fmt.Fprintf(os.Stderr, "[%s] %s: failed to create service instance: %v\n",
-						plan.Region, op.Org.Name, err)
-					continue
-				}
+			// ── use cached token if still fresh ──────────────────────────────
+			mu.Lock()
+			xd := creds.OrgXsuaa[org.GUID]
+			mu.Unlock()
 
-				fmt.Fprintln(os.Stdout, "Waiting 8 s for CF async processing...")
-				select {
-				case <-ctx.Done():
-					return creds, false, ctx.Err()
-				case <-time.After(8 * time.Second):
-				}
-
-				inst, err := client.FindServiceInstance(ctx, xsuaaInstanceName, op.UtilSpaceGUID)
-				if err != nil || inst == nil {
-					fmt.Fprintf(os.Stderr, "[%s] %s: could not find newly created service instance: %v\n",
-						plan.Region, op.Org.Name, err)
-					continue
-				}
-				op.InstanceGUID = inst.GUID
-			}
-
-			if op.NeedsKey {
-				fmt.Fprintf(os.Stdout, "[%s] %s: creating service key '%s'...\n",
-					plan.Region, op.Org.Name, xsuaaKeyName)
-				if err := client.CreateServiceCredentialBinding(ctx, xsuaaKeyName, op.InstanceGUID); err != nil {
-					fmt.Fprintf(os.Stderr, "[%s] %s: failed to create service key: %v\n",
-						plan.Region, op.Org.Name, err)
-					continue
-				}
-
-				fmt.Fprintln(os.Stdout, "Waiting 8 s for CF async processing...")
-				select {
-				case <-ctx.Done():
-					return creds, false, ctx.Err()
-				case <-time.After(8 * time.Second):
-				}
-
-				key, err := client.FindServiceCredentialBinding(ctx, xsuaaKeyName, op.InstanceGUID)
-				if err != nil || key == nil {
-					fmt.Fprintf(os.Stderr, "[%s] %s: could not find newly created service key: %v\n",
-						plan.Region, op.Org.Name, err)
-					continue
-				}
-				op.KeyGUID = key.GUID
-			}
-
-			details, err := client.GetServiceCredentialDetails(ctx, op.KeyGUID)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[%s] %s: failed to fetch service key credentials: %v\n",
-					plan.Region, op.Org.Name, err)
+			if xd.AccessToken != "" && !time.Now().Add(60*time.Second).After(xd.TokenExpiry) {
+				slog.Debug("using cached XSUAA token", "region", regionName, "org", org.Name)
+				clients = append(clients, xsuaaOrgClient{
+					OrgGUID:    org.GUID,
+					OrgName:    org.Name,
+					RegionName: regionName,
+					APIURL:     xd.APIURL,
+					Token:      xd.AccessToken,
+				})
 				continue
 			}
 
+			// ── fetch fresh credentials from CF ───────────────────────────────
+			slog.Debug("resolving XSUAA credentials from CF", "region", regionName, "org", org.Name)
+
+			if !planFetched {
+				planFetched = true
+				xsuaaPlan, _ = cfClient.FindServicePlan(ctx, xsuaaServiceOffering, xsuaaServicePlan)
+			}
+			if xsuaaPlan == nil {
+				fmt.Fprintf(os.Stderr, "[%s] %s: xsuaa/%s plan not found — skipping\n",
+					regionName, org.Name, xsuaaServicePlan)
+				continue
+			}
+
+			// Find any xsuaa/apiaccess instance in this org (all spaces).
+			instances, instErr := cfClient.ListServiceInstancesByPlanGUID(ctx, xsuaaPlan.GUID, org.GUID)
+			if instErr != nil {
+				fmt.Fprintf(os.Stderr, "[%s] %s: listing xsuaa instances: %v\n", regionName, org.Name, instErr)
+				continue
+			}
+
+			var inst *cf.ServiceInstance
+			if len(instances) > 0 {
+				inst = &instances[0]
+			}
+			if inst == nil {
+				inst = xsuaaPromptRetryInstance(ctx, cfClient,
+					fmt.Sprintf("[%s] %s: no xsuaa/%s service instance found in any space",
+						regionName, org.Name, xsuaaServicePlan),
+					org.GUID, xsuaaPlan.GUID, noPrompt)
+				if inst == nil {
+					continue
+				}
+			}
+
+			// Find any service key for the instance.
+			key, keyErr := cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
+			if keyErr != nil {
+				fmt.Fprintf(os.Stderr, "[%s] %s: looking up service key: %v\n", regionName, org.Name, keyErr)
+				continue
+			}
+			if key == nil {
+				key = xsuaaPromptRetryKey(ctx, cfClient,
+					fmt.Sprintf("[%s] %s: no service key found for xsuaa instance %q",
+						regionName, org.Name, inst.Name),
+					inst.GUID, noPrompt)
+				if key == nil {
+					continue
+				}
+			}
+
+			// Fetch key credentials (used only to get a token — not stored).
+			details, detErr := cfClient.GetServiceCredentialDetails(ctx, key.GUID)
+			if detErr != nil {
+				fmt.Fprintf(os.Stderr, "[%s] %s: fetching key credentials: %v\n", regionName, org.Name, detErr)
+				continue
+			}
 			clientID, _ := details["clientid"].(string)
 			clientSecret, _ := details["clientsecret"].(string)
 			xsuaaURL, _ := details["url"].(string)
 			xsuaaAPIURL, _ := details["apiurl"].(string)
 			if clientID == "" || clientSecret == "" || xsuaaURL == "" {
-				fmt.Fprintf(os.Stderr, "[%s] %s: incomplete credentials in service key\n",
-					plan.Region, op.Org.Name)
+				fmt.Fprintf(os.Stderr, "[%s] %s: incomplete credentials in service key\n", regionName, org.Name)
 				continue
 			}
 
-			creds.OrgXsuaa[op.Org.GUID] = store.XsuaaData{
-				ClientID:     clientID,
-				ClientSecret: clientSecret,
-				URL:          xsuaaURL,
-				APIURL:       xsuaaAPIURL,
-			}
-			if err := store.Save(creds); err != nil {
-				fmt.Fprintf(os.Stderr, "[%s] %s: failed to save credentials: %v\n",
-					plan.Region, op.Org.Name, err)
-			} else {
-				slog.Debug("XSUAA credentials saved", "region", plan.Region, "org", op.Org.Name)
-			}
-		}
-	}
-
-	return creds, true, nil
-}
-
-// xsuaaRefreshToken returns current XSUAA credentials for orgGUID, refreshing
-// the access token if absent or within 60 s of expiry. mu guards creds.
-func xsuaaRefreshToken(ctx context.Context, orgGUID string, creds *store.Credentials, mu *sync.Mutex) (store.XsuaaData, error) {
-	mu.Lock()
-	xd := creds.OrgXsuaa[orgGUID]
-	mu.Unlock()
-
-	if xd.AccessToken != "" && !time.Now().Add(60*time.Second).After(xd.TokenExpiry) {
-		return xd, nil
-	}
-
-	token, expiry, err := xsuaa.GetAccessToken(ctx, xd.URL, xd.ClientID, xd.ClientSecret)
-	if err != nil {
-		return xd, fmt.Errorf("XSUAA token: %w", err)
-	}
-	xd.AccessToken = token
-	xd.TokenExpiry = expiry
-
-	mu.Lock()
-	creds.OrgXsuaa[orgGUID] = xd
-	_ = store.Save(creds)
-	mu.Unlock()
-
-	return xd, nil
-}
-
-// xsuaaPrintSetupPreview renders a TOON preview of util spaces where the
-// service instance or key will be created.
-func xsuaaPrintSetupPreview(plans []xsuaaRegionPlan) error {
-	var previewRegions []xsuaaSetupRegion
-	for _, plan := range plans {
-		pr := xsuaaSetupRegion{ID: plan.Region}
-		for _, op := range plan.Orgs {
-			if !op.NeedsInstance && !op.NeedsKey {
+			// Obtain access token — credentials are discarded after this call.
+			token, expiry, tokErr := xsuaa.GetAccessToken(ctx, xsuaaURL, clientID, clientSecret)
+			if tokErr != nil {
+				fmt.Fprintf(os.Stderr, "[%s] %s: XSUAA token: %v\n", regionName, org.Name, tokErr)
 				continue
 			}
-			pr.Orgs = append(pr.Orgs, xsuaaSetupOrg{
-				ID:   op.Org.GUID,
-				Name: op.Org.Name,
-				Spaces: []xsuaaSetupSpace{
-					{ID: op.UtilSpaceGUID, Name: op.UtilSpaceName},
-				},
+
+			apiBaseURL := xsuaa.ResolveAPIBaseURL(xsuaaAPIURL, regionName)
+
+			// Persist only the token and API URL (never the client credentials).
+			mu.Lock()
+			creds.OrgXsuaa[org.GUID] = store.XsuaaData{
+				APIURL:      apiBaseURL,
+				AccessToken: token,
+				TokenExpiry: expiry,
+			}
+			mu.Unlock()
+
+			clients = append(clients, xsuaaOrgClient{
+				OrgGUID:    org.GUID,
+				OrgName:    org.Name,
+				RegionName: regionName,
+				APIURL:     apiBaseURL,
+				Token:      token,
 			})
 		}
-		if len(pr.Orgs) > 0 {
-			previewRegions = append(previewRegions, pr)
-		}
 	}
 
-	out, err := toonenc.Marshal(xsuaaSetupDoc{Regions: previewRegions}, toonenc.WithIndent(2))
-	if err != nil {
-		return fmt.Errorf("encoding setup preview: %w", err)
+	// Persist updated token cache.
+	if saveErr := store.Save(creds); saveErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: saving credentials: %v\n", saveErr)
 	}
-	fmt.Fprintln(os.Stdout, "The following service instance/key will be created in the 'util' space:")
-	os.Stdout.Write(out)
-	fmt.Fprintln(os.Stdout)
-	return nil
+
+	return clients, creds, nil
+}
+
+// xsuaaPromptRetryInstance warns that no xsuaa/apiaccess service instance was
+// found, optionally prompts the user to create one manually, then retries once.
+func xsuaaPromptRetryInstance(
+	ctx context.Context,
+	cfClient *cf.Client,
+	message, orgGUID, planGUID string,
+	noPrompt bool,
+) *cf.ServiceInstance {
+	if noPrompt {
+		fmt.Fprintf(os.Stderr, "warning: %s — skipping\n", message)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr,
+		"\nWARNING: %s\n"+
+			"  Create a service instance in any space, e.g.:\n"+
+			"    cf create-service xsuaa apiaccess <instance-name>\n"+
+			"  Then press Enter to retry, or Ctrl-C to skip this org.\n",
+		message)
+	if _, ok := readLine(ctx); !ok {
+		return nil
+	}
+	instances, err := cfClient.ListServiceInstancesByPlanGUID(ctx, planGUID, orgGUID)
+	if err != nil || len(instances) == 0 {
+		fmt.Fprintf(os.Stderr, "warning: still no xsuaa/%s instance found — skipping\n", xsuaaServicePlan)
+		return nil
+	}
+	return &instances[0]
+}
+
+// xsuaaPromptRetryKey warns that no service key was found for an xsuaa instance,
+// optionally prompts the user to create one manually, then retries once.
+func xsuaaPromptRetryKey(
+	ctx context.Context,
+	cfClient *cf.Client,
+	message, instanceGUID string,
+	noPrompt bool,
+) *cf.ServiceCredentialBinding {
+	if noPrompt {
+		fmt.Fprintf(os.Stderr, "warning: %s — skipping\n", message)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr,
+		"\nWARNING: %s\n"+
+			"  Create a service key, e.g.:\n"+
+			"    cf create-service-key <instance-name> <key-name>\n"+
+			"  Then press Enter to retry, or Ctrl-C to skip this org.\n",
+		message)
+	if _, ok := readLine(ctx); !ok {
+		return nil
+	}
+	key, err := cfClient.FindAnyServiceCredentialBinding(ctx, instanceGUID)
+	if err != nil || key == nil {
+		fmt.Fprintf(os.Stderr, "warning: still no service key found — skipping\n")
+		return nil
+	}
+	return key
 }

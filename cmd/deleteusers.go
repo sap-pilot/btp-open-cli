@@ -76,11 +76,13 @@ across one or more regions and organizations.
 
 The --users CSV must have the header: origin,userName
 
-For each org the command ensures the service instance 'btp-xsuaa' (xsuaa/apiaccess)
-and service key 'btp-open-cli-sk' exist in the 'util' space. If they do not exist,
-a TOON preview is shown and confirmation is required before creating them.
+For each org the command finds any xsuaa/apiaccess service instance (in any space)
+and uses the first available service key to obtain an access token. If no instance
+or key exists, a prompt offers instructions to create them manually (suppress with
+--no-prompt to skip the org silently instead).
 
-Credentials are cached in ~/.bo/credentials.json and reused across runs.
+Only the access token is cached in ~/.bo/credentials.json — service key credentials
+are fetched from CF on demand and never stored locally.
 
 Without -y, a TOON preview of all users that will be deleted is shown before execution,
 and confirmation is required.
@@ -92,6 +94,7 @@ If --regions is omitted the regions from the last login are used.`,
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 
 		csvUsers, err := parseDeleteXsuaaUsersCSV(usersFile)
 		if err != nil {
@@ -134,77 +137,35 @@ If --regions is omitted the regions from the last login are used.`,
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		// Phase 1: discover orgs and check xsuaa service/key status.
-		plans := discoverXsuaaPlans(ctx, apiURLs, creds, includeOrgs, excludeOrgs)
-
-		// Phase 2+3: preview, confirm, create instances/keys, cache credentials.
-		creds, proceed, err := ensureXsuaaCredentials(ctx, plans, creds, skipConfirm)
+		// Phase 1: resolve XSUAA tokens for all accessible orgs.
+		clients, _, err := resolveXsuaaClients(ctx, apiURLs, creds, includeOrgs, excludeOrgs, noPrompt)
 		if err != nil {
 			return err
 		}
-		if !proceed {
-			return nil
-		}
 
-		// Phase 4: reload credentials, then fetch XSUAA users per org in parallel
-		// and filter down to the users listed in the CSV.
-		creds, err = store.Load()
-		if err != nil {
-			return fmt.Errorf("loading credentials: %w", err)
-		}
-
-		type orgWorkItem struct {
-			regionName string
-			orgGUID    string
-			orgName    string
-		}
-		var work []orgWorkItem
-		for _, plan := range plans {
-			if plan.APIURL == "" {
-				continue
-			}
-			for _, op := range plan.Orgs {
-				xd, ok := creds.OrgXsuaa[op.Org.GUID]
-				if !ok || xd.ClientID == "" || xd.ClientSecret == "" || xd.URL == "" {
-					fmt.Fprintf(os.Stderr, "[%s] %s: no XSUAA credentials — skipping\n",
-						plan.Region, op.Org.Name)
-					continue
-				}
-				work = append(work, orgWorkItem{
-					regionName: plan.Region,
-					orgGUID:    op.Org.GUID,
-					orgName:    op.Org.Name,
-				})
-			}
-		}
-
+		// Phase 2: fetch XSUAA users for each org in parallel and filter
+		// down to the users listed in the CSV.
 		type orgResult struct {
 			regionName string
 			orgGUID    string
 			orgName    string
+			apiURL     string
+			token      string
 			matched    []xsuaa.User
 			err        error
 		}
-		results := make([]orgResult, len(work))
+		results := make([]orgResult, len(clients))
 		var wg sync.WaitGroup
-		var credsMu sync.Mutex
 
-		for i, w := range work {
+		for i, w := range clients {
 			wg.Add(1)
-			go func(idx int, w orgWorkItem) {
+			go func(idx int, w xsuaaOrgClient) {
 				defer wg.Done()
+				slog.Debug("fetching XSUAA users for deletion", "region", w.RegionName, "org", w.OrgName)
 
-				xd, err := xsuaaRefreshToken(ctx, w.orgGUID, creds, &credsMu)
+				allUsers, err := xsuaa.ListUsers(ctx, w.APIURL, w.Token)
 				if err != nil {
-					results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, err: err}
-					return
-				}
-				slog.Debug("fetching XSUAA users for deletion", "region", w.regionName, "org", w.orgName)
-
-				apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, w.regionName)
-				allUsers, err := xsuaa.ListUsers(ctx, apiBaseURL, xd.AccessToken)
-				if err != nil {
-					results[idx] = orgResult{regionName: w.regionName, orgGUID: w.orgGUID, orgName: w.orgName, err: err}
+					results[idx] = orgResult{regionName: w.RegionName, orgGUID: w.OrgGUID, orgName: w.OrgName, err: err}
 					return
 				}
 
@@ -218,22 +179,24 @@ If --regions is omitted the regions from the last login are used.`,
 					}
 				}
 				results[idx] = orgResult{
-					regionName: w.regionName,
-					orgGUID:    w.orgGUID,
-					orgName:    w.orgName,
+					regionName: w.RegionName,
+					orgGUID:    w.OrgGUID,
+					orgName:    w.OrgName,
+					apiURL:     w.APIURL,
+					token:      w.Token,
 					matched:    matched,
 				}
 			}(i, w)
 		}
 		wg.Wait()
 
-		// Phase 5: assemble preview, preserving region order from plans.
-		regionOrder := make([]string, 0, len(plans))
+		// Phase 3: assemble preview, preserving region order from clients.
+		regionOrder := make([]string, 0)
 		regionSeen := make(map[string]bool)
-		for _, plan := range plans {
-			if plan.APIURL != "" && !regionSeen[plan.Region] {
-				regionOrder = append(regionOrder, plan.Region)
-				regionSeen[plan.Region] = true
+		for _, c := range clients {
+			if !regionSeen[c.RegionName] {
+				regionOrder = append(regionOrder, c.RegionName)
+				regionSeen[c.RegionName] = true
 			}
 		}
 
@@ -294,23 +257,14 @@ If --regions is omitted the regions from the last login are used.`,
 			fmt.Fprintln(os.Stdout)
 		}
 
-		// Phase 6: delete matched users sequentially per org.
+		// Phase 4: delete matched users sequentially per org.
 		fmt.Fprintln(os.Stdout, "Deleting users...")
-		var delMu sync.Mutex
 		for _, r := range results {
 			if r.err != nil || len(r.matched) == 0 {
 				continue
 			}
-
-			xd, err := xsuaaRefreshToken(ctx, r.orgGUID, creds, &delMu)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[%s] %s: token refresh failed: %v\n", r.regionName, r.orgName, err)
-				continue
-			}
-
-			apiBaseURL := xsuaa.ResolveAPIBaseURL(xd.APIURL, r.regionName)
 			for _, u := range r.matched {
-				if err := xsuaa.DeleteUser(ctx, apiBaseURL, xd.AccessToken, u.ID); err != nil {
+				if err := xsuaa.DeleteUser(ctx, r.apiURL, r.token, u.ID); err != nil {
 					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s (%s): %v\n",
 						r.regionName, r.orgName, u.UserName, u.Origin, err)
 				} else {
@@ -330,5 +284,6 @@ func init() {
 	deleteUsersCmd.MarkFlagRequired("users")
 	deleteUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	deleteUsersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
-	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for service/key creation and user deletion")
+	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for user deletion")
+	deleteUsersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 }
