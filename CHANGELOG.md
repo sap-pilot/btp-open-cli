@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.6 — 2026-05-26
+
+### Added
+
+- **`get-space-destinations`** — list all instance-level destinations across every destination service instance in a CF space (identified by `--space <GUID>`)
+  - Calls `GET /destination-configuration/v1/instanceDestinations` for each instance
+  - Default output (TOON or JSON with `--format json`): `{space_id, space_name, destination_service_instances: [{id, name, destinations: [{Name, Type, Authentication, URL, sap-client}]}]}`
+  - `--all` flag: adds a `properties` section to each destination with all remaining non-sensitive keys, sorted alphabetically
+  - Sensitive credential fields (`Password`, `ClientSecret`, `ProxyPassword`, etc.) are always redacted from responses
+  - Destination service credentials are fetched from the first available service key of each instance and cached in `~/.bo/credentials.json` under `space_dest_services[spaceGUID][instanceGUID]`; access tokens are refreshed automatically when within 60 seconds of expiry
+  - When a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry; the instance is skipped on Ctrl-C
+
+- **`create-space-destinations`** — create instance-level destinations in every destination service instance of a CF space
+  - Reads a JSON array from `--destinations` and calls `POST /v1/instanceDestinations` for each instance
+  - Prints per-destination status when the API returns a bulk response (HTTP 207)
+  - Same credential caching and no-key prompt as `get-space-destinations`
+
+- **`update-space-destinations`** — update (overwrite) instance-level destinations in every destination service instance of a CF space
+  - Reads a JSON array from `--destinations` and calls `PUT /v1/instanceDestinations` for each instance
+  - Overwrites existing destinations with matching names; others are left unchanged
+  - Same credential caching and no-key prompt as `get-space-destinations`
+
+- **`delete-space-destinations`** — delete named instance-level destinations from every destination service instance of a CF space
+  - Reads `Name` fields from the `--destinations` JSON array and calls `DELETE /v1/instanceDestinations/{name}` per name per instance
+  - Idempotent: non-existent destinations are silently skipped (HTTP 404 treated as success)
+  - Same credential caching and no-key prompt as `get-space-destinations`
+
+- **`reorg-wiki-attachments [path]`** — reorganize wiki attachments from a flat `.attachments/` folder into per-page subdirectories
+  - Inventories all files in `[path]/.attachments/`; scans all `.md` pages in alphabetical order
+  - Moves each attachment to the same folder as the first page that references it
+  - Renames files with meaningless names (starting with `image` / `==image`, or matching UUID/GUID format) to `{wiki-page-name}-image-N.ext`; collision-safe (`-2`, `-3`, … appended before extension if destination exists)
+  - Updates all `/.attachments/` references in-place with correct relative paths; a second pass handles cross-page references (paths computed relative to each referencing page)
+  - Prints a CSV summary at the end: `old_path,new_path`, sorted alphabetically by old path
+
+### Fixed
+
+- **XSUAA API URL for non-standard regions** — `users`, `delete-users`, and `role-collections` previously constructed the XSUAA admin API URL from the CF region name (e.g. `api.authentication.us10-001.hana.ondemand.com`) which does not exist for split regions. The `apiurl` field from the XSUAA service key is now stored in `~/.bo/credentials.json` under `XsuaaData.APIURL` and used directly; falls back to the constructed URL for existing cached credentials without the field. Fixes HTTP 404 errors on regions like `us10-001`.
+
+### Internals
+
+- `internal/destination/client.go`: added `BulkResponseItem` type and four new functions for the instance-level destinations API: `ListInstanceDestinations`, `CreateInstanceDestinations`, `UpdateInstanceDestinations`, `DeleteInstanceDestination`
+- `internal/cf/spaces.go`: added `FindSpaceByGUID` (`GET /v3/spaces?guids=`)
+- `internal/cf/services.go`: added `ListServiceInstancesInSpace` (`GET /v3/service_instances?space_guids=&type=managed`)
+- `internal/store/token.go`: added `DestInstanceCache` struct and `SpaceDestServices map[spaceGUID]map[instanceGUID]*DestInstanceCache` field to `Credentials` for persistent destination token caching
+
 ## v0.5 — 2026-05-20
 
 ### Added
