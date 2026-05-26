@@ -95,6 +95,11 @@ If --regions is omitted the regions from the last login are used.`,
 				return fmt.Errorf("invalid --orgs CSV: %w", err)
 			}
 		}
+		// --org takes precedence: scope resolveXsuaaClients to that single org so
+		// other regions are not scanned unnecessarily.
+		if orgGUID != "" {
+			includeOrgs = cosOrgSet{cosOrgRef{ID: orgGUID}}
+		}
 
 		var excludeOrgs cosOrgSet
 		if excludeOrgsFile != "" {
@@ -112,16 +117,8 @@ If --regions is omitted the regions from the last login are used.`,
 		if err != nil {
 			return err
 		}
-
-		// Apply --org filter (exact GUID match).
-		if orgGUID != "" {
-			var filtered []xsuaaOrgClient
-			for _, c := range clients {
-				if c.OrgGUID == orgGUID {
-					filtered = append(filtered, c)
-				}
-			}
-			clients = filtered
+		if orgGUID != "" && len(clients) == 0 {
+			return fmt.Errorf("org %q not found in any accessible region", orgGUID)
 		}
 
 		// Phase 2: fetch XSUAA users for each org in parallel.
