@@ -285,10 +285,10 @@ func printBulkResults(cmd *cobra.Command, instName string, items []destination.B
 	}
 }
 
-// ── get-space-destinations ────────────────────────────────────────────────────
+// ── space-destinations ────────────────────────────────────────────────────────
 
-var getSpaceDestinationsCmd = &cobra.Command{
-	Use:   "get-space-destinations",
+var spaceDestinationsCmd = &cobra.Command{
+	Use:   "space-destinations",
 	Short: "List instance-level destinations across all destination service instances in a CF space",
 	Long: `Retrieves all instance-level destinations from every destination service instance
 found in the given CF space (identified by --space GUID).
@@ -558,13 +558,13 @@ func activeAPIURLs(creds *store.Credentials, regionsFlag string) []string {
 // ── registration ──────────────────────────────────────────────────────────────
 
 func init() {
-	// get-space-destinations
-	getSpaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")
-	getSpaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
-	getSpaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
-	getSpaceDestinationsCmd.Flags().Bool("all", false, "Include all non-sensitive destination properties")
-	_ = getSpaceDestinationsCmd.MarkFlagRequired("space")
-	rootCmd.AddCommand(getSpaceDestinationsCmd)
+	// space-destinations
+	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")
+	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
+	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
+	spaceDestinationsCmd.Flags().Bool("all", false, "Include all non-sensitive destination properties")
+	_ = spaceDestinationsCmd.MarkFlagRequired("space")
+	rootCmd.AddCommand(spaceDestinationsCmd)
 
 	// create-space-destinations
 	createSpaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")

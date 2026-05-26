@@ -25,7 +25,9 @@
   - **XSUAA service key credentials are no longer stored locally.** Only the access token (plus APIURL and expiry) is cached in `~/.bo/credentials.json` under `org_xsuaa[orgGUID]`. Client ID, client secret, and token URL are fetched from CF on demand each time a token refresh is needed and discarded immediately after.
   - `-y` / `--yes` flag removed from `users`, `role-collections`, and `describe-subaccount` (it was only used to skip service/key creation confirmation, which no longer happens); `-y` is retained in `delete-users` for the user deletion confirmation prompt
 
-- **`get/create/update/delete-space-destinations` — destination service key credentials no longer stored locally**
+- **`get-space-destinations` renamed to `space-destinations`**
+
+- **`space-destinations`/`create-space-destinations`/`update-space-destinations`/`delete-space-destinations` — destination service key credentials no longer stored locally**
   - Previously the destination service `clientId`, `clientSecret`, `tokenURL`, and `URI` were all cached in `~/.bo/credentials.json` under `space_dest_services`
   - Now only the access token, `tokenURL`, and `URI` are persisted; `clientId` and `clientSecret` are fetched from CF on demand whenever a new token is needed and discarded immediately after — they never touch the local disk
   - Token refresh behaviour (60-second expiry window) and the no-key interactive prompt are unchanged
@@ -41,7 +43,7 @@
 
 ### Added
 
-- **`get-space-destinations`** — list all instance-level destinations across every destination service instance in a CF space (identified by `--space <GUID>`)
+- **`space-destinations`** — list all instance-level destinations across every destination service instance in a CF space (identified by `--space <GUID>`)
   - Calls `GET /destination-configuration/v1/instanceDestinations` for each instance
   - Default output (TOON or JSON with `--format json`): `{space_id, space_name, destination_service_instances: [{id, name, destinations: [{Name, Type, Authentication, URL, sap-client}]}]}`
   - `--all` flag: adds a `properties` section to each destination with all remaining non-sensitive keys, sorted alphabetically
@@ -52,17 +54,17 @@
 - **`create-space-destinations`** — create instance-level destinations in every destination service instance of a CF space
   - Reads a JSON array from `--destinations` and calls `POST /v1/instanceDestinations` for each instance
   - Prints per-destination status when the API returns a bulk response (HTTP 207)
-  - Same credential caching and no-key prompt as `get-space-destinations`
+  - Same credential caching and no-key prompt as `space-destinations`
 
 - **`update-space-destinations`** — update (overwrite) instance-level destinations in every destination service instance of a CF space
   - Reads a JSON array from `--destinations` and calls `PUT /v1/instanceDestinations` for each instance
   - Overwrites existing destinations with matching names; others are left unchanged
-  - Same credential caching and no-key prompt as `get-space-destinations`
+  - Same credential caching and no-key prompt as `space-destinations`
 
 - **`delete-space-destinations`** — delete named instance-level destinations from every destination service instance of a CF space
   - Reads `Name` fields from the `--destinations` JSON array and calls `DELETE /v1/instanceDestinations/{name}` per name per instance
   - Idempotent: non-existent destinations are silently skipped (HTTP 404 treated as success)
-  - Same credential caching and no-key prompt as `get-space-destinations`
+  - Same credential caching and no-key prompt as `space-destinations`
 
 - **`reorg-wiki-attachments [path]`** — reorganize wiki attachments from a flat `.attachments/` folder into per-page subdirectories
   - Inventories all files in `[path]/.attachments/`; scans all `.md` pages in alphabetical order

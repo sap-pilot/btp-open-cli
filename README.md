@@ -514,7 +514,7 @@ rolecollections:
         role_name: User and Role Administrator
 ```
 
-### `get-space-destinations`
+### `space-destinations`
 
 List all instance-level destinations across every destination service instance found in a given CF space.
 
@@ -522,16 +522,16 @@ The first available service key of each destination service instance is used to 
 
 ```bash
 # List destinations in a space (TOON output)
-bo get-space-destinations --space <space-guid>
+bo space-destinations --space <space-guid>
 
 # JSON output
-bo get-space-destinations --space <space-guid> --format json
+bo space-destinations --space <space-guid> --format json
 
 # Include all non-sensitive destination properties (not just the 5 standard fields)
-bo get-space-destinations --space <space-guid> --all
+bo space-destinations --space <space-guid> --all
 
 # Scope region search
-bo get-space-destinations --space <space-guid> --regions us10,eu10
+bo space-destinations --space <space-guid> --regions us10,eu10
 ```
 
 Output format (TOON, default):
@@ -560,7 +560,7 @@ With `--all`, each destination gains a `properties` section containing all remai
 
 Create instance-level destinations in every destination service instance within a given CF space.
 
-Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/instanceDestinations`) to each destination service instance in the space. Credential handling (fetch key on demand, cache only the token) and the no-key interactive prompt work the same way as `get-space-destinations`.
+Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/instanceDestinations`) to each destination service instance in the space. Credential handling (fetch key on demand, cache only the token) and the no-key interactive prompt work the same way as `space-destinations`.
 
 ```bash
 bo create-space-destinations --space <space-guid> --destinations ./destinations.json
@@ -830,7 +830,7 @@ bo delete-org-space-users --help
 bo users --help
 bo delete-users --help
 bo describe-subaccount --help
-bo get-space-destinations --help
+bo space-destinations --help
 bo create-space-destinations --help
 bo update-space-destinations --help
 bo delete-space-destinations --help
