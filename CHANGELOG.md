@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`org-spaces`** — new command to list all accessible CF organizations and their spaces
+  - Fetches orgs and all spaces per region in parallel (one batched spaces query per region rather than one per org)
+  - TOON output (default): `{regions:[{region, orgs:[{org_id, org_name, spaces:[{space_id, space_name}]}]}]}`
+  - JSON output: `--format json`
+  - CSV output: `--format csv` — columns `region,org_id,org_name,space_id,space_name`, one row per space; orgs with no spaces emit a single row with empty space columns
+  - Spaces within each org are sorted alphabetically by name
+
 - **`clear-logs`** — new command to delete all daily log files under `~/.bo/log/`
   - Shows a count and asks `Proceed? [y/N]` before deleting
   - `-y` skips the confirmation prompt

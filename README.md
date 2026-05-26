@@ -133,6 +133,40 @@ bo orgs --regions us10 | grep prod > prod-orgs.csv
 bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
 ```
 
+### `org-spaces`
+
+List all accessible CF organizations and their spaces.
+
+```bash
+# TOON output (default)
+bo org-spaces
+
+# JSON output
+bo org-spaces --format json
+
+# CSV output (region,org_id,org_name,space_id,space_name)
+bo org-spaces --format csv
+
+# Specific regions
+bo org-spaces --regions us10,eu10
+```
+
+TOON output format:
+```
+regions:
+  - region: us10
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+        spaces:
+          - space_id: <space-guid>
+            space_name: dev
+          - space_id: <space-guid>
+            space_name: prod
+```
+
+CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space. Orgs with no spaces emit a single row with empty `space_id` and `space_name` columns.
+
 ### `org-users`
 
 List all users across every accessible CF organization.
@@ -788,6 +822,7 @@ Run `bo <command> --help` for full flag descriptions and usage examples for any 
 ```bash
 bo login --help
 bo orgs --help
+bo org-spaces --help
 bo org-users --help
 bo org-space-users --help
 bo create-org-space-users --help
