@@ -15,6 +15,13 @@
   - Shows a count and asks `Proceed? [y/N]` before deleting
   - `-y` skips the confirmation prompt
 
+### Fixed
+
+- **`users`, `role-collections` — `--org` flag ignored during XSUAA discovery**
+  - Previously both commands called `resolveXsuaaClients` across all regions first, then applied the `--org` filter to the returned client list. This caused every region to be scanned for XSUAA instances even when the target org was known (e.g. specifying an eu20 org GUID would still scan and prompt on us20 orgs).
+  - `users`: `--org` (GUID) is now folded into the `includeOrgs` filter passed to `resolveXsuaaClients` before the call, so only the matching org is processed. Returns an explicit error if the org GUID is not found in any accessible region.
+  - `role-collections`: `--org` (GUID or case-insensitive name substring) now triggers a lightweight org pre-scan across all regions, resolves matching org GUIDs, then passes them as `includeOrgs` to `resolveXsuaaClients`. Returns an explicit error if no matching org is found.
+
 ### Changed
 
 - **`users`, `delete-users`, `role-collections`, `describe-subaccount` — XSUAA credential handling rewritten**

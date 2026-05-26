@@ -12,6 +12,7 @@ import (
 
 	toonenc "github.com/toon-format/toon-go"
 
+	"btp-open-cli/internal/cf"
 	"btp-open-cli/internal/store"
 	"btp-open-cli/internal/xsuaa"
 
@@ -120,23 +121,40 @@ If --regions is omitted the regions from the last login are used.`,
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		// Phase 1: resolve XSUAA tokens for all accessible orgs.
+		// When --org is specified, scan all regions to find the matching org(s)
+		// by exact GUID or case-insensitive name substring, then scope
+		// resolveXsuaaClients to only those orgs so other regions are not touched.
+		if orgFilter != "" {
+			fl := strings.ToLower(orgFilter)
+			for _, apiURL := range apiURLs {
+				tok, ok := creds.Tokens[apiURL]
+				if !ok {
+					continue
+				}
+				regionName := store.APIURLToRegion(apiURL)
+				cfClient := cf.NewClient(apiURL, tok.AccessToken)
+				cfClient.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
+				orgs, listErr := cfClient.ListOrganizations(ctx)
+				if listErr != nil {
+					fmt.Fprintf(os.Stderr, "[%s] error listing orgs: %v\n", regionName, listErr)
+					continue
+				}
+				for _, org := range orgs {
+					if strings.EqualFold(org.GUID, orgFilter) ||
+						strings.Contains(strings.ToLower(org.Name), fl) {
+						includeOrgs = append(includeOrgs, cosOrgRef{ID: org.GUID})
+					}
+				}
+			}
+			if len(includeOrgs) == 0 {
+				return fmt.Errorf("org %q not found in any accessible region", orgFilter)
+			}
+		}
+
+		// Phase 1: resolve XSUAA tokens for the target orgs.
 		clients, _, err := resolveXsuaaClients(ctx, apiURLs, creds, includeOrgs, excludeOrgs, noPrompt)
 		if err != nil {
 			return err
-		}
-
-		// Apply --org filter (exact GUID or case-insensitive name substring).
-		if orgFilter != "" {
-			fl := strings.ToLower(orgFilter)
-			var filtered []xsuaaOrgClient
-			for _, c := range clients {
-				if strings.EqualFold(c.OrgGUID, orgFilter) ||
-					strings.Contains(strings.ToLower(c.OrgName), fl) {
-					filtered = append(filtered, c)
-				}
-			}
-			clients = filtered
 		}
 
 		// Phase 2: fetch roles and role collections per org in parallel.
