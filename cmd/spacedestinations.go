@@ -265,20 +265,28 @@ func loadDestinationsJSON(path string) (json.RawMessage, []string, error) {
 	return json.RawMessage(data), names, nil
 }
 
-// printBulkResults prints per-item results from a bulk create/update response.
-func printBulkResults(cmd *cobra.Command, instName string, items []destination.BulkResponseItem) {
-	if len(items) == 0 {
-		return
-	}
-	for _, it := range items {
-		status := "OK"
-		if it.Status >= 300 || it.Status < 200 {
-			status = fmt.Sprintf("ERROR(%d)", it.Status)
+// printActionResults prints per-item create/update results.
+// action should be "created" or "updated".
+// When items is non-empty (bulk API response with per-item status), each
+// successful item prints "    {action}: {name}" and failures print to stderr.
+// When items is empty (simple 201/200 with no body), it falls back to printing
+// "    {action}: {name}" for every name in the names slice.
+func printActionResults(cmd *cobra.Command, action string, names []string, items []destination.BulkResponseItem) {
+	if len(items) > 0 {
+		for _, it := range items {
+			if it.Status >= 200 && it.Status < 300 {
+				fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", action, it.Name)
+			} else {
+				if it.Cause != "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR(%d): %s — %s\n", it.Status, it.Name, it.Cause)
+				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR(%d): %s\n", it.Status, it.Name)
+				}
+			}
 		}
-		if it.Cause != "" {
-			fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s: %s — %s\n", instName, it.Name, status, it.Cause)
-		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "  [%s] %s: %s\n", instName, it.Name, status)
+	} else {
+		for _, name := range names {
+			fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", action, name)
 		}
 	}
 }
@@ -424,7 +432,7 @@ has no service key; the user can create one and press Enter to retry.`,
 		destFile, _ := cmd.Flags().GetString("destinations")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 
-		rawBody, _, err := loadDestinationsJSON(destFile)
+		rawBody, names, err := loadDestinationsJSON(destFile)
 		if err != nil {
 			return err
 		}
@@ -454,11 +462,7 @@ has no service key; the user can create one and press Enter to retry.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %v\n", postErr)
 				continue
 			}
-			if len(items) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "    done\n")
-			} else {
-				printBulkResults(cmd, c.InstanceName, items)
-			}
+			printActionResults(cmd, "created", names, items)
 		}
 		return nil
 	},
@@ -482,7 +486,7 @@ has no service key; the user can create one and press Enter to retry.`,
 		destFile, _ := cmd.Flags().GetString("destinations")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 
-		rawBody, _, err := loadDestinationsJSON(destFile)
+		rawBody, names, err := loadDestinationsJSON(destFile)
 		if err != nil {
 			return err
 		}
@@ -512,11 +516,7 @@ has no service key; the user can create one and press Enter to retry.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %v\n", putErr)
 				continue
 			}
-			if len(items) == 0 {
-				fmt.Fprintf(cmd.OutOrStdout(), "    done\n")
-			} else {
-				printBulkResults(cmd, c.InstanceName, items)
-			}
+			printActionResults(cmd, "updated", names, items)
 		}
 		return nil
 	},
