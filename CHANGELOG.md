@@ -32,7 +32,10 @@
   - **XSUAA service key credentials are no longer stored locally.** Only the access token (plus APIURL and expiry) is cached in `~/.bo/credentials.json` under `org_xsuaa[orgGUID]`. Client ID, client secret, and token URL are fetched from CF on demand each time a token refresh is needed and discarded immediately after.
   - `-y` / `--yes` flag removed from `users`, `role-collections`, and `describe-subaccount` (it was only used to skip service/key creation confirmation, which no longer happens); `-y` is retained in `delete-users` for the user deletion confirmation prompt
 
-- **`get-space-destinations` renamed to `space-destinations`**
+- **`get-space-destinations` renamed to `space-destinations`**; output and flags reworked:
+  - Replaced `--all` flag with `--full`: without `--full` only `Name`, `URL`, and `sap-client` are shown; with `--full` all non-sensitive destination properties are emitted as a flat object (no nested `properties` array)
+  - Added `--filter <string|pattern>`: case-insensitive substring match or glob pattern (e.g. `MDG`, `API*PP`) tested against every destination property key and value; only matching destinations are included in output
+  - The filter is applied to the full property set before trimming to minimal fields, so it works correctly in both default and `--full` modes
 
 - **`space-destinations`/`create-space-destinations`/`update-space-destinations`/`delete-space-destinations` — destination service key credentials no longer stored locally**
   - Previously the destination service `clientId`, `clientSecret`, `tokenURL`, and `URI` were all cached in `~/.bo/credentials.json` under `space_dest_services`

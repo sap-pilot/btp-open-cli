@@ -521,20 +521,29 @@ List all instance-level destinations across every destination service instance f
 The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
 
 ```bash
-# List destinations in a space (TOON output)
+# List destinations in a space — default output: Name, URL, sap-client (TOON)
 bo space-destinations --space <space-guid>
 
 # JSON output
 bo space-destinations --space <space-guid> --format json
 
-# Include all non-sensitive destination properties (not just the 5 standard fields)
-bo space-destinations --space <space-guid> --all
+# Include all destination properties as a flat object
+bo space-destinations --space <space-guid> --full
+
+# Filter by substring (case-insensitive, matched against any property)
+bo space-destinations --space <space-guid> --filter MDG
+
+# Filter by glob pattern (* matches any sequence of characters)
+bo space-destinations --space <space-guid> --filter "API*PP"
+
+# Combine: full properties + filter
+bo space-destinations --space <space-guid> --full --filter "API*PP"
 
 # Scope region search
 bo space-destinations --space <space-guid> --regions us10,eu10
 ```
 
-Output format (TOON, default):
+Default output (TOON, without `--full`):
 ```
 space_id: <space-guid>
 space_name: dev
@@ -543,18 +552,14 @@ destination_service_instances:
     destination_service_name: my-dest-service
     destinations:
       - Name: API_S4_HTTP_PP
-        Type: HTTP
-        Authentication: PrincipalPropagation
         URL: http://qr1:443
         sap-client: "100"
       - Name: API_MDG_HTTP_PP
-        Type: HTTP
-        Authentication: PrincipalPropagation
         URL: http://qrg:443
         sap-client: "100"
 ```
 
-With `--all`, each destination gains a `properties` section containing all remaining non-sensitive keys (e.g. `ProxyType`, `WebIDESystem`, `HTML5.DynamicDestination`), sorted alphabetically.
+With `--full`, each destination is a flat object containing all non-sensitive properties returned by the destination API (e.g. `Type`, `Authentication`, `ProxyType`, `WebIDESystem`, `HTML5.DynamicDestination`, `Description`, etc.).
 
 ### `create-space-destinations`
 
