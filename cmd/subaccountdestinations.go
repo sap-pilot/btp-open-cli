@@ -215,9 +215,7 @@ func resolveOrgDestClient(
 	}
 
 	if c, ok := tryFindClient(); ok {
-		if saveErr := store.Save(creds); saveErr != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: saving destination credentials: %v\n", saveErr)
-		}
+		saveDestCache(cmd, creds)
 		return found.guid, found.name, c, nil
 	}
 
@@ -239,15 +237,11 @@ func resolveOrgDestClient(
 
 	// Retry once.
 	if c, ok := tryFindClient(); ok {
-		if saveErr := store.Save(creds); saveErr != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: saving destination credentials: %v\n", saveErr)
-		}
+		saveDestCache(cmd, creds)
 		return found.guid, found.name, c, nil
 	}
 
-	if saveErr := store.Save(creds); saveErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: saving destination credentials: %v\n", saveErr)
-	}
+	saveDestCache(cmd, creds)
 	return "", "", sdDestClient{},
 		fmt.Errorf("no destination service instance found in org %q after retry — aborting", found.name)
 }

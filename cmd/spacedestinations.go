@@ -235,11 +235,26 @@ func resolveSpaceDestClients(
 
 	// ── persist updated cache ─────────────────────────────────────────────────
 	creds.SpaceDestServices[spaceGUID] = spaceCache
-	if saveErr := store.Save(creds); saveErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: saving destination credentials: %v\n", saveErr)
-	}
+	saveDestCache(cmd, creds)
 
 	return spaceName, clients, nil
+}
+
+// saveDestCache reloads credentials from disk before saving so that any CF
+// token refresh written by the tokenRefresher (which operates on its own
+// store.Load copy) is not overwritten by the stale in-memory creds pointer.
+// Only SpaceDestServices is taken from creds; everything else comes from disk.
+func saveDestCache(cmd *cobra.Command, creds *store.Credentials) {
+	fresh, err := store.Load()
+	if err != nil {
+		// Disk read failed — fall back to saving what we have.
+		fresh = creds
+	} else {
+		fresh.SpaceDestServices = creds.SpaceDestServices
+	}
+	if saveErr := store.Save(fresh); saveErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: saving destination credentials: %v\n", saveErr)
+	}
 }
 
 // loadDestinationsJSON reads the destinations JSON file and returns the raw
