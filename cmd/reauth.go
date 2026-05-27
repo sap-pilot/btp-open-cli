@@ -3,7 +3,9 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -41,6 +43,61 @@ func readLine(ctx context.Context) (string, bool) {
 		return "", false
 	case r := <-ch:
 		return r.text, r.ok
+	}
+}
+
+// readPasswordCtx reads a password or passcode from stdin without echoing,
+// honouring context cancellation. Unlike term.ReadPassword, pressing Ctrl-C
+// is detected immediately (byte 0x03 in raw mode) and returns context.Canceled.
+// Falls back to term.ReadPassword when the terminal cannot be put into raw mode
+// (e.g. stdin is a pipe).
+func readPasswordCtx(ctx context.Context) ([]byte, error) {
+	fd := int(os.Stdin.Fd())
+
+	oldState, err := term.GetState(fd)
+	if err != nil {
+		// Not a terminal — fall back; Ctrl-C behaviour is OS-dependent.
+		return term.ReadPassword(fd)
+	}
+	if _, err := term.MakeRaw(fd); err != nil {
+		return term.ReadPassword(fd)
+	}
+	defer term.Restore(fd, oldState) //nolint:errcheck
+
+	var pw []byte
+	buf := make([]byte, 1)
+	for {
+		// Honour external context cancellation between keystrokes.
+		select {
+		case <-ctx.Done():
+			return nil, context.Canceled
+		default:
+		}
+
+		n, readErr := os.Stdin.Read(buf)
+		if readErr != nil {
+			if readErr == io.EOF {
+				return pw, nil
+			}
+			return nil, readErr
+		}
+		if n == 0 {
+			continue
+		}
+		switch buf[0] {
+		case 3: // Ctrl-C — in raw mode ISIG is disabled so no signal is raised
+			return nil, context.Canceled
+		case 4: // Ctrl-D (EOF)
+			return pw, nil
+		case '\r', '\n':
+			return pw, nil
+		case 127, 8: // DEL / Backspace
+			if len(pw) > 0 {
+				pw = pw[:len(pw)-1]
+			}
+		default:
+			pw = append(pw, buf[0])
+		}
 	}
 }
 
@@ -131,10 +188,10 @@ func promptPassword(ctx context.Context, tokenEndpoint, regionName string) (*cf.
 		return nil, fmt.Errorf("email cannot be empty")
 	}
 	fmt.Fprintf(os.Stdout, "%s Password> ", regionName)
-	pwBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	pwBytes, err := readPasswordCtx(ctx)
 	fmt.Fprintln(os.Stdout)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) {
 			return nil, fmt.Errorf("aborted")
 		}
 		return nil, err
@@ -148,10 +205,10 @@ func promptPassword(ctx context.Context, tokenEndpoint, regionName string) (*cf.
 // promptSSO prompts for a one-time SSO passcode and returns tokens.
 func promptSSO(ctx context.Context, authEndpoint, regionName string) (*cf.TokenResponse, error) {
 	fmt.Fprintf(os.Stdout, "%s Passcode> ", regionName)
-	codeBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	codeBytes, err := readPasswordCtx(ctx)
 	fmt.Fprintln(os.Stdout)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) {
 			return nil, fmt.Errorf("aborted")
 		}
 		return nil, err
