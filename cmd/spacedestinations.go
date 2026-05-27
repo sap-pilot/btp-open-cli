@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -320,9 +321,15 @@ Use --all to include all non-sensitive destination properties.`,
 		}
 
 		// Fetch instance destinations from each client.
+		// For --full, include sensitive properties (password, clientSecret, etc.).
+		fetchFn := destination.ListInstanceDestinations
+		if full {
+			fetchFn = destination.ListInstanceDestinationsFull
+		}
+
 		var instDocs []sdDestSvcInstance
 		for _, c := range clients {
-			rawDests, fetchErr := destination.ListInstanceDestinations(ctx, c.URI, c.Token)
+			rawDests, fetchErr := fetchFn(ctx, c.URI, c.Token)
 			if fetchErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing instance destinations: %v\n", c.InstanceName, fetchErr)
 				instDocs = append(instDocs, sdDestSvcInstance{ID: c.InstanceGUID, Name: c.InstanceName})
@@ -330,7 +337,7 @@ Use --all to include all non-sensitive destination properties.`,
 			}
 			var dests []map[string]string
 			for _, raw := range rawDests {
-				// Apply --filter against the full property set (before trimming).
+				// Apply --filter against the full property set (before any trimming).
 				if !sdMatchesFilter(raw, filter) {
 					continue
 				}
@@ -354,14 +361,33 @@ Use --all to include all non-sensitive destination properties.`,
 			Instances: instDocs,
 		}
 
-		switch strings.ToLower(format) {
-		case "json":
+		switch {
+		case strings.ToLower(format) == "json":
+			// JSON: flat objects for all modes.
 			out, err := json.MarshalIndent(doc, "", "  ")
 			if err != nil {
 				return fmt.Errorf("encoding JSON: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+
+		case !full:
+			// Default TOON without --full: tabular CSV output.
+			// Columns: destination_service_name, Name, URL, sap-client
+			w := csv.NewWriter(cmd.OutOrStdout())
+			defer w.Flush()
+			if err := w.Write([]string{"destination_service_name", "Name", "URL", "sap-client"}); err != nil {
+				return err
+			}
+			for _, inst := range instDocs {
+				for _, d := range inst.Destinations {
+					if err := w.Write([]string{inst.Name, d["Name"], d["URL"], d["sap-client"]}); err != nil {
+						return err
+					}
+				}
+			}
+
 		default:
+			// TOON with --full: nested structure with all properties.
 			out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 			if err != nil {
 				return fmt.Errorf("encoding TOON: %w", err)
