@@ -61,6 +61,8 @@
   - Now only the access token, `tokenURL`, and `URI` are persisted; `clientId` and `clientSecret` are fetched from CF on demand whenever a new token is needed and discarded immediately after — they never touch the local disk
   - Token refresh behaviour (60-second expiry window) and the no-key interactive prompt are unchanged
 
+- **`create-space-destinations`, `update-space-destinations`, `create-subaccount-destinations`, `update-subaccount-destinations`** — success output changed from a generic `done` to per-destination lines (`created: {name}` / `updated: {name}`), consistent with the `deleted: {name}` output of the delete commands; when the destination service returns a bulk response (HTTP 207), per-item status is used; otherwise the names from the input file are used
+
 - **`logoff`** — now also clears cached destination service access tokens (`space_dest_services`) in addition to CF region tokens and XSUAA tokens
 
 ### Internals
@@ -69,6 +71,7 @@
 - `internal/store/token.go`: removed `ClientID`/`ClientSecret`/`URL` fields from `XsuaaData` (only `APIURL`, `AccessToken`, `TokenExpiry` remain); removed `ClientID`/`ClientSecret` from `DestInstanceCache` (only `InstanceName`, `TokenURL`, `URI`, `AccessToken`, `TokenExpiry` remain); `ClearTokens()` now also zeroes `SpaceDestServices`
 - `cmd/subaccountdestinations.go`: new file; `resolveOrgDestClient` helper scans all regions to locate the target org (by GUID or name), lists all spaces, finds any destination/lite instance, refreshes token on demand (caching only access token + tokenURL + URI in `SpaceDestServices`); credentials never stored
 - `internal/destination/client.go`: refactored `ListSubaccountDestinations` into a shared `listSubaccountDestinations(redact bool)` helper; added `ListSubaccountDestinationsFull`, `CreateSubaccountDestinations`, `UpdateSubaccountDestinations`, `DeleteSubaccountDestination`; switched local `client` to module-level `httpClient`
+- `cmd/spacedestinations.go`: replaced `printBulkResults` with `printActionResults(cmd, action, names, items)` — when the API returns a bulk response, prints `created/updated: {name}` per success and `ERROR({status}): {name}` per failure; when the API returns no body (simple 201/200), falls back to printing `created/updated: {name}` for each name in the input file
 
 ## v0.6 — 2026-05-26
 

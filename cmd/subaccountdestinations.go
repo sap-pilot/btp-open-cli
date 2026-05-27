@@ -381,7 +381,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 
-		rawBody, _, err := loadDestinationsJSON(destFile)
+		rawBody, names, err := loadDestinationsJSON(destFile)
 		if err != nil {
 			return err
 		}
@@ -409,11 +409,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		if postErr != nil {
 			return fmt.Errorf("creating subaccount destinations: %w", postErr)
 		}
-		if len(items) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "done")
-		} else {
-			printBulkResults(cmd, destClient.InstanceName, items)
-		}
+		printActionResults(cmd, "created", names, items)
 		return nil
 	},
 }
@@ -438,7 +434,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 
-		rawBody, _, err := loadDestinationsJSON(destFile)
+		rawBody, names, err := loadDestinationsJSON(destFile)
 		if err != nil {
 			return err
 		}
@@ -466,11 +462,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		if putErr != nil {
 			return fmt.Errorf("updating subaccount destinations: %w", putErr)
 		}
-		if len(items) == 0 {
-			fmt.Fprintln(cmd.OutOrStdout(), "done")
-		} else {
-			printBulkResults(cmd, destClient.InstanceName, items)
-		}
+		printActionResults(cmd, "updated", names, items)
 		return nil
 	},
 }
