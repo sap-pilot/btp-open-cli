@@ -52,12 +52,17 @@ func resolveOrgDestClient(
 ) (orgGUID, orgName string, client sdDestClient, err error) {
 
 	// ── step 1: find the org across regions ──────────────────────────────────
+	// The client that successfully lists orgs is reused for all subsequent CF
+	// calls. This avoids creating a second client from the stale in-memory token
+	// (creds.Tokens) if the first client already triggered a token refresh.
 	type foundOrg struct {
-		guid       string
-		name       string
-		regionURL  string
+		guid string
+		name string
 	}
-	var found *foundOrg
+	var (
+		found    *foundOrg
+		cfClient *cf.Client
+	)
 
 	fl := strings.ToLower(orgFlag)
 	for _, apiURL := range apiURLs {
@@ -74,7 +79,8 @@ func resolveOrgDestClient(
 		}
 		for _, org := range orgs {
 			if strings.EqualFold(org.GUID, orgFlag) || strings.Contains(strings.ToLower(org.Name), fl) {
-				found = &foundOrg{guid: org.GUID, name: org.Name, regionURL: apiURL}
+				found = &foundOrg{guid: org.GUID, name: org.Name}
+				cfClient = c
 				break
 			}
 		}
@@ -86,12 +92,7 @@ func resolveOrgDestClient(
 		return "", "", sdDestClient{}, fmt.Errorf("org %q not found in any accessible region", orgFlag)
 	}
 
-	// ── step 2: build CF client for the org's region ─────────────────────────
-	tok := creds.Tokens[found.regionURL]
-	cfClient := cf.NewClient(found.regionURL, tok.AccessToken)
-	cfClient.SetTokenRefresher(makeTokenRefresher(found.regionURL, tok.AccessToken))
-
-	// ── step 3: look up destination/lite plan ────────────────────────────────
+	// ── step 2: look up destination/lite plan (reuse the client with fresh token)
 	destPlan, planErr := cfClient.FindServicePlan(ctx, "destination", "lite")
 	if planErr != nil {
 		return "", "", sdDestClient{}, fmt.Errorf("looking up destination service plan: %w", planErr)
@@ -99,7 +100,7 @@ func resolveOrgDestClient(
 	if destPlan == nil {
 		return "", "", sdDestClient{},
 			fmt.Errorf("destination service plan 'lite' not found in region %s",
-				store.APIURLToRegion(found.regionURL))
+				store.APIURLToRegion(cfClient.BaseURL()))
 	}
 
 	// ── step 4: scan all spaces in the org for a usable instance ─────────────

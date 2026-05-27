@@ -98,9 +98,12 @@ func resolveSpaceDestClients(
 ) (spaceName string, clients []sdDestClient, err error) {
 
 	// ── find the space and its CF client ─────────────────────────────────────
+	// The client that successfully finds the space is reused for all subsequent
+	// CF calls. This avoids creating a second client from the stale in-memory
+	// token (creds.Tokens) when the first client already triggered a refresh.
 	var (
-		spaceRegionAPIURL string
-		spaceObj          *cf.Space
+		spaceObj *cf.Space
+		cfClient *cf.Client
 	)
 	for _, apiURL := range apiURLs {
 		tok, ok := creds.Tokens[apiURL]
@@ -114,7 +117,7 @@ func resolveSpaceDestClients(
 			continue
 		}
 		spaceObj = s
-		spaceRegionAPIURL = apiURL
+		cfClient = c
 		break
 	}
 	if spaceObj == nil {
@@ -122,17 +125,12 @@ func resolveSpaceDestClients(
 	}
 	spaceName = spaceObj.Name
 
-	// ── find destination service plan in this region ──────────────────────────
-	tok := creds.Tokens[spaceRegionAPIURL]
-	cfClient := cf.NewClient(spaceRegionAPIURL, tok.AccessToken)
-	cfClient.SetTokenRefresher(makeTokenRefresher(spaceRegionAPIURL, tok.AccessToken))
-
 	destPlan, planErr := cfClient.FindServicePlan(ctx, "destination", "lite")
 	if planErr != nil {
 		return spaceName, nil, fmt.Errorf("looking up destination service plan: %w", planErr)
 	}
 	if destPlan == nil {
-		return spaceName, nil, fmt.Errorf("destination service plan 'lite' not found in region %s", store.APIURLToRegion(spaceRegionAPIURL))
+		return spaceName, nil, fmt.Errorf("destination service plan 'lite' not found in region %s", store.APIURLToRegion(cfClient.BaseURL()))
 	}
 
 	// ── find destination service instances in the space ───────────────────────
