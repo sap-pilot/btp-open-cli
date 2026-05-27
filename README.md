@@ -12,6 +12,8 @@ Open-source CLI for SAP BTP — bulk-manage users, apps and services across mult
 
 - **AI-agent ready.** Every command is a self-contained, scriptable binary with structured output (TOON, JSON, CSV). Commands can be wired directly into AI agents and automation pipelines today, and will continue to work as agentic tooling matures.
 
+![btp-open-cli vs other BTP/CF CLIs](./doc/img/btp-cli-comparison.png)
+
 ## Installation
 
 ### Option A — Download pre-built binary (recommended)
@@ -29,7 +31,7 @@ Invoke-WebRequest -Uri "https://github.com/sap-pilot/btp-open-cli/releases/lates
 Start using the CLI:
 
 ```powershell
-.\bo.exe login --regions us10
+.\bo.exe login --regions us10,us20
 ```
 
 #### Linux
@@ -37,7 +39,7 @@ Start using the CLI:
 ```bash
 wget -O bo https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-linux-amd64
 chmod +x ./bo
-./bo login --regions us10
+./bo login --regions us10,us20
 ```
 
 #### macOS (Apple Silicon)
@@ -45,7 +47,7 @@ chmod +x ./bo
 ```bash
 wget -O bo https://github.com/sap-pilot/btp-open-cli/releases/latest/download/bo-darwin-arm64
 chmod +x ./bo
-./bo login --regions us10
+./bo login --regions us10,us20
 ```
 
 > **macOS Gatekeeper:** if macOS blocks the binary, run `xattr -d com.apple.quarantine ./bo` to remove the quarantine flag, then retry.
@@ -117,13 +119,13 @@ Authenticate against one or more SAP BTP Cloud Foundry regions.
 bo login --region us10
 
 # Interactive password login (multiple regions)
-bo login --regions us10,eu10
+bo login --regions us10,us20,eu10
 
 # Non-interactive login for CI/CD (e.g. GitHub Actions)
-bo login --regions us10,eu10 -u user@example.com -p secret
+bo login --regions us10,us20,eu10 -u user@example.com -p secret
 
 # SSO passcode login
-bo login --sso --regions us10,eu10
+bo login --sso --regions us10,us20,eu10
 ```
 
 Regions are persisted — subsequent commands reuse them if `--regions` is not specified.
@@ -161,13 +163,13 @@ accepted by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`,
 bo orgs
 
 # Specific regions
-bo orgs --regions us10,eu10
+bo orgs --regions us10,us20,eu10
 
 # Save to a file for use as --orgs / --excludeOrgs input
-bo orgs --regions us10 > my-orgs.csv
+bo orgs --regions us10,us20 > my-orgs.csv
 
 # Exclude production orgs when creating users
-bo orgs --regions us10 | grep prod > prod-orgs.csv
+bo orgs --regions us10,us20 | grep prod > prod-orgs.csv
 bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
 ```
 
@@ -186,7 +188,7 @@ bo org-spaces --format json
 bo org-spaces --format csv
 
 # Specific regions
-bo org-spaces --regions us10,eu10
+bo org-spaces --regions us10,us20,eu10
 ```
 
 TOON output format:
@@ -223,7 +225,7 @@ bo org-users --format csv
 bo org-users --filter manager
 
 # Specific regions
-bo org-users --regions us10,eu10
+bo org-users --regions us10,us20,eu10
 ```
 
 ### `org-space-users`
@@ -244,7 +246,7 @@ bo org-space-users --format csv
 bo org-space-users --filter space_developer
 
 # Specific regions
-bo org-space-users --regions us10,eu10
+bo org-space-users --regions us10,us20,eu10
 ```
 
 ### `create-org-space-users`
@@ -274,7 +276,7 @@ bo create-org-space-users --users users.csv --orgs target-orgs.csv
 bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
 
 # Specific regions
-bo create-org-space-users --users users.csv --regions us10,eu10
+bo create-org-space-users --users users.csv --regions us10,us20,eu10
 ```
 
 Without `-y`, a TOON preview of target orgs/spaces and users is shown before any changes are made.
@@ -297,7 +299,7 @@ bo delete-org-space-users --users users.csv
 bo delete-org-space-users --users users.csv -y
 
 # Specific regions
-bo delete-org-space-users --users users.csv --regions us10,eu10
+bo delete-org-space-users --users users.csv --regions us10,us20,eu10
 ```
 
 Without `-y`, a TOON preview of all roles that will be deleted is shown before any changes are made.
@@ -318,7 +320,7 @@ bo users
 bo users --no-prompt
 
 # Scope to specific regions
-bo users --regions us10,eu10
+bo users --regions us10,us20,eu10
 
 # Fetch users from a single org by GUID
 bo users --org <org-guid>
@@ -340,7 +342,7 @@ bo users --fields user_id,userName,email,user_origin
 bo users --excludeFields lastLogonTime,groups
 
 # Combine filtering and field selection
-bo users --filter "sap.ids" --excludeFields groups --regions us10
+bo users --filter "sap.ids" --excludeFields groups --regions us10,us20
 ```
 
 Output format (TOON):
@@ -387,7 +389,7 @@ bo delete-users --users delete-users.csv -y
 bo delete-users --users delete-users.csv --no-prompt
 
 # Scope to specific regions
-bo delete-users --users delete-users.csv --regions us10,eu10
+bo delete-users --users delete-users.csv --regions us10,us20,eu10
 
 # Include only specific orgs (CSV: region,org_id,org_name)
 bo delete-users --users delete-users.csv --orgs target-orgs.csv
@@ -432,7 +434,7 @@ bo role-collections
 bo role-collections --no-prompt
 
 # Scope to specific regions
-bo role-collections --regions us10,eu10
+bo role-collections --regions us10,us20,eu10
 
 # Fetch roles and role collections from a single org by name or GUID
 bo role-collections --org <org-name-or-guid>
@@ -501,7 +503,7 @@ bo describe-subaccount --org my-org-name --format json
 bo describe-subaccount --org my-org-name --no-prompt
 
 # Scope region search
-bo describe-subaccount --org my-org-name --regions us10,eu10
+bo describe-subaccount --org my-org-name --regions us10,us20,eu10
 ```
 
 Output format (TOON):
@@ -582,7 +584,7 @@ bo space-destinations --space <space-guid> --filter "API*PP"
 bo space-destinations --space <space-guid> --full --filter "API*PP"
 
 # Scope region search
-bo space-destinations --space <space-guid> --regions us10,eu10
+bo space-destinations --space <space-guid> --regions us10,us20,eu10
 ```
 
 Default TOON output (without `--full`):
@@ -620,7 +622,7 @@ Reads a JSON array of destination objects from `--destinations` and POSTs them (
 bo create-space-destinations --space <space-guid> --destinations ./destinations.json
 
 # Scope region search
-bo create-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,eu10
+bo create-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,us20,eu10
 ```
 
 The JSON file format (`--destinations`):
@@ -647,7 +649,7 @@ Reads a JSON array from `--destinations` and PUTs them (`PUT /v1/instanceDestina
 bo update-space-destinations --space <space-guid> --destinations ./destinations.json
 
 # Scope region search
-bo update-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,eu10
+bo update-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,us20,eu10
 ```
 
 The `--destinations` JSON format is the same as `create-space-destinations`.
@@ -662,7 +664,7 @@ Reads the `Name` field from each entry in the `--destinations` JSON array and is
 bo delete-space-destinations --space <space-guid> --destinations ./destinations.json
 
 # Scope region search
-bo delete-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,eu10
+bo delete-space-destinations --space <space-guid> --destinations ./destinations.json --regions us10,us20,eu10
 ```
 
 Only the `Name` field is read from the JSON file; all other properties are ignored.
@@ -699,7 +701,7 @@ bo subaccount-destinations --org <org-guid-or-name> --filter "API*PP"
 bo subaccount-destinations --org <org-guid-or-name> --no-prompt
 
 # Scope region search
-bo subaccount-destinations --org <org-guid-or-name> --regions us10,eu10
+bo subaccount-destinations --org <org-guid-or-name> --regions us10,us20,eu10
 ```
 
 Default TOON output (without `--full`):
@@ -737,7 +739,7 @@ bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./dest
 bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --no-prompt
 
 # Scope region search
-bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,eu10
+bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,us20,eu10
 ```
 
 The JSON file format (`--destinations`):
@@ -767,7 +769,7 @@ bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./dest
 bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --no-prompt
 
 # Scope region search
-bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,eu10
+bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,us20,eu10
 ```
 
 The `--destinations` JSON format is the same as `create-subaccount-destinations`.
@@ -785,7 +787,7 @@ bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./dest
 bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --no-prompt
 
 # Scope region search
-bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,eu10
+bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,us20,eu10
 ```
 
 Only the `Name` field is read from the JSON file; all other properties are ignored.
@@ -807,7 +809,7 @@ bo apps --format json
 bo apps --format csv
 
 # Scope to specific regions
-bo apps --regions us10,eu10
+bo apps --regions us10,us20,eu10
 
 # Scope to a single org by GUID
 bo apps --org <org-guid>
@@ -824,7 +826,7 @@ bo apps --filter STARTED
 bo apps --filter "my-mta-id"
 
 # Combine flags
-bo apps --regions us10 --orgs my-orgs.csv --format csv --filter STARTED
+bo apps --regions us10,us20 --orgs my-orgs.csv --format csv --filter STARTED
 ```
 
 Output format (TOON):
@@ -952,7 +954,7 @@ Every `bo` invocation appends its full output to a daily log file under `~/.bo/l
 Each entry is separated by a header line that includes the timestamp and the exact command that was run:
 
 ```
-=== 2026-05-18 14:30:00 bo org-users --regions us10 ===
+=== 2026-05-18 14:30:00 bo org-users --regions us10,us20 ===
 ... command output ...
 
 === 2026-05-18 14:31:05 bo users --filter sap.ids ===
@@ -985,7 +987,7 @@ mitmweb --listen-port 8080
 
 # Terminal 2 — run any bo command through the proxy
 HTTPS_PROXY=http://127.0.0.1:8080 HTTPS_PROXY_INSECURE=true bo org-users
-HTTPS_PROXY=http://127.0.0.1:8080 HTTPS_PROXY_INSECURE=true bo login --regions us10
+HTTPS_PROXY=http://127.0.0.1:8080 HTTPS_PROXY_INSECURE=true bo login --regions us10,us20
 ```
 
 Open `http://127.0.0.1:8081` in a browser to browse captured requests interactively.
