@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -21,26 +22,10 @@ import (
 
 // ── output types ──────────────────────────────────────────────────────────────
 
-type sdDestProp struct {
-	Key   string `json:"key"   toon:"key"`
-	Value string `json:"value" toon:"value"`
-}
-
-// sdDestination holds the standard summary fields for one instance destination.
-// When --all is specified, Properties is also populated with remaining keys.
-type sdDestination struct {
-	Name           string       `json:"Name"           toon:"Name"`
-	Type           string       `json:"Type"           toon:"Type"`
-	Authentication string       `json:"Authentication" toon:"Authentication"`
-	URL            string       `json:"URL"            toon:"URL"`
-	SapClient      string       `json:"sap-client"     toon:"sap-client"`
-	Properties     []sdDestProp `json:"properties,omitempty" toon:"properties"`
-}
-
 type sdDestSvcInstance struct {
-	ID           string          `json:"destination_service_id"   toon:"destination_service_id"`
-	Name         string          `json:"destination_service_name" toon:"destination_service_name"`
-	Destinations []sdDestination `json:"destinations"             toon:"destinations"`
+	ID           string              `json:"destination_service_id"   toon:"destination_service_id"`
+	Name         string              `json:"destination_service_name" toon:"destination_service_name"`
+	Destinations []map[string]string `json:"destinations"             toon:"destinations"`
 }
 
 type sdSpaceDoc struct {
@@ -49,32 +34,44 @@ type sdSpaceDoc struct {
 	Instances []sdDestSvcInstance `json:"destination_service_instances" toon:"destination_service_instances"`
 }
 
-// sdStandardKeys are the core destination keys shown even without --all.
-// Comparison should be case-insensitive.
-var sdStandardKeys = map[string]bool{
-	"name": true, "type": true, "authentication": true, "url": true, "sap-client": true,
+// sdMinimalDest returns a copy of the destination map containing only the
+// Name, URL, and sap-client properties.
+func sdMinimalDest(raw map[string]string) map[string]string {
+	m := make(map[string]string, 3)
+	for _, k := range []string{"Name", "URL", "sap-client"} {
+		if v, ok := raw[k]; ok {
+			m[k] = v
+		}
+	}
+	return m
 }
 
-func buildSDDestination(m map[string]string, showAll bool) sdDestination {
-	d := sdDestination{
-		Name:           m["Name"],
-		Type:           m["Type"],
-		Authentication: m["Authentication"],
-		URL:            m["URL"],
-		SapClient:      m["sap-client"],
+// sdMatchesFilter reports whether a destination matches the filter. The filter
+// is tested case-insensitively against every property value (and key). When
+// the filter contains glob metacharacters (* ? [) filepath.Match is used;
+// otherwise a substring match is performed.
+func sdMatchesFilter(dest map[string]string, filter string) bool {
+	if filter == "" {
+		return true
 	}
-	if showAll {
-		var props []sdDestProp
-		for k, v := range m {
-			if sdStandardKeys[strings.ToLower(k)] {
-				continue
+	isGlob := strings.ContainsAny(filter, "*?[")
+	fl := strings.ToLower(filter)
+	for k, v := range dest {
+		kl, vl := strings.ToLower(k), strings.ToLower(v)
+		if isGlob {
+			if m, _ := filepath.Match(fl, vl); m {
+				return true
 			}
-			props = append(props, sdDestProp{Key: k, Value: v})
+			if m, _ := filepath.Match(fl, kl); m {
+				return true
+			}
+		} else {
+			if strings.Contains(vl, fl) || strings.Contains(kl, fl) {
+				return true
+			}
 		}
-		sort.Slice(props, func(i, j int) bool { return props[i].Key < props[j].Key })
-		d.Properties = props
 	}
-	return d
+	return false
 }
 
 // ── shared setup ──────────────────────────────────────────────────────────────
@@ -302,7 +299,8 @@ Use --all to include all non-sensitive destination properties.`,
 		spaceGUID, _ := cmd.Flags().GetString("space")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
-		showAll, _ := cmd.Flags().GetBool("all")
+		full, _ := cmd.Flags().GetBool("full")
+		filter, _ := cmd.Flags().GetString("filter")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -321,7 +319,7 @@ Use --all to include all non-sensitive destination properties.`,
 			return err
 		}
 
-		// Fetch instance destinations from each client
+		// Fetch instance destinations from each client.
 		var instDocs []sdDestSvcInstance
 		for _, c := range clients {
 			rawDests, fetchErr := destination.ListInstanceDestinations(ctx, c.URI, c.Token)
@@ -330,11 +328,19 @@ Use --all to include all non-sensitive destination properties.`,
 				instDocs = append(instDocs, sdDestSvcInstance{ID: c.InstanceGUID, Name: c.InstanceName})
 				continue
 			}
-			var dests []sdDestination
-			for _, d := range rawDests {
-				dests = append(dests, buildSDDestination(d, showAll))
+			var dests []map[string]string
+			for _, raw := range rawDests {
+				// Apply --filter against the full property set (before trimming).
+				if !sdMatchesFilter(raw, filter) {
+					continue
+				}
+				if full {
+					dests = append(dests, raw)
+				} else {
+					dests = append(dests, sdMinimalDest(raw))
+				}
 			}
-			sort.Slice(dests, func(i, j int) bool { return dests[i].Name < dests[j].Name })
+			sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
 			instDocs = append(instDocs, sdDestSvcInstance{
 				ID:           c.InstanceGUID,
 				Name:         c.InstanceName,
@@ -562,7 +568,8 @@ func init() {
 	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")
 	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
-	spaceDestinationsCmd.Flags().Bool("all", false, "Include all non-sensitive destination properties")
+	spaceDestinationsCmd.Flags().Bool("full", false, "Include all destination properties as a flat object (default: Name, URL, sap-client only)")
+	spaceDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern (e.g. MDG or API*PP) matched against any destination property")
 	_ = spaceDestinationsCmd.MarkFlagRequired("space")
 	rootCmd.AddCommand(spaceDestinationsCmd)
 
