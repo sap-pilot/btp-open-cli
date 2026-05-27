@@ -214,10 +214,31 @@ func UpdateInstanceDestinations(ctx context.Context, destURI, accessToken string
 	return items, nil
 }
 
+// deleteCountDeleted parses a destination-service delete response body of the
+// form {"Count":"1"} or {"Count":1} and reports whether anything was actually
+// removed. Any value > 0 (or unparseable body) is treated as deleted.
+func deleteCountDeleted(body []byte) bool {
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return true // 204-style: no body means success
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return true // unrecognised body — assume deleted
+	}
+	switch v := result["Count"].(type) {
+	case float64:
+		return v > 0
+	case string:
+		return v != "" && v != "0"
+	}
+	return true // field absent or unexpected type — assume deleted
+}
+
 // DeleteInstanceDestination deletes a single instance-level destination by name.
 // DELETE /destination-configuration/v1/instanceDestinations/{name}
 // Returns (true, nil) when the destination was deleted, (false, nil) when it did
-// not exist (404), and (false, err) for any other failure.
+// not exist (404 or Count==0), and (false, err) for any other failure.
 func DeleteInstanceDestination(ctx context.Context, destURI, accessToken, name string) (bool, error) {
 	u := instanceDestURL(destURI) + "/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
@@ -234,7 +255,9 @@ func DeleteInstanceDestination(ctx context.Context, destURI, accessToken, name s
 	resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent:
+	case http.StatusOK:
+		return deleteCountDeleted(body), nil
+	case http.StatusNoContent:
 		return true, nil
 	case http.StatusNotFound:
 		return false, nil
@@ -373,7 +396,7 @@ func UpdateSubaccountDestinations(ctx context.Context, destURI, accessToken stri
 // DeleteSubaccountDestination deletes a single subaccount-level destination by name.
 // DELETE /destination-configuration/v1/subaccountDestinations/{name}
 // Returns (true, nil) when the destination was deleted, (false, nil) when it did
-// not exist (404), and (false, err) for any other failure.
+// not exist (404 or Count==0), and (false, err) for any other failure.
 func DeleteSubaccountDestination(ctx context.Context, destURI, accessToken, name string) (bool, error) {
 	u := subaccountDestURL(destURI) + "/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
@@ -390,7 +413,9 @@ func DeleteSubaccountDestination(ctx context.Context, destURI, accessToken, name
 	resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent:
+	case http.StatusOK:
+		return deleteCountDeleted(body), nil
+	case http.StatusNoContent:
 		return true, nil
 	case http.StatusNotFound:
 		return false, nil

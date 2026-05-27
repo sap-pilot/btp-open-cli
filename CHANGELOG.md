@@ -63,7 +63,13 @@
 
 - **`create-space-destinations`, `update-space-destinations`, `create-subaccount-destinations`, `update-subaccount-destinations`** — success output changed from a generic `done` to per-destination lines (`created: {name}` / `updated: {name}`), consistent with the `deleted: {name}` output of the delete commands; when the destination service returns a bulk response (HTTP 207), per-item status is used; otherwise the names from the input file are used
 
-- **`delete-space-destinations`, `delete-subaccount-destinations`** — output now distinguishes between a destination that was actually deleted (`deleted: {name}`) and one that did not exist (`not found: {name}`); previously both cases printed `deleted: {name}` which was misleading
+- **`delete-space-destinations`, `delete-subaccount-destinations`** — output now correctly distinguishes between a destination that was actually deleted (`deleted: {name}`) and one that did not exist (`not found: {name}`):
+  - Previously HTTP 404 was already mapped to `not found`, but the service may also return HTTP 200 with body `{"Count":"0"}` when no matching destination was found; this case is now detected and reported as `not found` instead of the misleading `deleted`
+  - A new `deleteCountDeleted(body)` helper parses the `Count` field (accepting both string `"0"` and numeric `0` forms) to determine whether anything was removed
+
+- **`*-destinations` commands — intermittent `destination service plan 'lite' not found in region` error fixed**:
+  - `resolveSpaceDestClients` and `resolveOrgDestClient` previously created a second CF API client for plan/instance lookups using `creds.Tokens[apiURL]` from the in-memory credentials loaded at startup. If the first client (used to find the space/org) silently refreshed an expired token and saved the new token to disk, the in-memory copy remained stale, causing the second client to start with the expired token. Under certain CF platform conditions this resulted in an empty plan list (HTTP 200 with no resources) instead of a 401 that would be retried
+  - Fixed by reusing the same CF client instance throughout each resolver function — the client that finds the space/org already holds the fresh post-refresh token in memory and is now passed directly to all subsequent plan and instance lookups
 
 - **`logoff`** — now also clears cached destination service access tokens (`space_dest_services`) in addition to CF region tokens and XSUAA tokens
 
@@ -74,7 +80,8 @@
 - `cmd/subaccountdestinations.go`: new file; `resolveOrgDestClient` helper scans all regions to locate the target org (by GUID or name), lists all spaces, finds any destination/lite instance, refreshes token on demand (caching only access token + tokenURL + URI in `SpaceDestServices`); credentials never stored
 - `internal/destination/client.go`: refactored `ListSubaccountDestinations` into a shared `listSubaccountDestinations(redact bool)` helper; added `ListSubaccountDestinationsFull`, `CreateSubaccountDestinations`, `UpdateSubaccountDestinations`, `DeleteSubaccountDestination`; switched local `client` to module-level `httpClient`
 - `cmd/spacedestinations.go`: replaced `printBulkResults` with `printActionResults(cmd, action, names, items)` — when the API returns a bulk response, prints `created/updated: {name}` per success and `ERROR: {name} — {cause}` per failure; when the API returns no body (simple 201/200), falls back to printing `created/updated: {name}` for each name in the input file; the `cause` field is the authoritative error indicator — a non-empty `cause` means failure even when `status` is absent (0); a non-2xx `status` with no `cause` also signals failure
-- `internal/destination/client.go`: `DeleteInstanceDestination` and `DeleteSubaccountDestination` now return `(bool, error)` — `true` means deleted, `false` means not found (404), error for all other failures
+- `internal/destination/client.go`: `DeleteInstanceDestination` and `DeleteSubaccountDestination` now return `(bool, error)` — `true` means deleted, `false` means not found (404 or Count==0), error for all other failures; added `deleteCountDeleted(body)` helper to parse `{"Count":"N"}` responses
+- `cmd/spacedestinations.go` / `cmd/subaccountdestinations.go`: `resolveSpaceDestClients` and `resolveOrgDestClient` now reuse the CF client from the region-scanning loop rather than constructing a new one from the stale in-memory token
 
 ## v0.6 — 2026-05-26
 
