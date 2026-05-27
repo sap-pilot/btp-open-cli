@@ -80,7 +80,76 @@ go build -o bo
 mv bo ~/.local/bin/   # optional
 ```
 
-## Commands
+## Custom Command Development
+
+`btp-open-cli` is designed to be forked and extended. The `cmd/custom/` package is the dedicated home for commands that belong to your fork — they live alongside the built-in commands, build into the same binary, and are completely invisible to upstream merges.
+
+### How it works
+
+All commands — built-in and custom — are registered with Cobra's root command via `cmd.RegisterCommand`. Custom commands go in `cmd/custom/`, which is a plain Go package imported by `main.go` via a blank import:
+
+```go
+import (
+    "btp-open-cli/cmd"
+    _ "btp-open-cli/cmd/custom" // loads any custom commands
+)
+```
+
+### Adding a custom command
+
+1. **Copy the template** that ships with the repo:
+
+```bash
+cp cmd/custom/example_custom_command.go.template cmd/custom/hello.go
+```
+
+2. **Edit the new file.** The only rule: call `cmd.RegisterCommand(...)` inside `init()`.
+
+```go
+package custom
+
+import (
+    "fmt"
+
+    "btp-open-cli/cmd"
+
+    "github.com/spf13/cobra"
+)
+
+func init() {
+    cmd.RegisterCommand(&cobra.Command{
+        Use:   "hello",
+        Short: "Say hello (example custom command)",
+        RunE: func(c *cobra.Command, args []string) error {
+            fmt.Fprintln(c.OutOrStdout(), "Hello from a custom command!")
+            return nil
+        },
+    })
+}
+```
+
+3. **Build and run:**
+
+```bash
+go build -o bo .
+./bo hello
+# Hello from a custom command!
+```
+
+Your new command appears alongside all built-in commands in `./bo --help`.
+
+### Pulling upstream changes
+
+Because your custom files live in `cmd/custom/` and upstream only ever touches `cmd/*.go` (never `cmd/custom/`), a `git pull upstream main` will never conflict with your custom commands. Add new features, bump versions, pick up bug fixes — your commands are untouched.
+
+### Tips for vibe-coding new commands
+
+- Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
+- The `--format`, `--filter`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
+- For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
+- Run `go vet ./...` after adding a command to catch any import or signature issues before building.
+
+## Built-in Commands
 
 | Command | Description |
 |---|---|
