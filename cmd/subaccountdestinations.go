@@ -514,11 +514,13 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		fmt.Fprintf(cmd.OutOrStdout(), "Deleting %d subaccount destination(s) in org %s (via instance: %s)...\n",
 			len(names), orgName, destClient.InstanceName)
 		for _, name := range names {
-			delErr := destination.DeleteSubaccountDestination(ctx, destClient.URI, destClient.Token, name)
+			deleted, delErr := destination.DeleteSubaccountDestination(ctx, destClient.URI, destClient.Token, name)
 			if delErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "  ERROR deleting %q: %v\n", name, delErr)
+				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %s — %v\n", name, delErr)
+			} else if deleted {
+				fmt.Fprintf(cmd.OutOrStdout(), "    deleted: %s\n", name)
 			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "  deleted: %s\n", name)
+				fmt.Fprintf(cmd.OutOrStdout(), "    not found: %s\n", name)
 			}
 		}
 		return nil
