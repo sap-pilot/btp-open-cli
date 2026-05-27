@@ -629,6 +629,129 @@ bo delete-space-destinations --space <space-guid> --destinations ./destinations.
 
 Only the `Name` field is read from the JSON file; all other properties are ignored.
 
+### `subaccount-destinations`
+
+List all subaccount-level destinations using any destination service instance found in the target org.
+
+Unlike `space-destinations` (which queries instance-level destinations scoped to one CF space), `subaccount-destinations` calls `GET /destination-configuration/v1/subaccountDestinations` — destinations that are defined at the BTP subaccount/org level and available to all spaces within it. Any destination service instance found in any space of the target org is used to connect; only one instance is needed.
+
+Service key credentials (clientId, clientSecret) are fetched from CF on demand and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused until it expires or `bo logoff` is run. If no destination service instance or service key is found, a prompt prints CF CLI instructions to create them; use `--no-prompt` to skip.
+
+```bash
+# List subaccount destinations (default: Name, URL, sap-client) — TOON output
+bo subaccount-destinations --org <org-guid-or-name>
+
+# JSON output
+bo subaccount-destinations --org <org-guid-or-name> --format json
+
+# CSV output (org_name, destination_name, destination_url, destination_sap_client)
+bo subaccount-destinations --org <org-guid-or-name> --format csv
+
+# All destination properties as a flat object (TOON or JSON)
+bo subaccount-destinations --org <org-guid-or-name> --full
+bo subaccount-destinations --org <org-guid-or-name> --full --format json
+
+# Filter by substring (case-insensitive, matched against any property key or value)
+bo subaccount-destinations --org <org-guid-or-name> --filter MDG
+
+# Filter by glob pattern
+bo subaccount-destinations --org <org-guid-or-name> --filter "API*PP"
+
+# Skip interactive prompts if no destination service instance or key is found
+bo subaccount-destinations --org <org-guid-or-name> --no-prompt
+
+# Scope region search
+bo subaccount-destinations --org <org-guid-or-name> --regions us10,eu10
+```
+
+Default TOON output (without `--full`):
+```
+org_id: <org-guid>
+org_name: my-org
+destinations:
+  - Name: API_S4_HTTP_PP
+    URL: http://qr1:443
+    sap-client: "100"
+  - Name: API_MDG_HTTP_PP
+    URL: http://qrg:443
+    sap-client: "100"
+```
+
+CSV output (`--format csv`, without `--full`) — columns: `org_name,destination_name,destination_url,destination_sap_client`:
+```
+org_name,destination_name,destination_url,destination_sap_client
+my-org,API_S4_HTTP_PP,http://qr1:443,100
+my-org,API_MDG_HTTP_PP,http://qrg:443,100
+```
+
+With `--full`, each destination is a flat object containing all non-sensitive properties returned by the destination service API. CSV is not supported with `--full`.
+
+### `create-subaccount-destinations`
+
+Create subaccount-level destinations using any destination service instance found in the target org.
+
+Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/subaccountDestinations`) via a destination service instance found in any space of the target org. Credential handling (fetch key on demand, cache only the token) and the no-key interactive prompt work the same way as `subaccount-destinations`.
+
+```bash
+bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json
+
+# Skip interactive prompts
+bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --no-prompt
+
+# Scope region search
+bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,eu10
+```
+
+The JSON file format (`--destinations`):
+```json
+[
+  {
+    "Name": "API_S4_HTTP_PP",
+    "Type": "HTTP",
+    "URL": "http://qr1:443",
+    "Authentication": "PrincipalPropagation",
+    "ProxyType": "OnPremise",
+    "sap-client": "100"
+  }
+]
+```
+
+### `update-subaccount-destinations`
+
+Update (overwrite) subaccount-level destinations using any destination service instance found in the target org.
+
+Reads a JSON array from `--destinations` and PUTs them (`PUT /v1/subaccountDestinations`) via a destination service instance in the org. Existing destinations with matching names are overwritten; others are left unchanged.
+
+```bash
+bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json
+
+# Skip interactive prompts
+bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --no-prompt
+
+# Scope region search
+bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,eu10
+```
+
+The `--destinations` JSON format is the same as `create-subaccount-destinations`.
+
+### `delete-subaccount-destinations`
+
+Delete named subaccount-level destinations using any destination service instance found in the target org.
+
+Reads the `Name` field from each entry in the `--destinations` JSON array and issues `DELETE /v1/subaccountDestinations/{name}` for each. Non-existent destinations are silently ignored (idempotent).
+
+```bash
+bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json
+
+# Skip interactive prompts
+bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --no-prompt
+
+# Scope region search
+bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,eu10
+```
+
+Only the `Name` field is read from the JSON file; all other properties are ignored.
+
 ### `apps`
 
 List Cloud Foundry applications across all accessible organizations and spaces.

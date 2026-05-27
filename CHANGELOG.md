@@ -1,8 +1,26 @@
 # Changelog
 
-## v0.7 — 2026-05-26
+## v0.7 — 2026-05-27
 
 ### Added
+
+- **`subaccount-destinations`** — list subaccount-level destinations (`GET /v1/subaccountDestinations`) using any destination service instance found in any space of the target org (`--org`)
+  - `--full`: all non-sensitive destination properties as a flat object (default: Name, URL, sap-client only)
+  - `--filter <string|glob>`: case-insensitive substring or glob pattern matched against any destination property key or value; applied before field trimming
+  - `--format toon|json|csv` (csv not supported with `--full`); CSV columns: `org_name,destination_name,destination_url,destination_sap_client`
+  - `--no-prompt`: skip interactive prompts — fail immediately if no destination service instance or key is found
+  - TOON output: `{org_id, org_name, destinations: [{Name, URL, sap-client}]}`; with `--full` destinations include all non-sensitive properties
+
+- **`create-subaccount-destinations`** — POST a JSON array to `POST /v1/subaccountDestinations` via a destination service instance in the target org
+  - `--org` (required): org GUID or name substring
+  - `--destinations` (required): path to JSON file (array of destination objects)
+  - `--no-prompt`, `--regions` flags
+
+- **`update-subaccount-destinations`** — PUT a JSON array to `PUT /v1/subaccountDestinations` via a destination service instance in the target org; existing destinations with matching names are overwritten, others unchanged
+  - Same flags as `create-subaccount-destinations`
+
+- **`delete-subaccount-destinations`** — delete named destinations via `DELETE /v1/subaccountDestinations/{name}` for each `Name` in the JSON file; non-existent destinations are silently ignored (idempotent)
+  - Same flags as `create-subaccount-destinations`
 
 - **`org-spaces`** — new command to list all accessible CF organizations and their spaces
   - Fetches orgs and all spaces per region in parallel (one batched `GET /v3/spaces?per_page=5000` per region rather than one per org)
@@ -49,6 +67,8 @@
 
 - `cmd/xsuaasetup.go`: removed `discoverXsuaaPlans`, `ensureXsuaaCredentials`, `xsuaaRefreshToken`, `xsuaaPrintSetupPreview` and the `xsuaaOrgPlan`/`xsuaaRegionPlan` types; replaced with `resolveXsuaaClients` (returns `[]xsuaaOrgClient` with ready-to-use token + APIURL) and the `xsuaaPromptRetryInstance`/`xsuaaPromptRetryKey` prompt helpers
 - `internal/store/token.go`: removed `ClientID`/`ClientSecret`/`URL` fields from `XsuaaData` (only `APIURL`, `AccessToken`, `TokenExpiry` remain); removed `ClientID`/`ClientSecret` from `DestInstanceCache` (only `InstanceName`, `TokenURL`, `URI`, `AccessToken`, `TokenExpiry` remain); `ClearTokens()` now also zeroes `SpaceDestServices`
+- `cmd/subaccountdestinations.go`: new file; `resolveOrgDestClient` helper scans all regions to locate the target org (by GUID or name), lists all spaces, finds any destination/lite instance, refreshes token on demand (caching only access token + tokenURL + URI in `SpaceDestServices`); credentials never stored
+- `internal/destination/client.go`: refactored `ListSubaccountDestinations` into a shared `listSubaccountDestinations(redact bool)` helper; added `ListSubaccountDestinationsFull`, `CreateSubaccountDestinations`, `UpdateSubaccountDestinations`, `DeleteSubaccountDestination`; switched local `client` to module-level `httpClient`
 
 ## v0.6 — 2026-05-26
 
