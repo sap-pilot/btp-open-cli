@@ -291,11 +291,14 @@ var spaceDestinationsCmd = &cobra.Command{
 	Long: `Retrieves all instance-level destinations from every destination service instance
 found in the given CF space (identified by --space GUID).
 
-Credentials are cached in ~/.bo/credentials.json and tokens are refreshed
-automatically for subsequent calls.
+Without --full: only Name, URL, and sap-client are included per destination.
+With --full: all non-sensitive destination properties are returned as a flat object.
 
-Output fields (default): Name, Type, Authentication, URL, sap-client
-Use --all to include all non-sensitive destination properties.`,
+Use --filter to narrow results by substring or glob pattern matched against
+any destination property (e.g. MDG, API*PP).
+
+Use --format csv (without --full) to get a flat CSV with columns:
+  space_name,destination_service_name,destination_name,destination_url,destination_sap_client`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		spaceGUID, _ := cmd.Flags().GetString("space")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -361,33 +364,38 @@ Use --all to include all non-sensitive destination properties.`,
 			Instances: instDocs,
 		}
 
-		switch {
-		case strings.ToLower(format) == "json":
-			// JSON: flat objects for all modes.
+		switch strings.ToLower(format) {
+		case "json":
 			out, err := json.MarshalIndent(doc, "", "  ")
 			if err != nil {
 				return fmt.Errorf("encoding JSON: %w", err)
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), string(out))
 
-		case !full:
-			// Default TOON without --full: tabular CSV output.
-			// Columns: destination_service_name, Name, URL, sap-client
+		case "csv":
+			if full {
+				return fmt.Errorf("--format csv is not supported with --full; use --format json or toon instead")
+			}
 			w := csv.NewWriter(cmd.OutOrStdout())
 			defer w.Flush()
-			if err := w.Write([]string{"destination_service_name", "Name", "URL", "sap-client"}); err != nil {
+			if err := w.Write([]string{
+				"space_name", "destination_service_name",
+				"destination_name", "destination_url", "destination_sap_client",
+			}); err != nil {
 				return err
 			}
 			for _, inst := range instDocs {
 				for _, d := range inst.Destinations {
-					if err := w.Write([]string{inst.Name, d["Name"], d["URL"], d["sap-client"]}); err != nil {
+					if err := w.Write([]string{
+						doc.SpaceName, inst.Name,
+						d["Name"], d["URL"], d["sap-client"],
+					}); err != nil {
 						return err
 					}
 				}
 			}
 
-		default:
-			// TOON with --full: nested structure with all properties.
+		default: // toon
 			out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 			if err != nil {
 				return fmt.Errorf("encoding TOON: %w", err)
@@ -593,7 +601,7 @@ func init() {
 	// space-destinations
 	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")
 	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
-	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
+	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
 	spaceDestinationsCmd.Flags().Bool("full", false, "Include all destination properties as a flat object (default: Name, URL, sap-client only)")
 	spaceDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern (e.g. MDG or API*PP) matched against any destination property")
 	_ = spaceDestinationsCmd.MarkFlagRequired("space")
