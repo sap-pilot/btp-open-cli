@@ -274,7 +274,10 @@ func loadDestinationsJSON(path string) (json.RawMessage, []string, error) {
 func printActionResults(cmd *cobra.Command, action string, names []string, items []destination.BulkResponseItem) {
 	if len(items) > 0 {
 		for _, it := range items {
-			if it.Status >= 200 && it.Status < 300 {
+			// Status == 0 means the JSON field was absent; the overall HTTP 201/207
+			// already confirmed success, so treat it the same as 2xx.
+			success := it.Status == 0 || (it.Status >= 200 && it.Status < 300)
+			if success {
 				fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", action, it.Name)
 			} else {
 				if it.Cause != "" {
