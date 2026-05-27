@@ -240,10 +240,15 @@ func DeleteInstanceDestination(ctx context.Context, destURI, accessToken, name s
 	}
 }
 
-// ListSubaccountDestinations fetches all subaccount-level destinations and
-// returns them as a slice of property maps with sensitive values removed.
-func ListSubaccountDestinations(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
-	u := strings.TrimRight(destURI, "/") + "/destination-configuration/v1/subaccountDestinations"
+// subaccountDestURL returns the base URL for subaccount-level destination APIs.
+func subaccountDestURL(destURI string) string {
+	return strings.TrimRight(destURI, "/") + "/destination-configuration/v1/subaccountDestinations"
+}
+
+// listSubaccountDestinations is the shared implementation for the public wrappers.
+// When redact is true, sensitive credential fields are omitted from the result.
+func listSubaccountDestinations(ctx context.Context, destURI, accessToken string, redact bool) ([]map[string]string, error) {
+	u := subaccountDestURL(destURI)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err
@@ -251,8 +256,7 @@ func ListSubaccountDestinations(ctx context.Context, destURI, accessToken string
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{Timeout: 30 * time.Second, Transport: newTransport()}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", u, err)
 	}
@@ -265,14 +269,14 @@ func ListSubaccountDestinations(ctx context.Context, destURI, accessToken string
 
 	var raw []map[string]interface{}
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("parsing destination response: %w", err)
+		return nil, fmt.Errorf("parsing subaccount destinations response: %w", err)
 	}
 
 	out := make([]map[string]string, 0, len(raw))
 	for _, entry := range raw {
 		m := make(map[string]string, len(entry))
 		for k, v := range entry {
-			if sensitiveDestinationKeys[strings.ToLower(k)] {
+			if redact && sensitiveDestinationKeys[strings.ToLower(k)] {
 				continue
 			}
 			m[k] = fmt.Sprintf("%v", v)
@@ -280,4 +284,111 @@ func ListSubaccountDestinations(ctx context.Context, destURI, accessToken string
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// ListSubaccountDestinations fetches all subaccount-level destinations and
+// returns them as a slice of property maps with sensitive values removed.
+func ListSubaccountDestinations(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
+	return listSubaccountDestinations(ctx, destURI, accessToken, true)
+}
+
+// ListSubaccountDestinationsFull fetches all subaccount-level destinations
+// including sensitive credential fields such as Password and ClientSecret.
+func ListSubaccountDestinationsFull(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
+	return listSubaccountDestinations(ctx, destURI, accessToken, false)
+}
+
+// CreateSubaccountDestinations posts new destinations to subaccount level.
+// POST /destination-configuration/v1/subaccountDestinations
+// body should be a JSON array (or object) matching the destination service schema.
+// Returns per-item results when the API provides them, or nil for a simple 201.
+func CreateSubaccountDestinations(ctx context.Context, destURI, accessToken string, body json.RawMessage) ([]BulkResponseItem, error) {
+	u := subaccountDestURL(destURI)
+	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusMultiStatus {
+		return nil, fmt.Errorf("POST subaccountDestinations returned HTTP %d: %s", resp.StatusCode, respBody)
+	}
+
+	trimmed := bytes.TrimSpace(respBody)
+	if len(trimmed) == 0 || string(trimmed) == `""` {
+		return nil, nil
+	}
+	var items []BulkResponseItem
+	_ = json.Unmarshal(trimmed, &items)
+	return items, nil
+}
+
+// UpdateSubaccountDestinations overwrites existing destinations at subaccount level.
+// PUT /destination-configuration/v1/subaccountDestinations
+// body should be a JSON array (or object) matching the destination service schema.
+func UpdateSubaccountDestinations(ctx context.Context, destURI, accessToken string, body json.RawMessage) ([]BulkResponseItem, error) {
+	u := subaccountDestURL(destURI)
+	req, err := http.NewRequestWithContext(ctx, "PUT", u, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
+		return nil, fmt.Errorf("PUT subaccountDestinations returned HTTP %d: %s", resp.StatusCode, respBody)
+	}
+
+	trimmed := bytes.TrimSpace(respBody)
+	if len(trimmed) == 0 {
+		return nil, nil
+	}
+	var items []BulkResponseItem
+	if err := json.Unmarshal(trimmed, &items); err != nil {
+		return nil, nil // {Count:N} or unknown — treat as success
+	}
+	return items, nil
+}
+
+// DeleteSubaccountDestination deletes a single subaccount-level destination by name.
+// DELETE /destination-configuration/v1/subaccountDestinations/{name}
+// A 404 is treated as success (already gone) and does not return an error.
+func DeleteSubaccountDestination(ctx context.Context, destURI, accessToken, name string) error {
+	u := subaccountDestURL(destURI) + "/" + url.PathEscape(name)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
+		return nil
+	default:
+		return fmt.Errorf("DELETE subaccountDestinations/%s returned HTTP %d: %s", name, resp.StatusCode, body)
+	}
 }
