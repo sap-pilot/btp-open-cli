@@ -43,7 +43,7 @@ chmod +x ./bo
 Move the binary to your PATH (optional, Linux/macOS):
 
 ```bash
-sudo mv bo /usr/local/bin/
+mv bo ~/.local/bin/
 ```
 
 ### Option B — Build from source
@@ -65,10 +65,38 @@ Clone and compile:
 git clone https://github.com/sap-pilot/btp-open-cli.git
 cd btp-open-cli
 go build -o bo
-sudo mv bo /usr/local/bin/   # optional
+mv bo ~/.local/bin/   # optional
 ```
 
 ## Commands
+
+| Command | Description |
+|---|---|
+| [`login`](#login) | Authenticate against one or more SAP BTP Cloud Foundry regions |
+| [`logoff`](#logoff) | Clear all stored OAuth tokens and cached credentials |
+| [`orgs`](#orgs) | List all accessible CF organizations as CSV |
+| [`org-spaces`](#org-spaces) | List all accessible CF organizations and their spaces |
+| [`org-users`](#org-users) | List users across all accessible CF organizations |
+| [`org-space-users`](#org-space-users) | List users at both organization and space level |
+| [`create-org-space-users`](#create-org-space-users) | Add users with org and space roles from a CSV file |
+| [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
+| [`users`](#users) | List XSUAA users across all accessible CF organizations |
+| [`delete-users`](#delete-users) | Delete XSUAA users across all accessible CF organizations |
+| [`role-collections`](#role-collections) | List XSUAA roles and role collections across all accessible CF organizations |
+| [`describe-subaccount`](#describe-subaccount) | Describe a single BTP subaccount: CIS metadata, spaces, destinations, role collections |
+| [`space-destinations`](#space-destinations) | List instance-level destinations across all destination service instances in a CF space |
+| [`create-space-destinations`](#create-space-destinations) | Create instance-level destinations in all destination service instances of a CF space |
+| [`update-space-destinations`](#update-space-destinations) | Update instance-level destinations in all destination service instances of a CF space |
+| [`delete-space-destinations`](#delete-space-destinations) | Delete named instance-level destinations from all destination service instances of a CF space |
+| [`subaccount-destinations`](#subaccount-destinations) | List subaccount-level destinations via the destination service |
+| [`create-subaccount-destinations`](#create-subaccount-destinations) | Create subaccount-level destinations via the destination service |
+| [`update-subaccount-destinations`](#update-subaccount-destinations) | Update subaccount-level destinations via the destination service |
+| [`delete-subaccount-destinations`](#delete-subaccount-destinations) | Delete subaccount-level destinations via the destination service |
+| [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
+| [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
+| [`clear-logs`](#clear-logs) | Delete all local log files under `~/.bo/log/` |
+| [`upgrade`](#upgrade) | Check for the latest release and upgrade the `bo` binary in place |
+| [`version`](#version) | Print the current version |
 
 ### `login`
 
