@@ -274,16 +274,21 @@ func loadDestinationsJSON(path string) (json.RawMessage, []string, error) {
 func printActionResults(cmd *cobra.Command, action string, names []string, items []destination.BulkResponseItem) {
 	if len(items) > 0 {
 		for _, it := range items {
-			// Status == 0 means the JSON field was absent; the overall HTTP 201/207
-			// already confirmed success, so treat it the same as 2xx.
-			success := it.Status == 0 || (it.Status >= 200 && it.Status < 300)
-			if success {
+			// The destination service may omit the per-item "status" field (leaving
+			// it as 0). The reliable error indicator is "cause": if it is non-empty
+			// the item failed; if it is empty and status is 0 or 2xx, it succeeded.
+			isError := it.Cause != "" || (it.Status != 0 && (it.Status < 200 || it.Status >= 300))
+			if !isError {
 				fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", action, it.Name)
 			} else {
-				if it.Cause != "" {
-					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR(%d): %s — %s\n", it.Status, it.Name, it.Cause)
+				if it.Status != 0 {
+					if it.Cause != "" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR(%d): %s — %s\n", it.Status, it.Name, it.Cause)
+					} else {
+						fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR(%d): %s\n", it.Status, it.Name)
+					}
 				} else {
-					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR(%d): %s\n", it.Status, it.Name)
+					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %s — %s\n", it.Name, it.Cause)
 				}
 			}
 		}
