@@ -216,27 +216,30 @@ func UpdateInstanceDestinations(ctx context.Context, destURI, accessToken string
 
 // DeleteInstanceDestination deletes a single instance-level destination by name.
 // DELETE /destination-configuration/v1/instanceDestinations/{name}
-// A 404 is treated as success (already gone) and does not return an error.
-func DeleteInstanceDestination(ctx context.Context, destURI, accessToken, name string) error {
+// Returns (true, nil) when the destination was deleted, (false, nil) when it did
+// not exist (404), and (false, err) for any other failure.
+func DeleteInstanceDestination(ctx context.Context, destURI, accessToken, name string) (bool, error) {
 	u := instanceDestURL(destURI) + "/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
-		return nil
+	case http.StatusOK, http.StatusNoContent:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
 	default:
-		return fmt.Errorf("DELETE instanceDestinations/%s returned HTTP %d: %s", name, resp.StatusCode, body)
+		return false, fmt.Errorf("DELETE instanceDestinations/%s returned HTTP %d: %s", name, resp.StatusCode, body)
 	}
 }
 
@@ -369,26 +372,29 @@ func UpdateSubaccountDestinations(ctx context.Context, destURI, accessToken stri
 
 // DeleteSubaccountDestination deletes a single subaccount-level destination by name.
 // DELETE /destination-configuration/v1/subaccountDestinations/{name}
-// A 404 is treated as success (already gone) and does not return an error.
-func DeleteSubaccountDestination(ctx context.Context, destURI, accessToken, name string) error {
+// Returns (true, nil) when the destination was deleted, (false, nil) when it did
+// not exist (404), and (false, err) for any other failure.
+func DeleteSubaccountDestination(ctx context.Context, destURI, accessToken, name string) (bool, error) {
 	u := subaccountDestURL(destURI) + "/" + url.PathEscape(name)
 	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK, http.StatusNoContent, http.StatusNotFound:
-		return nil
+	case http.StatusOK, http.StatusNoContent:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
 	default:
-		return fmt.Errorf("DELETE subaccountDestinations/%s returned HTTP %d: %s", name, resp.StatusCode, body)
+		return false, fmt.Errorf("DELETE subaccountDestinations/%s returned HTTP %d: %s", name, resp.StatusCode, body)
 	}
 }

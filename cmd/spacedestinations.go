@@ -576,11 +576,13 @@ used. Non-existent destinations are silently ignored (idempotent).`,
 		for _, c := range clients {
 			fmt.Fprintf(cmd.OutOrStdout(), "  → %s (%s)\n", c.InstanceName, c.InstanceGUID)
 			for _, name := range names {
-				delErr := destination.DeleteInstanceDestination(ctx, c.URI, c.Token, name)
+				deleted, delErr := destination.DeleteInstanceDestination(ctx, c.URI, c.Token, name)
 				if delErr != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR deleting %q: %v\n", name, delErr)
-				} else {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %s — %v\n", name, delErr)
+				} else if deleted {
 					fmt.Fprintf(cmd.OutOrStdout(), "    deleted: %s\n", name)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "    not found: %s\n", name)
 				}
 			}
 		}
