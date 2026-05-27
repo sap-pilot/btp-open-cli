@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -47,57 +46,47 @@ func readLine(ctx context.Context) (string, bool) {
 }
 
 // readPasswordCtx reads a password or passcode from stdin without echoing,
-// honouring context cancellation. Unlike term.ReadPassword, pressing Ctrl-C
-// is detected immediately (byte 0x03 in raw mode) and returns context.Canceled.
-// Falls back to term.ReadPassword when the terminal cannot be put into raw mode
-// (e.g. stdin is a pipe).
+// honouring context cancellation (Ctrl-C) immediately.
+//
+// It runs term.ReadPassword in a background goroutine. term.ReadPassword only
+// disables echo — it never touches OPOST, so output newline translation (\n →
+// \r\n) is always preserved and terminal output alignment is unaffected.
+//
+// term.ReadPassword keeps ISIG enabled, so Ctrl-C is delivered as SIGINT.
+// signal.NotifyContext captures that signal and cancels the context; the select
+// below detects the cancellation immediately and returns context.Canceled.
+//
+// On cancellation the terminal is restored at once (the background goroutine's
+// own deferred restore inside term.ReadPassword is a harmless idempotent repeat
+// once the goroutine eventually unblocks on process exit).
 func readPasswordCtx(ctx context.Context) ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 
+	// Save terminal state so we can restore it the moment context is cancelled,
+	// before the goroutine's defer inside term.ReadPassword gets a chance to run.
 	oldState, err := term.GetState(fd)
 	if err != nil {
-		// Not a terminal — fall back; Ctrl-C behaviour is OS-dependent.
-		return term.ReadPassword(fd)
+		return term.ReadPassword(fd) // not a TTY; no context-cancel support
 	}
-	if _, err := term.MakeRaw(fd); err != nil {
-		return term.ReadPassword(fd)
+
+	type result struct {
+		b   []byte
+		err error
 	}
-	defer term.Restore(fd, oldState) //nolint:errcheck
+	ch := make(chan result, 1)
+	go func() {
+		b, e := term.ReadPassword(fd)
+		ch <- result{b, e}
+	}()
 
-	var pw []byte
-	buf := make([]byte, 1)
-	for {
-		// Honour external context cancellation between keystrokes.
-		select {
-		case <-ctx.Done():
-			return nil, context.Canceled
-		default:
-		}
-
-		n, readErr := os.Stdin.Read(buf)
-		if readErr != nil {
-			if readErr == io.EOF {
-				return pw, nil
-			}
-			return nil, readErr
-		}
-		if n == 0 {
-			continue
-		}
-		switch buf[0] {
-		case 3: // Ctrl-C — in raw mode ISIG is disabled so no signal is raised
-			return nil, context.Canceled
-		case 4: // Ctrl-D (EOF)
-			return pw, nil
-		case '\r', '\n':
-			return pw, nil
-		case 127, 8: // DEL / Backspace
-			if len(pw) > 0 {
-				pw = pw[:len(pw)-1]
-			}
-		default:
-			pw = append(pw, buf[0])
-		}
+	select {
+	case <-ctx.Done():
+		// Restore echo / cooked mode immediately so subsequent output starts
+		// at column 0 (OPOST was never disabled, but ECHO needs resetting).
+		_ = term.Restore(fd, oldState)
+		return nil, context.Canceled
+	case r := <-ch:
+		return r.b, r.err
 	}
 }
 
