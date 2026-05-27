@@ -61,6 +61,8 @@
   - Now only the access token, `tokenURL`, and `URI` are persisted; `clientId` and `clientSecret` are fetched from CF on demand whenever a new token is needed and discarded immediately after — they never touch the local disk
   - Token refresh behaviour (60-second expiry window) and the no-key interactive prompt are unchanged
 
+- **`space-destinations`, `subaccount-destinations` — `--full` now returns all properties without any redaction**: the response is forwarded exactly as the destination service API provides it, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`; previously the help text incorrectly said "non-sensitive properties" — the `Long` description, flag help, and README have been updated to reflect the actual behaviour
+
 - **`create-space-destinations`, `update-space-destinations`, `create-subaccount-destinations`, `update-subaccount-destinations`** — success output changed from a generic `done` to per-destination lines (`created: {name}` / `updated: {name}`), consistent with the `deleted: {name}` output of the delete commands; when the destination service returns a bulk response (HTTP 207), per-item status is used; otherwise the names from the input file are used
 
 - **`delete-space-destinations`, `delete-subaccount-destinations`** — output now correctly distinguishes between a destination that was actually deleted (`deleted: {name}`) and one that did not exist (`not found: {name}`):

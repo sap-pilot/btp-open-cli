@@ -306,7 +306,9 @@ var spaceDestinationsCmd = &cobra.Command{
 found in the given CF space (identified by --space GUID).
 
 Without --full: only Name, URL, and sap-client are included per destination.
-With --full: all non-sensitive destination properties are returned as a flat object.
+With --full: all destination properties are returned as a flat object exactly as
+the destination service API responds — nothing is redacted, including sensitive
+fields such as Password, ClientSecret, and ProxyPassword.
 
 Use --filter to narrow results by substring or glob pattern matched against
 any destination property (e.g. MDG, API*PP).
@@ -610,7 +612,7 @@ func init() {
 	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")
 	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
-	spaceDestinationsCmd.Flags().Bool("full", false, "Include all destination properties as a flat object (default: Name, URL, sap-client only)")
+	spaceDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
 	spaceDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern (e.g. MDG or API*PP) matched against any destination property")
 	_ = spaceDestinationsCmd.MarkFlagRequired("space")
 	rootCmd.AddCommand(spaceDestinationsCmd)
