@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.8 — 2026-05-27
+
+### Added
+
+- **Custom command development support** — forks of the repository can now add project-specific commands to `cmd/custom/` without ever touching an upstream file, eliminating merge conflicts when pulling upstream changes:
+  - `cmd.RegisterCommand(c *cobra.Command)` exported from `cmd/root.go` — the only function a custom command needs to call; wraps the unexported `rootCmd.AddCommand`
+  - `cmd/custom/doc.go` — committed package stub; documents the registration pattern
+  - `cmd/custom/example_custom_command.go.template` — copy-paste starting point (`cp …template mycommand.go`); not compiled by Go (`.template` extension)
+  - `main.go` blank-imports `btp-open-cli/cmd/custom` so all `init()` functions in the package are executed at startup
+  - README: new **Custom Command Development** section (after Installation) with step-by-step instructions, sample code, and tips for vibe-coding new commands
+  - README: **Commands** section renamed to **Built-in Commands**
+
+### Fixed
+
+- **`login` / re-authentication — Ctrl-C now aborts password and passcode prompts immediately**: `term.ReadPassword` retries `EINTR` internally, so pressing Ctrl-C at a `Password>` or `Passcode>` prompt had no effect — the prompt remained blocked indefinitely. All four call sites (`Password>` and `Passcode>` in both the initial `login` flow and the interactive re-authentication flow) are replaced with `readPasswordCtx`, which runs `term.ReadPassword` in a background goroutine and selects on its result channel vs `ctx.Done()`. `term.ReadPassword` keeps `ISIG` enabled so Ctrl-C is still delivered as `SIGINT`; `signal.NotifyContext` captures that signal and cancels the context; the select detects cancellation immediately and returns `context.Canceled`. The terminal is restored at once so the `Aborted.` message prints correctly.
+
+- **`login --sso` — passcode URL and prompt no longer appear misaligned (shifted right)**: the initial `readPasswordCtx` implementation used `term.MakeRaw`, which disables `OPOST` (output post-processing) on the tty device. Because stdin and stdout share the same terminal device, `OPOST` was disabled for stdout too — `\n` stopped translating to `\r\n`, so every output line after the first `term.MakeRaw` call started at the column where the previous line ended rather than column 0. Fixed by rewriting `readPasswordCtx` to use the goroutine + `select` approach described above: `term.ReadPassword` only disables echo and never touches `OPOST`, so output alignment is preserved throughout.
+
 ## v0.7 — 2026-05-27
 
 ### Added
