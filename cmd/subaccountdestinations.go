@@ -261,7 +261,9 @@ var subaccountDestinationsCmd = &cobra.Command{
 any destination service instance found in the target org (--org GUID or name).
 
 Without --full: only Name, URL, and sap-client are included per destination.
-With --full: all non-sensitive destination properties are returned as a flat object.
+With --full: all destination properties are returned as a flat object exactly as
+the destination service API responds — nothing is redacted, including sensitive
+fields such as Password, ClientSecret, and ProxyPassword.
 
 Use --filter to narrow results by substring or glob pattern matched against
 any destination property (e.g. MDG, API*PP).
@@ -535,7 +537,7 @@ func init() {
 	subaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target (required)")
 	subaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	subaccountDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
-	subaccountDestinationsCmd.Flags().Bool("full", false, "Include all destination properties as a flat object (default: Name, URL, sap-client only)")
+	subaccountDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
 	subaccountDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern matched against any destination property")
 	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
 	_ = subaccountDestinationsCmd.MarkFlagRequired("org")

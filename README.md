@@ -570,7 +570,7 @@ dev,my-dest-service,API_S4_HTTP_PP,http://qr1:443,100
 dev,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
 ```
 
-With `--full`, each destination is a flat object containing all non-sensitive properties returned by the destination API (e.g. `Type`, `Authentication`, `ProxyType`, `WebIDESystem`, `HTML5.DynamicDestination`, `Description`, etc.). CSV is not supported with `--full`.
+With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
 
 ### `create-space-destinations`
 
@@ -684,7 +684,7 @@ my-org,API_S4_HTTP_PP,http://qr1:443,100
 my-org,API_MDG_HTTP_PP,http://qrg:443,100
 ```
 
-With `--full`, each destination is a flat object containing all non-sensitive properties returned by the destination service API. CSV is not supported with `--full`.
+With `--full`, each destination is a flat object containing **all** properties returned by the destination service API exactly as-is — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
 
 ### `create-subaccount-destinations`
 
