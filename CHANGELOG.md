@@ -33,9 +33,11 @@
   - `-y` / `--yes` flag removed from `users`, `role-collections`, and `describe-subaccount` (it was only used to skip service/key creation confirmation, which no longer happens); `-y` is retained in `delete-users` for the user deletion confirmation prompt
 
 - **`get-space-destinations` renamed to `space-destinations`**; output and flags reworked:
-  - Replaced `--all` flag with `--full`: without `--full` only `Name`, `URL`, and `sap-client` are shown; with `--full` all non-sensitive destination properties are emitted as a flat object (no nested `properties` array)
-  - Added `--filter <string|pattern>`: case-insensitive substring match or glob pattern (e.g. `MDG`, `API*PP`) tested against every destination property key and value; only matching destinations are included in output
-  - The filter is applied to the full property set before trimming to minimal fields, so it works correctly in both default and `--full` modes
+  - Replaced `--all` flag with `--full`
+  - Default output (no `--full`), TOON format: tabular CSV with columns `destination_service_name,Name,URL,sap-client` — one row per destination, easy to pipe or redirect
+  - `--full` output, TOON format: nested TOON structure with all destination properties as a flat object per destination, **including sensitive fields** (`Password`, `ClientSecret`, etc.) which are no longer redacted in this mode
+  - JSON format (`--format json`): flat JSON objects; same field selection (minimal vs full) as TOON
+  - Added `--filter <string|pattern>`: case-insensitive substring or glob pattern (e.g. `MDG`, `API*PP`) matched against every destination property key and value; only matching destinations are included; filter is applied to the full property set before any field trimming
 
 - **`space-destinations`/`create-space-destinations`/`update-space-destinations`/`delete-space-destinations` — destination service key credentials no longer stored locally**
   - Previously the destination service `clientId`, `clientSecret`, `tokenURL`, and `URI` were all cached in `~/.bo/credentials.json` under `space_dest_services`

@@ -88,10 +88,9 @@ func instanceDestURL(destURI string) string {
 	return strings.TrimRight(destURI, "/") + "/destination-configuration/v1/instanceDestinations"
 }
 
-// ListInstanceDestinations fetches all instance-level destinations.
-// GET /destination-configuration/v1/instanceDestinations
-// Sensitive credential fields are removed from the response.
-func ListInstanceDestinations(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
+// listInstanceDestinations is the shared implementation for the public wrappers.
+// When redact is true, sensitive credential fields are omitted from the result.
+func listInstanceDestinations(ctx context.Context, destURI, accessToken string, redact bool) ([]map[string]string, error) {
 	u := instanceDestURL(destURI)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
@@ -120,7 +119,7 @@ func ListInstanceDestinations(ctx context.Context, destURI, accessToken string) 
 	for _, entry := range raw {
 		m := make(map[string]string, len(entry))
 		for k, v := range entry {
-			if sensitiveDestinationKeys[strings.ToLower(k)] {
+			if redact && sensitiveDestinationKeys[strings.ToLower(k)] {
 				continue
 			}
 			m[k] = fmt.Sprintf("%v", v)
@@ -128,6 +127,19 @@ func ListInstanceDestinations(ctx context.Context, destURI, accessToken string) 
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// ListInstanceDestinations fetches all instance-level destinations.
+// GET /destination-configuration/v1/instanceDestinations
+// Sensitive credential fields (Password, ClientSecret, etc.) are removed from the response.
+func ListInstanceDestinations(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
+	return listInstanceDestinations(ctx, destURI, accessToken, true)
+}
+
+// ListInstanceDestinationsFull fetches all instance-level destinations including
+// sensitive credential fields such as Password and ClientSecret.
+func ListInstanceDestinationsFull(ctx context.Context, destURI, accessToken string) ([]map[string]string, error) {
+	return listInstanceDestinations(ctx, destURI, accessToken, false)
 }
 
 // CreateInstanceDestinations posts new destinations to service instance level.

@@ -521,16 +521,19 @@ List all instance-level destinations across every destination service instance f
 The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
 
 ```bash
-# List destinations in a space — default output: Name, URL, sap-client (TOON)
+# List destinations — default: tabular CSV (Name, URL, sap-client)
 bo space-destinations --space <space-guid>
 
-# JSON output
-bo space-destinations --space <space-guid> --format json
-
-# Include all destination properties as a flat object
+# Full TOON output with all properties (including sensitive ones like Password)
 bo space-destinations --space <space-guid> --full
 
-# Filter by substring (case-insensitive, matched against any property)
+# JSON output (minimal: Name, URL, sap-client)
+bo space-destinations --space <space-guid> --format json
+
+# JSON output with all properties
+bo space-destinations --space <space-guid> --full --format json
+
+# Filter by substring (case-insensitive, matched against any property key or value)
 bo space-destinations --space <space-guid> --filter MDG
 
 # Filter by glob pattern (* matches any sequence of characters)
@@ -543,23 +546,14 @@ bo space-destinations --space <space-guid> --full --filter "API*PP"
 bo space-destinations --space <space-guid> --regions us10,eu10
 ```
 
-Default output (TOON, without `--full`):
+Default output (tabular CSV, without `--full`):
 ```
-space_id: <space-guid>
-space_name: dev
-destination_service_instances:
-  - destination_service_id: <instance-guid>
-    destination_service_name: my-dest-service
-    destinations:
-      - Name: API_S4_HTTP_PP
-        URL: http://qr1:443
-        sap-client: "100"
-      - Name: API_MDG_HTTP_PP
-        URL: http://qrg:443
-        sap-client: "100"
+destination_service_name,Name,URL,sap-client
+my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
+my-dest-service,API_S4_HTTP_PP,http://qr1:443,100
 ```
 
-With `--full`, each destination is a flat object containing all non-sensitive properties returned by the destination API (e.g. `Type`, `Authentication`, `ProxyType`, `WebIDESystem`, `HTML5.DynamicDestination`, `Description`, etc.).
+With `--full` (TOON), each destination is rendered as a nested flat object with all properties returned by the destination API — including sensitive credential fields such as `Password` and `ClientSecret`. Properties are dynamic and vary per destination type (e.g. `Type`, `Authentication`, `ProxyType`, `WebIDESystem`, `HTML5.DynamicDestination`, `Description`, `sap-client`, etc.).
 
 ### `create-space-destinations`
 
