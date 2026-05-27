@@ -12,7 +12,7 @@ Open-source CLI for SAP BTP — bulk-manage users, apps and services across mult
 
 - **AI-agent ready.** Every command is a self-contained, scriptable binary with structured output (TOON, JSON, CSV). Commands can be wired directly into AI agents and automation pipelines today, and will continue to work as agentic tooling matures.
 
-![btp-open-cli vs other BTP/CF CLIs](./doc/img/btp-cli-comparison.png)
+![btp-open-cli vs other BTP/CF CLIs](./doc/img/btp-cli-comparison-v2.png)
 
 ## Installation
 
