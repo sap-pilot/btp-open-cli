@@ -2,6 +2,16 @@
 
 Open-source CLI for SAP BTP — bulk-manage users, apps and services across multiple Cloud Foundry subaccounts and regions
 
+## Why btp-open-cli?
+
+- **Open source, fully improvable.** Many BTP/CF CLIs exist but their source code is closed — you can use them but you cannot adapt them when they fall short. `btp-open-cli` is fully open: every command, every API call, every output format is visible and changeable.
+
+- **Built for bulk operations across regions.** Most existing tools target a single subaccount or space at a time. `btp-open-cli` treats your entire BTP landscape as the unit of work — commands span all subaccounts and spaces across multiple regions in one invocation.
+
+- **Vibe-code your own commands.** The codebase is intentionally readable and consistent. Adding a new command or tweaking an existing one is a short conversation with an AI coding assistant — no build toolchain expertise required.
+
+- **AI-agent ready.** Every command is a self-contained, scriptable binary with structured output (TOON, JSON, CSV). Commands can be wired directly into AI agents and automation pipelines today, and will continue to work as agentic tooling matures.
+
 ## Installation
 
 ### Option A — Download pre-built binary (recommended)
