@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -8,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/term"
 
 	"btp-open-cli/internal/cf"
 	"btp-open-cli/internal/store"
@@ -107,10 +107,10 @@ Omit region flags to reuse the regions from the previous login.`,
 			}
 			if len(pwBytes) == 0 {
 				fmt.Fprintf(os.Stdout, "Password> ")
-				pwBytes, err = term.ReadPassword(int(os.Stdin.Fd()))
+				pwBytes, err = readPasswordCtx(ctx)
 				fmt.Fprintln(os.Stdout)
 				if err != nil {
-					if ctx.Err() != nil {
+					if errors.Is(err, context.Canceled) {
 						fmt.Fprintln(os.Stdout, "Aborted.")
 						return nil
 					}
@@ -142,10 +142,10 @@ Omit region flags to reuse the regions from the previous login.`,
 			for _, r := range epResults {
 				regionName := store.APIURLToRegion(r.apiURL)
 				fmt.Fprintf(os.Stdout, "%s Passcode> ", regionName)
-				codeBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+				codeBytes, err := readPasswordCtx(ctx)
 				fmt.Fprintln(os.Stdout)
 				if err != nil {
-					if ctx.Err() != nil {
+					if errors.Is(err, context.Canceled) {
 						fmt.Fprintln(os.Stdout, "Aborted.")
 						return nil
 					}
