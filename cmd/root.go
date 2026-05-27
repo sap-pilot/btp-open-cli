@@ -34,6 +34,13 @@ func Execute() {
 	}
 }
 
+// RegisterCommand registers a custom command with the root command.
+// Call this from init() in your cmd/custom package to add project-specific
+// commands without touching any upstream file.
+func RegisterCommand(c *cobra.Command) {
+	rootCmd.AddCommand(c)
+}
+
 func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose/debug output")
 }

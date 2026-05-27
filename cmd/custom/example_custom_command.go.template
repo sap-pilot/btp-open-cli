@@ -1,0 +1,20 @@
+package custom
+
+import (
+	"fmt"
+
+	"btp-open-cli/cmd"
+
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	cmd.RegisterCommand(&cobra.Command{
+		Use:   "hello",
+		Short: "Say hello (example custom command)",
+		RunE: func(c *cobra.Command, args []string) error {
+			fmt.Fprintln(c.OutOrStdout(), "Hello from a custom command!")
+			return nil
+		},
+	})
+}
