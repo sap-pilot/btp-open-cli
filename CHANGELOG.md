@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.9 — 2026-05-28
+
+### Changed
+
+- **`upgrade` command renamed to `update`** — the command name is now `bo update` (was `bo upgrade`); all internal messages updated accordingly ("Update complete." etc.)
+
+- **`update` — optional `[release]` argument for pinned downloads**: when a release tag is passed (e.g. `bo update v0.9`), the binary is downloaded directly from `https://github.com/sap-pilot/btp-open-cli/releases/download/{release}/bo-{os}-{arch}` without calling the GitHub API or comparing versions; useful for pinning to a specific version or rolling back. When no argument is given, the existing behaviour is preserved: latest release is fetched from the GitHub API, compared to the running version, and the download is skipped if already up to date.
+
+- **Command groups in `bo --help` and README** — commands are now organised into six named groups in both the CLI help output (via Cobra's `AddGroup` / `GroupID` API) and the README Built-in Commands section:
+  - **Common** — `login`, `logoff`, `update`, `version`
+  - **CF Org** — `orgs`, `org-spaces`, `org-users`, `org-space-users`, `create-org-space-users`, `delete-org-space-users`, `apps`
+  - **XSUAA Users** — `users`, `delete-users`, `role-collections`
+  - **Destination** — `subaccount-destinations`, `create-subaccount-destinations`, `update-subaccount-destinations`, `delete-subaccount-destinations`, `space-destinations`, `create-space-destinations`, `update-space-destinations`, `delete-space-destinations`
+  - **Subaccount Automation** — `describe-subaccount`
+  - **Utilities** — `clear-logs`, `completion`, `reorg-wiki-attachments`
+  - README: Built-in Commands flat table replaced by per-group sub-tables; `completion` command added to Utilities; "More help" block reorganised by group
+
 ## v0.8 — 2026-05-28
 
 ### Added

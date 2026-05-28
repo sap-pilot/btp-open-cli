@@ -23,5 +23,6 @@ var logoffCmd = &cobra.Command{
 }
 
 func init() {
+	logoffCmd.GroupID = "common"
 	rootCmd.AddCommand(logoffCmd)
 }

@@ -28,6 +28,7 @@ var reorgWikiAttachmentsCmd = &cobra.Command{
 }
 
 func init() {
+	reorgWikiAttachmentsCmd.GroupID = "utilities"
 	rootCmd.AddCommand(reorgWikiAttachmentsCmd)
 }
 

@@ -302,6 +302,7 @@ If --regions is omitted the regions from the last login are used.`,
 }
 
 func init() {
+	roleCollectionsCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(roleCollectionsCmd)
 	roleCollectionsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	roleCollectionsCmd.Flags().String("org", "", "Org name or GUID to target (case-insensitive substring match on name, exact on GUID)")

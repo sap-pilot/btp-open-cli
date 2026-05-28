@@ -385,6 +385,7 @@ func cosPrintPreview(plans []cosRegionPlan, users []csvUser) error {
 }
 
 func init() {
+	createOrgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(createOrgSpaceUsersCmd)
 	createOrgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	createOrgSpaceUsersCmd.Flags().String("users", "", "Path to users CSV file (required; columns: cfuser_name,cfuser_origin,cfuser_roles)")

@@ -514,6 +514,7 @@ If --regions is omitted the regions from the last login are used.`,
 }
 
 func init() {
+	describeSubaccountCmd.GroupID = "subaccount"
 	rootCmd.AddCommand(describeSubaccountCmd)
 	describeSubaccountCmd.Flags().String("org", "", "Org name (case-insensitive substring) or GUID to describe (required)")
 	describeSubaccountCmd.MarkFlagRequired("org")

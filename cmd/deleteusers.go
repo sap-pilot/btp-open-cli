@@ -278,6 +278,7 @@ If --regions is omitted the regions from the last login are used.`,
 }
 
 func init() {
+	deleteUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(deleteUsersCmd)
 	deleteUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	deleteUsersCmd.Flags().String("users", "", "Path to CSV file of users to delete (required; columns: origin,userName)")

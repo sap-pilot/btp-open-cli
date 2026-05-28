@@ -296,6 +296,7 @@ func splitCSV(s string) []string {
 }
 
 func init() {
+	loginCmd.GroupID = "common"
 	rootCmd.AddCommand(loginCmd)
 	loginCmd.Flags().Bool("sso", false, "Authenticate using a one-time SSO passcode")
 	loginCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); persisted for future commands")

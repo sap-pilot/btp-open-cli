@@ -151,33 +151,61 @@ Because your custom files live in `cmd/custom/` and upstream only ever touches `
 
 ## Built-in Commands
 
+### Common
+
 | Command | Description |
 |---|---|
 | [`login`](#login) | Authenticate against one or more SAP BTP Cloud Foundry regions |
 | [`logoff`](#logoff) | Clear all stored OAuth tokens and cached credentials |
+| [`update`](#update) | Update the `bo` binary in place from a specific or the latest GitHub release |
+| [`version`](#version) | Print the current version |
+
+### CF Org
+
+| Command | Description |
+|---|---|
 | [`orgs`](#orgs) | List all accessible CF organizations as CSV |
 | [`org-spaces`](#org-spaces) | List all accessible CF organizations and their spaces |
 | [`org-users`](#org-users) | List users across all accessible CF organizations |
 | [`org-space-users`](#org-space-users) | List users at both organization and space level |
 | [`create-org-space-users`](#create-org-space-users) | Add users with org and space roles from a CSV file |
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
+| [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
+
+### XSUAA Users
+
+| Command | Description |
+|---|---|
 | [`users`](#users) | List XSUAA users across all accessible CF organizations |
 | [`delete-users`](#delete-users) | Delete XSUAA users across all accessible CF organizations |
 | [`role-collections`](#role-collections) | List XSUAA roles and role collections across all accessible CF organizations |
-| [`describe-subaccount`](#describe-subaccount) | Describe a single BTP subaccount: CIS metadata, spaces, destinations, role collections |
-| [`space-destinations`](#space-destinations) | List instance-level destinations across all destination service instances in a CF space |
-| [`create-space-destinations`](#create-space-destinations) | Create instance-level destinations in all destination service instances of a CF space |
-| [`update-space-destinations`](#update-space-destinations) | Update instance-level destinations in all destination service instances of a CF space |
-| [`delete-space-destinations`](#delete-space-destinations) | Delete named instance-level destinations from all destination service instances of a CF space |
+
+### Destination
+
+| Command | Description |
+|---|---|
 | [`subaccount-destinations`](#subaccount-destinations) | List subaccount-level destinations via the destination service |
 | [`create-subaccount-destinations`](#create-subaccount-destinations) | Create subaccount-level destinations via the destination service |
 | [`update-subaccount-destinations`](#update-subaccount-destinations) | Update subaccount-level destinations via the destination service |
 | [`delete-subaccount-destinations`](#delete-subaccount-destinations) | Delete subaccount-level destinations via the destination service |
-| [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
-| [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
+| [`space-destinations`](#space-destinations) | List instance-level destinations across all destination service instances in a CF space |
+| [`create-space-destinations`](#create-space-destinations) | Create instance-level destinations in all destination service instances of a CF space |
+| [`update-space-destinations`](#update-space-destinations) | Update instance-level destinations in all destination service instances of a CF space |
+| [`delete-space-destinations`](#delete-space-destinations) | Delete named instance-level destinations from all destination service instances of a CF space |
+
+### Subaccount Automation
+
+| Command | Description |
+|---|---|
+| [`describe-subaccount`](#describe-subaccount) | Describe a single BTP subaccount: CIS metadata, spaces, destinations, role collections |
+
+### Utilities
+
+| Command | Description |
+|---|---|
 | [`clear-logs`](#clear-logs) | Delete all local log files under `~/.bo/log/` |
-| [`upgrade`](#upgrade) | Check for the latest release and upgrade the `bo` binary in place |
-| [`version`](#version) | Print the current version |
+| [`completion`](#completion) | Generate shell autocompletion script (bash, zsh, fish, PowerShell) |
+| [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
 
 ### `login`
 
@@ -993,19 +1021,27 @@ bo clear-logs
 bo clear-logs -y
 ```
 
-### `upgrade`
+### `update`
 
-Check for the latest release on GitHub and upgrade the `bo` binary in place.
+Update the `bo` binary in place from a GitHub release.
 
 ```bash
-# Check for updates and confirm before downloading
-bo upgrade
+# Check for the latest release and update if a newer version is available
+bo update
 
 # Skip confirmation prompt
-bo upgrade -y
+bo update -y
+
+# Download a specific release (skips the GitHub API version check)
+bo update v0.9
+
+# Specific release, no prompt
+bo update v0.9 -y
 ```
 
-The command compares the local version against the latest GitHub release. If a newer version is available it downloads the platform-matching binary (`bo-{os}-{arch}`) and replaces the running executable:
+When no release is specified, the command fetches the latest release from GitHub, compares it to the running version, and exits cleanly if already up to date. When a release tag is given (e.g. `v0.9`), the binary is downloaded directly from `releases/download/{release}/` without calling the GitHub API or comparing versions.
+
+The platform-matching binary (`bo-{os}-{arch}`) is always used. Replacement strategy:
 
 - **Linux / macOS** — downloads to a temp file in the same directory, then atomically renames it over the current binary.
 - **Windows** — renames `bo.exe` to `bo-{version}.exe` first (Windows cannot overwrite a running executable), then downloads the new release as `bo.exe`.
@@ -1017,6 +1053,26 @@ Print version information.
 ```bash
 bo version
 ```
+
+### `completion`
+
+Generate a shell autocompletion script and print it to stdout.
+
+```bash
+# bash
+bo completion bash > /etc/bash_completion.d/bo
+
+# zsh
+bo completion zsh > "${fpath[1]}/_bo"
+
+# fish
+bo completion fish > ~/.config/fish/completions/bo.fish
+
+# PowerShell
+bo completion powershell | Out-String | Invoke-Expression
+```
+
+Run `bo completion <shell> --help` for shell-specific installation instructions.
 
 ## Global flags
 
@@ -1088,23 +1144,41 @@ Open `http://127.0.0.1:8081` in a browser to browse captured requests interactiv
 Run `bo <command> --help` for full flag descriptions and usage examples for any command:
 
 ```bash
+# Common
 bo login --help
+bo logoff --help
+bo update --help
+bo version --help
+
+# CF Org
 bo orgs --help
 bo org-spaces --help
 bo org-users --help
 bo org-space-users --help
 bo create-org-space-users --help
 bo delete-org-space-users --help
+bo apps --help
+
+# XSUAA Users
 bo users --help
 bo delete-users --help
-bo describe-subaccount --help
+bo role-collections --help
+
+# Destination
+bo subaccount-destinations --help
+bo create-subaccount-destinations --help
+bo update-subaccount-destinations --help
+bo delete-subaccount-destinations --help
 bo space-destinations --help
 bo create-space-destinations --help
 bo update-space-destinations --help
 bo delete-space-destinations --help
-bo apps --help
-bo role-collections --help
-bo reorg-wiki-attachments --help
+
+# Subaccount Automation
+bo describe-subaccount --help
+
+# Utilities
 bo clear-logs --help
-bo upgrade --help
+bo completion --help
+bo reorg-wiki-attachments --help
 ```

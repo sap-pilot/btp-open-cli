@@ -43,4 +43,15 @@ func RegisterCommand(c *cobra.Command) {
 
 func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose/debug output")
+
+	rootCmd.AddGroup(
+		&cobra.Group{ID: "common", Title: "Common:"},
+		&cobra.Group{ID: "cf-org", Title: "CF Org:"},
+		&cobra.Group{ID: "xsuaa", Title: "XSUAA Users:"},
+		&cobra.Group{ID: "destination", Title: "Destination:"},
+		&cobra.Group{ID: "subaccount", Title: "Subaccount Automation:"},
+		&cobra.Group{ID: "utilities", Title: "Utilities:"},
+	)
+	rootCmd.SetHelpCommandGroupID("utilities")
+	rootCmd.SetCompletionCommandGroupID("utilities")
 }

@@ -413,6 +413,7 @@ func joinRoleTypes(roles []cf.Role) string {
 }
 
 func init() {
+	deleteOrgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(deleteOrgSpaceUsersCmd)
 	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	deleteOrgSpaceUsersCmd.Flags().String("users", "", "Path to the CSV file (required; columns: cfuser_name,cfuser_origin)")

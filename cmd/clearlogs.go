@@ -68,6 +68,7 @@ var clearLogsCmd = &cobra.Command{
 }
 
 func init() {
+	clearLogsCmd.GroupID = "utilities"
 	rootCmd.AddCommand(clearLogsCmd)
 	clearLogsCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }
