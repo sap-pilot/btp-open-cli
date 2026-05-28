@@ -14,6 +14,12 @@
 
 ### Changed
 
+- **`users` — added `--format` flag** supporting `toon` (default), `json`, and `csv` output:
+  - `--format toon` — existing TOON output (unchanged default)
+  - `--format json` — indented JSON document with the same `regions → orgs → users` hierarchy
+  - `--format csv` — flat CSV with one row per user; columns: `region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups`; `--fields`/`--excludeFields` filtering still applies (excluded fields appear as empty columns)
+  - Added `json` struct tags to all output types (`usrOutDoc`, `usrOutRegion`, `usrOutOrg`, `usrOutUser`)
+
 - **`org-users`, `org-space-users` — added `--org` and `--orgs` flags for org filtering**:
   - `--org <guid>` — restrict output to a single org by exact GUID; orgs in all scanned regions that do not match are skipped
   - `--orgs <path>` — path to a CSV file (`region,org_id,org_name`) listing the orgs to include; same format used by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`

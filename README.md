@@ -397,6 +397,12 @@ Only the access token is cached in `~/.bo/credentials.json` — service key cred
 # List XSUAA users across all orgs in stored regions
 bo users
 
+# JSON output
+bo users --format json
+
+# CSV output
+bo users --format csv
+
 # Skip interactive prompts for orgs with no service instance or key
 bo users --no-prompt
 
@@ -426,7 +432,7 @@ bo users --excludeFields lastLogonTime,groups
 bo users --filter "sap.ids" --excludeFields groups --regions us10,us20
 ```
 
-Output format (TOON):
+Default TOON output:
 ```
 regions:
   - region: us10
@@ -442,6 +448,8 @@ regions:
             lastLogonTime: 2026-01-15T08:30:00Z
             groups: <group-values>
 ```
+
+CSV columns: `region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups`
 
 ### `delete-users`
 
