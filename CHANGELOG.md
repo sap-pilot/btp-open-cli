@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.10 — 2026-05-28
+
+### Fixed
+
+- **`*-destinations` commands — "incomplete credentials" resolved for newer destination service key format**: the destination service broker now wraps OAuth credentials inside a `"uaa"` sub-object rather than exposing them at the top level of the `credentials` JSON:
+
+  ```json
+  {
+    "credentials": {
+      "uaa": {
+        "clientid": "...",
+        "clientsecret": "...",
+        "url": "https://<tenant>.authentication.<region>.hana.ondemand.com",
+        "uri": "https://destination-configuration.cfapps.<region>.hana.ondemand.com"
+      },
+      "content_endpoint": "..."
+    }
+  }
+  ```
+
+  `destCredentialsFromDetails` (introduced in the previous fix) was reading from the flat top-level map only, so `clientid` and all other fields appeared empty. Fixed by checking for the `"uaa"` sub-object first and falling back to the flat map for older key formats. Additional `uri` fallbacks (`endpoints["destination"]`, top-level `"uri"`) are retained for other edge cases. The improved warning message now names the first missing field to aid diagnosis if the fallback also fails.
+
+  **Security note:** service key credentials (`clientid`, `clientsecret`) are read from CF on demand, used to obtain an access token, then discarded — they are never written to `~/.bo/credentials.json`. Only the access token (plus `tokenURL` and `uri`) is cached locally and reused or refreshed on subsequent calls.
+
 ## v0.9 — 2026-05-28
 
 ### Changed
