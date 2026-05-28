@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,28 +21,28 @@ import (
 // ── output types ─────────────────────────────────────────────────────────────
 
 type usrOutUser struct {
-	ID            string `toon:"user_id"`
-	ExternalID    string `toon:"user_externalId"`
-	Origin        string `toon:"user_origin"`
-	UserName      string `toon:"userName"`
-	Email         string `toon:"email"`
-	LastLogonTime string `toon:"lastLogonTime"`
-	Groups        string `toon:"groups"`
+	ID            string `json:"user_id"         toon:"user_id"`
+	ExternalID    string `json:"user_externalId"  toon:"user_externalId"`
+	Origin        string `json:"user_origin"      toon:"user_origin"`
+	UserName      string `json:"userName"         toon:"userName"`
+	Email         string `json:"email"            toon:"email"`
+	LastLogonTime string `json:"lastLogonTime"    toon:"lastLogonTime"`
+	Groups        string `json:"groups"           toon:"groups"`
 }
 
 type usrOutOrg struct {
-	ID    string       `toon:"org_id"`
-	Name  string       `toon:"org_name"`
-	Users []usrOutUser `toon:"users"`
+	ID    string       `json:"org_id"   toon:"org_id"`
+	Name  string       `json:"org_name" toon:"org_name"`
+	Users []usrOutUser `json:"users"    toon:"users"`
 }
 
 type usrOutRegion struct {
-	ID   string      `toon:"region"`
-	Orgs []usrOutOrg `toon:"orgs"`
+	ID   string      `json:"region" toon:"region"`
+	Orgs []usrOutOrg `json:"orgs"   toon:"orgs"`
 }
 
 type usrOutDoc struct {
-	Regions []usrOutRegion `toon:"regions"`
+	Regions []usrOutRegion `json:"regions" toon:"regions"`
 }
 
 // ── command ───────────────────────────────────────────────────────────────────
@@ -50,6 +52,11 @@ var usersCmd = &cobra.Command{
 	Short: "List XSUAA users across all accessible organizations",
 	Long: `List users from the XSUAA (Authorization and Trust Management) apiaccess service
 across one or more regions and organizations.
+
+Output formats (--format):
+  toon  Token-Oriented Object Notation — compact, human-readable (default)
+  json  JSON document
+  csv   CSV rows: region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
@@ -62,6 +69,7 @@ are fetched from CF on demand and never stored locally.
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
+		format, _ := cmd.Flags().GetString("format")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgGUID, _ := cmd.Flags().GetString("org")
@@ -149,7 +157,7 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		wg.Wait()
 
-		// Phase 3: assemble and print TOON output, preserving region order.
+		// Phase 3: assemble output document, preserving region order.
 		regionOrder := make([]string, 0)
 		regionSeen := make(map[string]bool)
 		for _, c := range clients {
@@ -189,22 +197,71 @@ If --regions is omitted the regions from the last login are used.`,
 				outRegions = append(outRegions, usrOutRegion{ID: rid, Orgs: orgs})
 			}
 		}
+		doc := usrOutDoc{Regions: outRegions}
 
-		out, err := toonenc.Marshal(usrOutDoc{Regions: outRegions}, toonenc.WithIndent(2))
-		if err != nil {
-			return fmt.Errorf("encoding output: %w", err)
+		switch strings.ToLower(format) {
+		case "json":
+			return writeUsersJSON(doc)
+		case "csv":
+			return writeUsersCSV(doc)
+		default: // "toon"
+			return writeUsersToon(doc)
 		}
-		if _, err = os.Stdout.Write(out); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(os.Stdout)
-		return err
 	},
+}
+
+func writeUsersToon(doc usrOutDoc) error {
+	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+	if err != nil {
+		return fmt.Errorf("encoding output: %w", err)
+	}
+	if _, err = os.Stdout.Write(out); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(os.Stdout)
+	return err
+}
+
+func writeUsersJSON(doc usrOutDoc) error {
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding JSON: %w", err)
+	}
+	fmt.Fprintln(os.Stdout, string(out))
+	return nil
+}
+
+// writeUsersCSV writes one row per user with columns:
+// region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups
+func writeUsersCSV(doc usrOutDoc) error {
+	w := csv.NewWriter(os.Stdout)
+	defer w.Flush()
+
+	if err := w.Write([]string{
+		"region", "org_id", "org_name",
+		"user_id", "user_externalId", "user_origin", "userName", "email", "lastLogonTime", "groups",
+	}); err != nil {
+		return err
+	}
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, u := range o.Users {
+				if err := w.Write([]string{
+					r.ID, o.ID, o.Name,
+					u.ID, u.ExternalID, u.Origin, u.UserName, u.Email, u.LastLogonTime, u.Groups,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func init() {
 	rootCmd.AddCommand(usersCmd)
 	usersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
+	usersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
 	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
