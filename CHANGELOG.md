@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9 — 2026-05-28
+
+### Changed
+
+- **`upgrade` command renamed to `update`** — the command name is now `bo update` (was `bo upgrade`); all internal messages updated accordingly ("Update complete." etc.)
+
+- **`update` — optional `[release]` argument for pinned downloads**: when a release tag is passed (e.g. `bo update v0.9`), the binary is downloaded directly from `https://github.com/sap-pilot/btp-open-cli/releases/download/{release}/bo-{os}-{arch}` without calling the GitHub API or comparing versions; useful for pinning to a specific version or rolling back. When no argument is given, the existing behaviour is preserved: latest release is fetched from the GitHub API, compared to the running version, and the download is skipped if already up to date.
+
 ## v0.8 — 2026-05-28
 
 ### Added

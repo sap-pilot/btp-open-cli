@@ -176,7 +176,7 @@ Because your custom files live in `cmd/custom/` and upstream only ever touches `
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
 | [`clear-logs`](#clear-logs) | Delete all local log files under `~/.bo/log/` |
-| [`upgrade`](#upgrade) | Check for the latest release and upgrade the `bo` binary in place |
+| [`update`](#update) | Update the `bo` binary in place from a specific or the latest GitHub release |
 | [`version`](#version) | Print the current version |
 
 ### `login`
@@ -993,19 +993,27 @@ bo clear-logs
 bo clear-logs -y
 ```
 
-### `upgrade`
+### `update`
 
-Check for the latest release on GitHub and upgrade the `bo` binary in place.
+Update the `bo` binary in place from a GitHub release.
 
 ```bash
-# Check for updates and confirm before downloading
-bo upgrade
+# Check for the latest release and update if a newer version is available
+bo update
 
 # Skip confirmation prompt
-bo upgrade -y
+bo update -y
+
+# Download a specific release (skips the GitHub API version check)
+bo update v0.9
+
+# Specific release, no prompt
+bo update v0.9 -y
 ```
 
-The command compares the local version against the latest GitHub release. If a newer version is available it downloads the platform-matching binary (`bo-{os}-{arch}`) and replaces the running executable:
+When no release is specified, the command fetches the latest release from GitHub, compares it to the running version, and exits cleanly if already up to date. When a release tag is given (e.g. `v0.9`), the binary is downloaded directly from `releases/download/{release}/` without calling the GitHub API or comparing versions.
+
+The platform-matching binary (`bo-{os}-{arch}`) is always used. Replacement strategy:
 
 - **Linux / macOS** — downloads to a temp file in the same directory, then atomically renames it over the current binary.
 - **Windows** — renames `bo.exe` to `bo-{version}.exe` first (Windows cannot overwrite a running executable), then downloads the new release as `bo.exe`.
@@ -1106,5 +1114,5 @@ bo apps --help
 bo role-collections --help
 bo reorg-wiki-attachments --help
 bo clear-logs --help
-bo upgrade --help
+bo update --help
 ```

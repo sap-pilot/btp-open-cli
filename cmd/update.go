@@ -15,7 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const upgradeRepoAPI = "https://api.github.com/repos/sap-pilot/btp-open-cli/releases/latest"
+const (
+	updateRepoAPI  = "https://api.github.com/repos/sap-pilot/btp-open-cli/releases/latest"
+	updateRepoBase = "https://github.com/sap-pilot/btp-open-cli/releases/download"
+)
 
 type ghRelease struct {
 	TagName string    `json:"tag_name"`
@@ -27,48 +30,21 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
-var upgradeCmd = &cobra.Command{
-	Use:   "upgrade",
-	Short: "Upgrade bo to the latest release from GitHub",
+var updateCmd = &cobra.Command{
+	Use:   "update [release]",
+	Short: "Update bo to a specific or the latest release from GitHub",
+	Long: `Update the bo binary in place from a GitHub release.
+
+If [release] is omitted, the latest published release is fetched from the
+GitHub API and compared to the running version; if already up to date the
+command exits without downloading anything.
+
+If [release] is specified (e.g. "v0.9"), the binary is downloaded directly
+from https://github.com/sap-pilot/btp-open-cli/releases/download/{release}/
+without calling the GitHub API or checking the current version.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
-
-		release, err := fetchLatestRelease()
-		if err != nil {
-			return fmt.Errorf("checking latest release: %w", err)
-		}
-
-		latestVersion := strings.TrimPrefix(release.TagName, "v")
-		localVersion := strings.TrimPrefix(Version, "v")
-
-		fmt.Fprintf(os.Stdout, "Local version:  %s\n", localVersion)
-		fmt.Fprintf(os.Stdout, "Latest version: %s\n", latestVersion)
-
-		if localVersion == latestVersion {
-			fmt.Fprintln(os.Stdout, "Already up to date.")
-			return nil
-		}
-
-		assetName := upgradeAssetName()
-		var asset *ghAsset
-		for i := range release.Assets {
-			if release.Assets[i].Name == assetName {
-				asset = &release.Assets[i]
-				break
-			}
-		}
-		if asset == nil {
-			return fmt.Errorf("no release asset found for %s/%s (expected %q)", runtime.GOOS, runtime.GOARCH, assetName)
-		}
-
-		if !skipConfirm {
-			fmt.Fprintf(os.Stderr, "Upgrade to version %s? [y/N] ", latestVersion)
-			scanner := bufio.NewScanner(os.Stdin)
-			if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
-				fmt.Fprintln(os.Stdout, "Aborted.")
-				return nil
-			}
-		}
 
 		exePath, err := os.Executable()
 		if err != nil {
@@ -79,19 +55,76 @@ var upgradeCmd = &cobra.Command{
 			return fmt.Errorf("resolving symlinks: %w", err)
 		}
 		exeDir := filepath.Dir(exePath)
+		localVersion := strings.TrimPrefix(Version, "v")
+		assetName := updateAssetName()
+
+		if len(args) == 1 {
+			// Specific release requested — skip version check and API call.
+			release := args[0]
+			downloadURL := fmt.Sprintf("%s/%s/%s", updateRepoBase, release, assetName)
+
+			if !skipConfirm {
+				fmt.Fprintf(os.Stderr, "Update to release %s? [y/N] ", release)
+				scanner := bufio.NewScanner(os.Stdin)
+				if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+					fmt.Fprintln(os.Stdout, "Aborted.")
+					return nil
+				}
+			}
+
+			fmt.Fprintf(os.Stdout, "Downloading %s from release %s...\n", assetName, release)
+			if runtime.GOOS == "windows" {
+				return updateWindows(downloadURL, exePath, exeDir, localVersion)
+			}
+			return updateUnix(downloadURL, exePath, exeDir)
+		}
+
+		// No release specified — fetch latest from GitHub API.
+		latest, err := fetchLatestRelease()
+		if err != nil {
+			return fmt.Errorf("checking latest release: %w", err)
+		}
+
+		latestVersion := strings.TrimPrefix(latest.TagName, "v")
+		fmt.Fprintf(os.Stdout, "Local version:  %s\n", localVersion)
+		fmt.Fprintf(os.Stdout, "Latest version: %s\n", latestVersion)
+
+		if localVersion == latestVersion {
+			fmt.Fprintln(os.Stdout, "Already up to date.")
+			return nil
+		}
+
+		var asset *ghAsset
+		for i := range latest.Assets {
+			if latest.Assets[i].Name == assetName {
+				asset = &latest.Assets[i]
+				break
+			}
+		}
+		if asset == nil {
+			return fmt.Errorf("no release asset found for %s/%s (expected %q)", runtime.GOOS, runtime.GOARCH, assetName)
+		}
+
+		if !skipConfirm {
+			fmt.Fprintf(os.Stderr, "Update to version %s? [y/N] ", latestVersion)
+			scanner := bufio.NewScanner(os.Stdin)
+			if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
+				fmt.Fprintln(os.Stdout, "Aborted.")
+				return nil
+			}
+		}
 
 		fmt.Fprintf(os.Stdout, "Downloading %s...\n", asset.Name)
-
 		if runtime.GOOS == "windows" {
-			return upgradeWindows(asset, exePath, exeDir, localVersion)
+			return updateWindows(asset.BrowserDownloadURL, exePath, exeDir, localVersion)
 		}
-		return upgradeUnix(asset, exePath, exeDir)
+		return updateUnix(asset.BrowserDownloadURL, exePath, exeDir)
 	},
 }
 
 func fetchLatestRelease() (*ghRelease, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", upgradeRepoAPI, nil)
+	req, err := http.NewRequest("GET", updateRepoAPI, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +148,9 @@ func fetchLatestRelease() (*ghRelease, error) {
 	return &release, nil
 }
 
-// upgradeAssetName returns the expected GitHub release asset filename for the
+// updateAssetName returns the expected GitHub release asset filename for the
 // current OS and architecture, e.g. "bo-linux-amd64" or "bo-windows-amd64.exe".
-func upgradeAssetName() string {
+func updateAssetName() string {
 	name := fmt.Sprintf("bo-%s-%s", runtime.GOOS, runtime.GOARCH)
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -125,11 +158,11 @@ func upgradeAssetName() string {
 	return name
 }
 
-// upgradeUnix downloads the new binary to a temp file in the same directory,
+// updateUnix downloads the new binary to a temp file in the same directory,
 // sets executable permissions, then atomically replaces the running binary.
-func upgradeUnix(asset *ghAsset, exePath, exeDir string) error {
-	tmpPath := filepath.Join(exeDir, ".bo-upgrade-tmp")
-	if err := downloadBinary(asset.BrowserDownloadURL, tmpPath); err != nil {
+func updateUnix(downloadURL, exePath, exeDir string) error {
+	tmpPath := filepath.Join(exeDir, ".bo-update-tmp")
+	if err := downloadBinary(downloadURL, tmpPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("downloading: %w", err)
 	}
@@ -137,13 +170,13 @@ func upgradeUnix(asset *ghAsset, exePath, exeDir string) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("replacing executable: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, "Upgrade complete.")
+	fmt.Fprintln(os.Stdout, "Update complete.")
 	return nil
 }
 
-// upgradeWindows renames the existing bo.exe to bo-{version}.exe (since Windows
+// updateWindows renames the existing bo.exe to bo-{version}.exe (since Windows
 // cannot overwrite a running executable), then downloads the new release as bo.exe.
-func upgradeWindows(asset *ghAsset, exePath, exeDir, localVersion string) error {
+func updateWindows(downloadURL, exePath, exeDir, localVersion string) error {
 	backupName := fmt.Sprintf("bo-%s.exe", localVersion)
 	backupPath := filepath.Join(exeDir, backupName)
 
@@ -153,12 +186,12 @@ func upgradeWindows(asset *ghAsset, exePath, exeDir, localVersion string) error 
 	fmt.Fprintf(os.Stdout, "Renamed current executable to %s\n", backupName)
 
 	newPath := filepath.Join(exeDir, "bo.exe")
-	if err := downloadBinary(asset.BrowserDownloadURL, newPath); err != nil {
+	if err := downloadBinary(downloadURL, newPath); err != nil {
 		// Best-effort rollback.
 		os.Rename(backupPath, exePath)
 		return fmt.Errorf("downloading: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, "Upgrade complete.")
+	fmt.Fprintln(os.Stdout, "Update complete.")
 	return nil
 }
 
@@ -187,6 +220,6 @@ func downloadBinary(url, destPath string) error {
 }
 
 func init() {
-	rootCmd.AddCommand(upgradeCmd)
-	upgradeCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	rootCmd.AddCommand(updateCmd)
+	updateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }
