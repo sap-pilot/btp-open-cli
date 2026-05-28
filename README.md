@@ -293,6 +293,12 @@ bo org-users --format csv
 # Filter by name, id, origin, or role
 bo org-users --filter manager
 
+# Restrict to a single org by GUID
+bo org-users --org <org-guid>
+
+# Include only specific orgs (CSV: region,org_id,org_name)
+bo org-users --orgs target-orgs.csv
+
 # Specific regions
 bo org-users --regions us10,us20,eu10
 ```
@@ -313,6 +319,12 @@ bo org-space-users --format csv
 
 # Filter by name, id, origin, or role
 bo org-space-users --filter space_developer
+
+# Restrict to a single org by GUID
+bo org-space-users --org <org-guid>
+
+# Include only specific orgs (CSV: region,org_id,org_name)
+bo org-space-users --orgs target-orgs.csv
 
 # Specific regions
 bo org-space-users --regions us10,us20,eu10

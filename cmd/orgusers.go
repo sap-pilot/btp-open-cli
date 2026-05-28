@@ -117,15 +117,29 @@ Output formats (--format):
   json  JSON document
   csv   CSV rows: region,org_id,org_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 
+Use --org to scope to a single org by GUID, or --orgs to provide a CSV
+file (columns: region,org_id,org_name) listing the orgs to include.
+
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
 		filter, _ := cmd.Flags().GetString("filter")
+		orgGUID, _ := cmd.Flags().GetString("org")
+		orgsFile, _ := cmd.Flags().GetString("orgs")
 
 		creds, err := store.Load()
 		if err != nil {
 			return fmt.Errorf("not logged in — run: bo login --regions <region>")
+		}
+
+		// Parse --orgs CSV if provided.
+		var includeOrgs cosOrgSet
+		if orgsFile != "" {
+			includeOrgs, err = parseCosOrgCSV(orgsFile)
+			if err != nil {
+				return fmt.Errorf("invalid --orgs CSV: %w", err)
+			}
 		}
 
 		// Determine API URLs: --regions flag > stored ActiveAPIURLs.
@@ -182,6 +196,12 @@ If --regions is omitted, the regions from the last login are used.`,
 
 				details := make([]orgDetail, 0, len(orgs))
 				for _, org := range orgs {
+					if orgGUID != "" && org.GUID != orgGUID {
+						continue
+					}
+					if len(includeOrgs) > 0 && !includeOrgs.matches(regionName, org.GUID, org.Name) {
+						continue
+					}
 					users, err := client.ListOrganizationUsers(ctx, org.GUID)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "warning: skipping org %q in %s: %v\n", org.Name, regionName, err)
@@ -282,5 +302,7 @@ func init() {
 	rootCmd.AddCommand(orgUsersCmd)
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
-	orgUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, and origin")
+	orgUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
+	orgUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")
+	orgUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 }
