@@ -225,7 +225,7 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 List all accessible CF organizations across one or more regions and output them as CSV.
 The output format (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags
-accepted by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`.
+accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`.
 
 ```bash
 # List orgs for stored regions
