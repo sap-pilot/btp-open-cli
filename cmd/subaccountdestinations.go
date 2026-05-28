@@ -171,12 +171,9 @@ func resolveOrgDestClient(
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: fetching key details for %q: %v\n", inst.Name, detailErr)
 						continue
 					}
-					clientID, _ := details["clientid"].(string)
-					clientSecret, _ := details["clientsecret"].(string)
-					tokenURL, _ := details["url"].(string)
-					uri, _ := details["uri"].(string)
-					if clientID == "" || clientSecret == "" || tokenURL == "" || uri == "" {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: incomplete credentials in service key for %q\n", inst.Name)
+					clientID, clientSecret, tokenURL, uri, missing := destCredentialsFromDetails(details)
+					if missing != "" {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: incomplete credentials in service key for %q (missing %q)\n", inst.Name, missing)
 						continue
 					}
 
