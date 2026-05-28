@@ -2,6 +2,14 @@
 
 ## v0.10 — 2026-05-28
 
+### Changed
+
+- **`orgs` — added `--format` flag** supporting `toon` (default), `json`, and `csv` output:
+  - `--format toon` — new default; compact TOON output with structure `regions:[{region, orgs:[{org_id, org_name}]}]`
+  - `--format json` — indented JSON document with the same `regions → orgs` hierarchy
+  - `--format csv` — flat CSV with header `region,org_id,org_name`; same format as before and still compatible with the `--orgs` / `--excludeOrgs` flags of other commands (e.g. `bo orgs --format csv > my-orgs.csv`)
+  - **Breaking:** the default output changed from CSV to TOON; scripts relying on `bo orgs` producing CSV must add `--format csv`
+
 ### Fixed
 
 - **`*-destinations` commands — "incomplete credentials" resolved for newer destination service key format**: the destination service broker now wraps OAuth credentials inside a `"uaa"` sub-object rather than exposing them at the top level of the `credentials` JSON:

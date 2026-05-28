@@ -251,24 +251,39 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 ### `orgs`
 
-List all accessible CF organizations across one or more regions and output them as CSV.
-The output format (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags
-accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`.
+List all accessible CF organizations across one or more regions.
 
 ```bash
-# List orgs for stored regions
+# TOON output (default)
 bo orgs
+
+# JSON output
+bo orgs --format json
+
+# CSV output (region,org_id,org_name)
+bo orgs --format csv
 
 # Specific regions
 bo orgs --regions us10,us20,eu10
 
-# Save to a file for use as --orgs / --excludeOrgs input
-bo orgs --regions us10,us20 > my-orgs.csv
+# Save as CSV for use with --orgs / --excludeOrgs flags
+bo orgs --format csv --regions us10,us20 > my-orgs.csv
 
 # Exclude production orgs when creating users
-bo orgs --regions us10,us20 | grep prod > prod-orgs.csv
+bo orgs --format csv --regions us10,us20 | grep prod > prod-orgs.csv
 bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
 ```
+
+Default TOON output:
+```
+regions:
+  - region: us10
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+```
+
+The `--format csv` output (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`.
 
 ### `org-spaces`
 
