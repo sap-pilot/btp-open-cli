@@ -12,6 +12,14 @@
   - README: new **Custom Command Development** section (after Installation) with step-by-step instructions, sample code, and tips for vibe-coding new commands
   - README: **Commands** section renamed to **Built-in Commands**
 
+### Changed
+
+- **`org-users`, `org-space-users` — added `--org` and `--orgs` flags for org filtering**:
+  - `--org <guid>` — restrict output to a single org by exact GUID; orgs in all scanned regions that do not match are skipped
+  - `--orgs <path>` — path to a CSV file (`region,org_id,org_name`) listing the orgs to include; same format used by `create-org-space-users`, `delete-org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`
+  - Both flags are optional and can be combined; when neither is supplied all accessible orgs are listed (existing behaviour)
+  - Only matching orgs are fetched — org user and role API calls are skipped for filtered-out orgs, reducing unnecessary API traffic
+
 ### Fixed
 
 - **`login` / re-authentication — Ctrl-C now aborts password and passcode prompts immediately**: `term.ReadPassword` retries `EINTR` internally, so pressing Ctrl-C at a `Password>` or `Passcode>` prompt had no effect — the prompt remained blocked indefinitely. All four call sites (`Password>` and `Passcode>` in both the initial `login` flow and the interactive re-authentication flow) are replaced with `readPasswordCtx`, which runs `term.ReadPassword` in a background goroutine and selects on its result channel vs `ctx.Done()`. `term.ReadPassword` keeps `ISIG` enabled so Ctrl-C is still delivered as `SIGINT`; `signal.NotifyContext` captures that signal and cancels the context; the select detects cancellation immediately and returns `context.Canceled`. The terminal is restored at once so the `Aborted.` message prints correctly.
