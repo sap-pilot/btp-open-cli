@@ -93,6 +93,7 @@ If --regions is omitted, the regions from the last login are used.`,
 }
 
 func init() {
+	orgsCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgsCmd)
 	orgsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 }

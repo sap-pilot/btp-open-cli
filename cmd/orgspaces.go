@@ -195,6 +195,7 @@ If --regions is omitted, the regions from the last login are used.`,
 }
 
 func init() {
+	orgSpacesCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgSpacesCmd)
 	orgSpacesCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgSpacesCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")

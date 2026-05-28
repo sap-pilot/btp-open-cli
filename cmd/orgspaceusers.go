@@ -350,6 +350,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 }
 
 func init() {
+	orgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgSpaceUsersCmd)
 	orgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")

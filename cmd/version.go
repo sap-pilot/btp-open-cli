@@ -27,5 +27,6 @@ var versionCmd = &cobra.Command{
 }
 
 func init() {
+	versionCmd.GroupID = "common"
 	rootCmd.AddCommand(versionCmd)
 }

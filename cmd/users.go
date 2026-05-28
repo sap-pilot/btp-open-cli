@@ -259,6 +259,7 @@ func writeUsersCSV(doc usrOutDoc) error {
 }
 
 func init() {
+	usersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(usersCmd)
 	usersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	usersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")

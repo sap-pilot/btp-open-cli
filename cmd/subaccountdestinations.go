@@ -535,6 +535,7 @@ func init() {
 	subaccountDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern matched against any destination property")
 	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
 	_ = subaccountDestinationsCmd.MarkFlagRequired("org")
+	subaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(subaccountDestinationsCmd)
 
 	// create-subaccount-destinations
@@ -544,6 +545,7 @@ func init() {
 	createSubaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — fail if no service instance or key found")
 	_ = createSubaccountDestinationsCmd.MarkFlagRequired("org")
 	_ = createSubaccountDestinationsCmd.MarkFlagRequired("destinations")
+	createSubaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(createSubaccountDestinationsCmd)
 
 	// update-subaccount-destinations
@@ -553,6 +555,7 @@ func init() {
 	updateSubaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — fail if no service instance or key found")
 	_ = updateSubaccountDestinationsCmd.MarkFlagRequired("org")
 	_ = updateSubaccountDestinationsCmd.MarkFlagRequired("destinations")
+	updateSubaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(updateSubaccountDestinationsCmd)
 
 	// delete-subaccount-destinations
@@ -562,5 +565,6 @@ func init() {
 	deleteSubaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — fail if no service instance or key found")
 	_ = deleteSubaccountDestinationsCmd.MarkFlagRequired("org")
 	_ = deleteSubaccountDestinationsCmd.MarkFlagRequired("destinations")
+	deleteSubaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(deleteSubaccountDestinationsCmd)
 }

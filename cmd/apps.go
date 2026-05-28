@@ -399,6 +399,7 @@ func appsMatchesFilter(a appsOutApp, filter string) bool {
 }
 
 func init() {
+	appsCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(appsCmd)
 	appsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	appsCmd.Flags().String("org", "", "Org GUID to target; only apps from this org will be fetched")

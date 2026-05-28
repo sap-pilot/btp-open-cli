@@ -299,6 +299,7 @@ func writeOrgUsersCSV(results []regionData, filter string) error {
 }
 
 func init() {
+	orgUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgUsersCmd)
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")

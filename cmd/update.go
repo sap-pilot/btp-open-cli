@@ -220,6 +220,7 @@ func downloadBinary(url, destPath string) error {
 }
 
 func init() {
+	updateCmd.GroupID = "common"
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }

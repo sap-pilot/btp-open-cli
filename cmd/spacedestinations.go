@@ -630,6 +630,7 @@ func init() {
 	spaceDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
 	spaceDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern (e.g. MDG or API*PP) matched against any destination property")
 	_ = spaceDestinationsCmd.MarkFlagRequired("space")
+	spaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(spaceDestinationsCmd)
 
 	// create-space-destinations
@@ -638,6 +639,7 @@ func init() {
 	createSpaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	_ = createSpaceDestinationsCmd.MarkFlagRequired("space")
 	_ = createSpaceDestinationsCmd.MarkFlagRequired("destinations")
+	createSpaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(createSpaceDestinationsCmd)
 
 	// update-space-destinations
@@ -646,6 +648,7 @@ func init() {
 	updateSpaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	_ = updateSpaceDestinationsCmd.MarkFlagRequired("space")
 	_ = updateSpaceDestinationsCmd.MarkFlagRequired("destinations")
+	updateSpaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(updateSpaceDestinationsCmd)
 
 	// delete-space-destinations
@@ -654,5 +657,6 @@ func init() {
 	deleteSpaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	_ = deleteSpaceDestinationsCmd.MarkFlagRequired("space")
 	_ = deleteSpaceDestinationsCmd.MarkFlagRequired("destinations")
+	deleteSpaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(deleteSpaceDestinationsCmd)
 }
