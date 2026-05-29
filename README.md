@@ -142,6 +142,22 @@ Your new command appears alongside all built-in commands in `./bo --help`.
 
 Because your custom files live in `cmd/custom/` and upstream only ever touches `cmd/*.go` (never `cmd/custom/`), a `git pull upstream main` will never conflict with your custom commands. Add new features, bump versions, pick up bug fixes — your commands are untouched.
 
+### Running tests
+
+After adding custom code, run the full test suite to confirm nothing is broken:
+
+```bash
+go test ./...
+```
+
+To run only the command-layer tests:
+
+```bash
+go test ./cmd/...
+```
+
+All tests use mocked REST API servers — no real BTP credentials or network access required.
+
 ### Tips for vibe-coding new commands
 
 - Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
