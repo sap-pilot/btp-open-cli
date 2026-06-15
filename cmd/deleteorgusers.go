@@ -16,16 +16,28 @@ import (
 
 var deleteOrgSpaceUsersCmd = &cobra.Command{
 	Use:   "delete-org-space-users",
-	Short: "Remove users from specific orgs and spaces from an org-space-users CSV",
-	Long: `Remove users from CF organizations and spaces from a targeted CSV file.
+	Short: "Remove users from specific orgs and spaces from a CSV file",
+	Long: `Remove users from CF organizations and spaces from a CSV file.
 
-The --users CSV must use the format produced by "bo org-space-users --format csv":
+Two --users CSV formats are accepted:
 
-  region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+  Simple 3-column format (broadcast — no targeting info):
+    cfuser_name,cfuser_origin,cfuser_roles
 
-Targeting rules:
-  - Rows with an empty space_id → remove ALL of the user's roles from that org.
-  - Rows with a non-empty space_id → remove ALL of the user's roles from that space.
+  Full 9-column format (produced by "bo org-space-users --format csv"):
+    region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+
+Broadcast semantics (empty fields in the CSV):
+  - Empty region    → target all active CF regions stored in credentials.
+  - Empty org_id    → discover and target all accessible CF orgs.
+  - Empty space_id  → if cfuser_roles contains space_* roles, remove those roles
+                       from ALL spaces in each resolved org (or spaces matching
+                       space_name if that column is non-empty).
+  - Non-empty cfuser_id  → use the stored GUID directly; skip CF user lookup.
+
+The cfuser_roles column drives scope targeting: organization_* roles → org-level
+deletion; space_* roles → space-level deletion. All roles the user holds at each
+targeted scope are removed (not only those listed in cfuser_roles).
 
 All space-level removals are performed first. If there are also org-level rows, a
 5-second pause follows (to allow CF's async role processing to settle) before org
@@ -60,28 +72,127 @@ confirmation is required before any changes are made.`,
 			}
 		}
 
-		// Filter rows: apply region filter and check token availability.
-		noTokenWarnedRegions := map[string]bool{}
-		var activeRows []orgSpaceUserRow
-		for _, row := range rows {
-			if regionsFilter != nil && !regionsFilter[row.Region] {
-				continue
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
+		defer cancel()
+
+		// Create one CF client per API URL (lazily).
+		clients := map[string]*cf.Client{}
+		getClient := func(apiURL string, tok store.RegionToken) *cf.Client {
+			if c, ok := clients[apiURL]; ok {
+				return c
 			}
-			if _, _, ok := rowAPIURL(row.Region, creds); !ok {
-				if !noTokenWarnedRegions[row.Region] {
-					noTokenWarnedRegions[row.Region] = true
-					fmt.Fprintf(os.Stderr, "warning: no token for region %q — run: bo login --regions %s\n", row.Region, row.Region)
-				}
-				continue
-			}
-			activeRows = append(activeRows, row)
+			c := cf.NewClient(apiURL, tok.AccessToken)
+			c.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
+			clients[apiURL] = c
+			return c
 		}
+
+		// Expand source rows into concrete execution rows.
+		// Broadcast semantics: empty region/org_id/space_id triggers CF discovery.
+		var activeRows []orgSpaceUserRow
+		for _, srcRow := range rows {
+			// Split roles by level to determine which scopes to target.
+			var hasOrgRoles, hasSpaceRoles bool
+			for _, role := range srcRow.Roles {
+				if strings.HasPrefix(role, "organization_") {
+					hasOrgRoles = true
+				} else if strings.HasPrefix(role, "space_") {
+					hasSpaceRoles = true
+				}
+			}
+			// If no recognized roles, default to targeting both org and space levels
+			// (safe for rows that have no cfuser_roles column, e.g. a delete CSV
+			// that only lists users without role detail).
+			if !hasOrgRoles && !hasSpaceRoles {
+				hasOrgRoles = true
+				hasSpaceRoles = true
+			}
+
+			apiURLs := targetAPIURLs(srcRow.Region, creds, regionsFilter)
+			for _, apiURL := range apiURLs {
+				tok := creds.Tokens[apiURL]
+				client := getClient(apiURL, tok)
+				region := store.APIURLToRegion(apiURL)
+
+				// ── Case 1: specific space (SpaceID non-empty, space roles present) ──
+				if hasSpaceRoles && srcRow.SpaceID != "" {
+					activeRows = append(activeRows, orgSpaceUserRow{
+						Region:    region,
+						OrgID:     srcRow.OrgID,
+						OrgName:   srcRow.OrgName,
+						SpaceID:   srcRow.SpaceID,
+						SpaceName: srcRow.SpaceName,
+						UserID:    srcRow.UserID,
+						UserName:  srcRow.UserName,
+						Origin:    srcRow.Origin,
+						Roles:     srcRow.Roles,
+					})
+				}
+
+				// ── Case 2: org-level roles OR broadcast-space rows ──
+				if !hasOrgRoles && !(hasSpaceRoles && srcRow.SpaceID == "") {
+					continue
+				}
+
+				// Determine target orgs.
+				var targetOrgs []cf.Organization
+				if srcRow.OrgID != "" {
+					targetOrgs = []cf.Organization{{GUID: srcRow.OrgID, Name: srcRow.OrgName}}
+				} else {
+					orgs, listErr := client.ListOrganizations(ctx)
+					if listErr != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not list orgs for %s: %v\n", apiURL, listErr)
+						continue
+					}
+					targetOrgs = orgs
+				}
+
+				for _, org := range targetOrgs {
+					// Org-level deletion row.
+					if hasOrgRoles {
+						activeRows = append(activeRows, orgSpaceUserRow{
+							Region:   region,
+							OrgID:    org.GUID,
+							OrgName:  org.Name,
+							SpaceID:  "",
+							UserID:   srcRow.UserID,
+							UserName: srcRow.UserName,
+							Origin:   srcRow.Origin,
+							Roles:    srcRow.Roles,
+						})
+					}
+
+					// Space-level deletion rows (broadcast space targeting).
+					if hasSpaceRoles && srcRow.SpaceID == "" {
+						spaces, spErr := client.ListOrganizationSpaces(ctx, org.GUID)
+						if spErr != nil {
+							fmt.Fprintf(os.Stderr, "warning: could not list spaces for org %s: %v\n", org.Name, spErr)
+							continue
+						}
+						for _, sp := range spaces {
+							if srcRow.SpaceName != "" && !strings.EqualFold(sp.Name, srcRow.SpaceName) {
+								continue
+							}
+							activeRows = append(activeRows, orgSpaceUserRow{
+								Region:    region,
+								OrgID:     org.GUID,
+								OrgName:   org.Name,
+								SpaceID:   sp.GUID,
+								SpaceName: sp.Name,
+								UserID:    srcRow.UserID,
+								UserName:  srcRow.UserName,
+								Origin:    srcRow.Origin,
+								Roles:     srcRow.Roles,
+							})
+						}
+					}
+				}
+			}
+		}
+
 		if len(activeRows) == 0 {
 			return fmt.Errorf("no rows to process after filtering (check --regions or login)")
 		}
-
-		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
-		defer cancel()
 
 		// Preview and confirm.
 		if !skipConfirm {
@@ -97,7 +208,7 @@ confirmation is required before any changes are made.`,
 			fmt.Fprintln(os.Stdout)
 		}
 
-		// Separate into space-level and org-level rows.
+		// Separate expanded rows into space-level and org-level.
 		var spaceRows, orgRows []orgSpaceUserRow
 		for _, row := range activeRows {
 			if row.SpaceID != "" {
@@ -107,34 +218,31 @@ confirmation is required before any changes are made.`,
 			}
 		}
 
-		// Create one CF client per API URL (lazily).
-		clients := map[string]*cf.Client{}
-		getClient := func(apiURL string, tok store.RegionToken) *cf.Client {
-			if c, ok := clients[apiURL]; ok {
-				return c
+		// resolveCfUser returns the CF user GUID for a row.
+		// If the row has a pre-fetched UserID, it is used directly (skipping a CF API call).
+		resolveCfUser := func(row orgSpaceUserRow, client *cf.Client) (*cf.CfUser, error) {
+			if row.UserID != "" {
+				return &cf.CfUser{GUID: row.UserID, Username: row.UserName, Origin: row.Origin}, nil
 			}
-			c := cf.NewClient(apiURL, tok.AccessToken)
-			c.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
-			clients[apiURL] = c
-			return c
+			return client.FindCfUser(ctx, row.UserName, row.Origin)
 		}
 
 		// Phase 3a: delete all space-level roles.
 		if len(spaceRows) > 0 {
 			fmt.Fprintln(os.Stdout, "Deleting space roles...")
 			for _, row := range spaceRows {
-				apiURL, tok, _ := rowAPIURL(row.Region, creds) // verified above
+				apiURL, tok, _ := rowAPIURL(row.Region, creds)
 				client := getClient(apiURL, tok)
 
-				cfUser, err := client.FindCfUser(ctx, row.UserName, row.Origin)
-				if err != nil {
-					slog.Debug("user not found in CF", "user", row.UserName, "region", row.Region, "err", err)
+				cfUser, userErr := resolveCfUser(row, client)
+				if userErr != nil {
+					slog.Debug("user not found in CF", "user", row.UserName, "region", row.Region, "err", userErr)
 					continue
 				}
-				roles, err := client.ListSpaceUserRoles(ctx, row.SpaceID, cfUser.GUID)
-				if err != nil {
+				roles, listErr := client.ListSpaceUserRoles(ctx, row.SpaceID, cfUser.GUID)
+				if listErr != nil {
 					fmt.Fprintf(os.Stderr, "  ! %s / %s / %s: could not list space roles: %v\n",
-						row.UserName, row.OrgName, row.SpaceName, err)
+						row.UserName, row.OrgName, row.SpaceName, listErr)
 					continue
 				}
 				var removed, failed []string
@@ -170,18 +278,18 @@ confirmation is required before any changes are made.`,
 		if len(orgRows) > 0 {
 			fmt.Fprintln(os.Stdout, "Deleting org roles...")
 			for _, row := range orgRows {
-				apiURL, tok, _ := rowAPIURL(row.Region, creds) // verified above
+				apiURL, tok, _ := rowAPIURL(row.Region, creds)
 				client := getClient(apiURL, tok)
 
-				cfUser, err := client.FindCfUser(ctx, row.UserName, row.Origin)
-				if err != nil {
-					slog.Debug("user not found in CF", "user", row.UserName, "region", row.Region, "err", err)
+				cfUser, userErr := resolveCfUser(row, client)
+				if userErr != nil {
+					slog.Debug("user not found in CF", "user", row.UserName, "region", row.Region, "err", userErr)
 					continue
 				}
-				roles, err := client.ListOrganizationUserRoles(ctx, row.OrgID, cfUser.GUID)
-				if err != nil {
+				roles, listErr := client.ListOrganizationUserRoles(ctx, row.OrgID, cfUser.GUID)
+				if listErr != nil {
 					fmt.Fprintf(os.Stderr, "  ! %s / %s: could not list org roles: %v\n",
-						row.UserName, row.OrgName, err)
+						row.UserName, row.OrgName, listErr)
 					continue
 				}
 				var removed, failed []string
@@ -209,8 +317,8 @@ confirmation is required before any changes are made.`,
 func init() {
 	deleteOrgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(deleteOrgSpaceUsersCmd)
-	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10)")
-	deleteOrgSpaceUsersCmd.Flags().String("users", "", "Path to org-space-users CSV file (required; columns: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles)")
+	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
+	deleteOrgSpaceUsersCmd.Flags().String("users", "", "Path to users CSV file (required); accepts 3-column format (cfuser_name,cfuser_origin,cfuser_roles) for broadcast or 9-column format (region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles) for targeted operations")
 	deleteOrgSpaceUsersCmd.MarkFlagRequired("users")
 	deleteOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 }

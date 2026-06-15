@@ -391,7 +391,16 @@ bo org-space-users --regions us10,us20,eu10
 
 ### `create-org-space-users`
 
-Add users to CF organizations and spaces from a targeted CSV file. The `--users` CSV uses the format produced by `bo org-space-users --format csv`:
+Add users to CF organizations and spaces from a CSV file. Two `--users` CSV formats are accepted:
+
+**Simple 3-column format** (broadcast — no targeting info; the command discovers all accessible orgs and spaces):
+
+```
+cfuser_name,cfuser_origin,cfuser_roles
+alice@example.com,sap.ids,organization_manager;organization_user;space_developer
+```
+
+**Full 9-column format** (produced by `bo org-space-users --format csv`; enables precise per-row targeting):
 
 ```
 region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
@@ -399,11 +408,16 @@ eu20,739543ac-...,my-org,,,u1,alice@example.com,sap.ids,organization_manager;org
 eu20,739543ac-...,my-org,71202847-...,dev,,alice@example.com,sap.ids,space_developer;space_manager
 ```
 
-Targeting rules:
-- Rows with an **empty `space_id`** → assign `cfuser_roles` to the org (`org_id`).
-- Rows with a **non-empty `space_id`** → assign `cfuser_roles` to that space (`space_id`).
+**Broadcast semantics** — empty columns in the 9-column format (or using the 3-column format) trigger automatic discovery:
 
-Each row targets a specific org or space directly; no CF org/space discovery is performed.
+| Empty column | Behaviour |
+|---|---|
+| `region` | Target all active CF regions stored in credentials |
+| `org_id` | Discover and target all accessible CF orgs (filtered by `--orgs` / `--excludeOrgs`) |
+| `space_id` + `space_name` | Target all spaces in each resolved org (if `cfuser_roles` includes `space_*` roles) |
+| `space_id` only | Match spaces by `space_name` across each resolved org |
+
+Roles are split by prefix: `organization_*` roles are applied at the org level; `space_*` roles are applied at the space level.
 
 ```bash
 # Apply all rows (shows TOON preview, prompts y/N)
@@ -418,7 +432,7 @@ bo create-org-space-users --users org-space-users.csv --orgs target-orgs.csv
 # Exclude specific orgs (CSV: region,org_id,org_name)
 bo create-org-space-users --users org-space-users.csv --excludeOrgs prod-orgs.csv
 
-# Only process rows for specific regions
+# Only process rows for specific regions (also restricts broadcast rows)
 bo create-org-space-users --users org-space-users.csv --regions eu20,us10
 ```
 
@@ -426,7 +440,16 @@ Without `-y`, a TOON preview of all targeted users and scopes is shown before an
 
 ### `delete-org-space-users`
 
-Remove users from CF organizations and spaces from a targeted CSV file. The `--users` CSV uses the format produced by `bo org-space-users --format csv`:
+Remove users from CF organizations and spaces from a CSV file. Two `--users` CSV formats are accepted:
+
+**Simple 3-column format** (broadcast — the command discovers all accessible orgs and spaces):
+
+```
+cfuser_name,cfuser_origin,cfuser_roles
+alice@example.com,sap.ids,organization_manager;space_developer
+```
+
+**Full 9-column format** (produced by `bo org-space-users --format csv`; enables precise per-row targeting):
 
 ```
 region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
@@ -434,9 +457,9 @@ eu20,739543ac-...,my-org,,,u1,alice@example.com,sap.ids,organization_manager;org
 eu20,739543ac-...,my-org,71202847-...,dev,,alice@example.com,sap.ids,space_developer;space_manager
 ```
 
-Targeting rules:
-- Rows with an **empty `space_id`** → remove ALL of the user's roles from that org.
-- Rows with a **non-empty `space_id`** → remove ALL of the user's roles from that space.
+**Broadcast semantics** — same as `create-org-space-users` (empty columns trigger discovery). The `cfuser_roles` column determines which levels to target: `organization_*` → org-level deletion; `space_*` → space-level deletion. **All** roles the user holds at each targeted scope are removed, not only those listed in `cfuser_roles`.
+
+When `cfuser_id` is non-empty, the stored GUID is used directly and the CF user lookup is skipped (faster for large operations).
 
 Space-level removals are performed first. If org-level rows are also present, a 5-second pause follows before org roles are removed (to allow CF's async role processing to settle).
 
@@ -447,7 +470,7 @@ bo delete-org-space-users --users org-space-users.csv
 # Skip confirmation prompt
 bo delete-org-space-users --users org-space-users.csv -y
 
-# Only process rows for specific regions
+# Only process rows for specific regions (also restricts broadcast rows)
 bo delete-org-space-users --users org-space-users.csv --regions eu20,us10
 ```
 

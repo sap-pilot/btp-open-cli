@@ -209,28 +209,72 @@ func rowAPIURL(region string, creds *store.Credentials) (string, store.RegionTok
 	return "", store.RegionToken{}, false
 }
 
+// targetAPIURLs returns the CF API URLs to target for a given region value.
+//
+//   - If srcRegion is non-empty, it is treated as a region shorthand (e.g. "eu20")
+//     or a direct URL. A single-element slice is returned if a token exists; nil
+//     otherwise (with a warning printed to stderr).
+//   - If srcRegion is empty (broadcast), all active API URLs from creds are
+//     returned, filtered by regionsFilter when non-nil.
+//
+// The returned strings are full CF API base URLs (e.g. "https://api.cf.eu20.hana.ondemand.com").
+func targetAPIURLs(srcRegion string, creds *store.Credentials, regionsFilter map[string]bool) []string {
+	if srcRegion != "" {
+		if regionsFilter != nil && !regionsFilter[srcRegion] {
+			return nil
+		}
+		apiURL := store.RegionToAPIURL(srcRegion)
+		if _, ok := creds.Tokens[apiURL]; ok {
+			return []string{apiURL}
+		}
+		// Fallback: treat srcRegion as a direct URL (supports httptest servers in tests).
+		if _, ok := creds.Tokens[srcRegion]; ok {
+			return []string{srcRegion}
+		}
+		fmt.Fprintf(os.Stderr, "warning: no token for region %q — run: bo login --regions %s\n", srcRegion, srcRegion)
+		return nil
+	}
+	// Broadcast: iterate all active API URLs matching regionsFilter.
+	var urls []string
+	for _, u := range creds.ActiveAPIURLs {
+		region := store.APIURLToRegion(u)
+		if regionsFilter != nil && !regionsFilter[region] {
+			continue
+		}
+		if _, ok := creds.Tokens[u]; !ok {
+			continue
+		}
+		urls = append(urls, u)
+	}
+	return urls
+}
+
 // ── command ───────────────────────────────────────────────────────────────────
 
 var createOrgSpaceUsersCmd = &cobra.Command{
 	Use:   "create-org-space-users",
-	Short: "Add users with org and space roles from an org-space-users CSV",
-	Long: `Add users to CF organizations and spaces from a targeted CSV file.
+	Short: "Add users with org and space roles from a CSV file",
+	Long: `Add users to CF organizations and spaces from a CSV file.
 
-The --users CSV must use the format produced by "bo org-space-users --format csv":
+Two --users CSV formats are accepted:
 
-  region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+  Simple 3-column format (broadcast — no targeting info):
+    cfuser_name,cfuser_origin,cfuser_roles
 
-Targeting rules:
-  - Rows with an empty space_id → assign cfuser_roles to the org (org_id).
-  - Rows with a non-empty space_id → assign cfuser_roles to that space (space_id).
+  Full 9-column format (produced by "bo org-space-users --format csv"):
+    region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 
-Each row targets a specific org or space directly; no CF org/space discovery is
-performed. The region column is used to select the correct CF API endpoint.
+Broadcast semantics (empty fields in the CSV):
+  - Empty region    → target all active CF regions stored in credentials.
+  - Empty org_id    → discover and target all accessible CF orgs (filtered by
+                       --orgs / --excludeOrgs).
+  - Empty space_id  → if space_name is set, match spaces by name; if both are
+                       empty and cfuser_roles contains space_* roles, target ALL
+                       spaces in each resolved org.
+  - Non-empty space_id  → assign space roles to that specific space only.
 
-Use --orgs / --excludeOrgs to additionally filter which rows are applied based
-on org_id / org_name. Use --regions to restrict processing to rows whose region
-column matches one of the given shorthands (e.g. us10,eu20); when omitted all
-rows are processed.
+Roles are split by prefix: organization_* roles are applied at the org level;
+space_* roles are applied at the space level.
 
 Without -y, a TOON preview of all targeted users and scopes is shown and
 confirmation is required before any changes are made.`,
@@ -275,35 +319,141 @@ confirmation is required before any changes are made.`,
 			}
 		}
 
-		// Filter rows: apply region, org include/exclude, and token availability.
-		noTokenWarnedRegions := map[string]bool{}
-		var activeRows []orgSpaceUserRow
-		for _, row := range rows {
-			if regionsFilter != nil && !regionsFilter[row.Region] {
-				continue
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
+		defer cancel()
+
+		// Create one CF client per API URL (lazily).
+		clients := map[string]*cf.Client{}
+		getClient := func(apiURL string, tok store.RegionToken) *cf.Client {
+			if c, ok := clients[apiURL]; ok {
+				return c
 			}
-			if len(includeOrgs) > 0 && !includeOrgs.matches(row.Region, row.OrgID, row.OrgName) {
-				continue
-			}
-			if len(excludeOrgs) > 0 && excludeOrgs.matches(row.Region, row.OrgID, row.OrgName) {
-				slog.Debug("skipping excluded org row", "org", row.OrgName, "region", row.Region)
-				continue
-			}
-			if _, _, ok := rowAPIURL(row.Region, creds); !ok {
-				if !noTokenWarnedRegions[row.Region] {
-					noTokenWarnedRegions[row.Region] = true
-					fmt.Fprintf(os.Stderr, "warning: no token for region %q — run: bo login --regions %s\n", row.Region, row.Region)
-				}
-				continue
-			}
-			activeRows = append(activeRows, row)
+			c := cf.NewClient(apiURL, tok.AccessToken)
+			c.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
+			clients[apiURL] = c
+			return c
 		}
+
+		// Expand source rows into concrete execution rows.
+		// This may call CF APIs to discover orgs and spaces for broadcast rows.
+		var activeRows []orgSpaceUserRow
+		for _, srcRow := range rows {
+			// Split roles by level.
+			var orgRoles, spaceRoles []string
+			for _, role := range srcRow.Roles {
+				if strings.HasPrefix(role, "organization_") {
+					orgRoles = append(orgRoles, role)
+				} else if strings.HasPrefix(role, "space_") {
+					spaceRoles = append(spaceRoles, role)
+				}
+			}
+			if len(orgRoles) == 0 && len(spaceRoles) == 0 {
+				slog.Debug("skipping row with no recognized roles", "user", srcRow.UserName)
+				continue
+			}
+
+			apiURLs := targetAPIURLs(srcRow.Region, creds, regionsFilter)
+			for _, apiURL := range apiURLs {
+				tok := creds.Tokens[apiURL]
+				client := getClient(apiURL, tok)
+				region := store.APIURLToRegion(apiURL)
+
+				// ── Case 1: specific space (SpaceID non-empty, spaceRoles present) ──
+				// No org iteration needed — SpaceID is used directly.
+				if len(spaceRoles) > 0 && srcRow.SpaceID != "" {
+					// Apply org filter using srcRow info when available.
+					if len(includeOrgs) > 0 && !includeOrgs.matches(region, srcRow.OrgID, srcRow.OrgName) {
+						continue
+					}
+					if len(excludeOrgs) > 0 && excludeOrgs.matches(region, srcRow.OrgID, srcRow.OrgName) {
+						slog.Debug("skipping excluded org (space row)", "org", srcRow.OrgName)
+						continue
+					}
+					activeRows = append(activeRows, orgSpaceUserRow{
+						Region:    region,
+						OrgID:     srcRow.OrgID,
+						OrgName:   srcRow.OrgName,
+						SpaceID:   srcRow.SpaceID,
+						SpaceName: srcRow.SpaceName,
+						UserName:  srcRow.UserName,
+						Origin:    srcRow.Origin,
+						Roles:     spaceRoles,
+					})
+				}
+
+				// ── Case 2: org-level roles OR broadcast-space rows ──
+				// Requires iterating over resolved orgs.
+				if len(orgRoles) == 0 && !(len(spaceRoles) > 0 && srcRow.SpaceID == "") {
+					continue
+				}
+
+				// Determine target orgs.
+				var targetOrgs []cf.Organization
+				if srcRow.OrgID != "" {
+					targetOrgs = []cf.Organization{{GUID: srcRow.OrgID, Name: srcRow.OrgName}}
+				} else {
+					// Broadcast: discover all orgs.
+					orgs, listErr := client.ListOrganizations(ctx)
+					if listErr != nil {
+						fmt.Fprintf(os.Stderr, "warning: could not list orgs for %s: %v\n", apiURL, listErr)
+						continue
+					}
+					targetOrgs = orgs
+				}
+
+				for _, org := range targetOrgs {
+					// Apply include/exclude org filter.
+					if len(includeOrgs) > 0 && !includeOrgs.matches(region, org.GUID, org.Name) {
+						continue
+					}
+					if len(excludeOrgs) > 0 && excludeOrgs.matches(region, org.GUID, org.Name) {
+						slog.Debug("skipping excluded org", "org", org.Name, "region", region)
+						continue
+					}
+
+					// Org-level roles.
+					if len(orgRoles) > 0 {
+						activeRows = append(activeRows, orgSpaceUserRow{
+							Region:   region,
+							OrgID:    org.GUID,
+							OrgName:  org.Name,
+							SpaceID:  "",
+							UserName: srcRow.UserName,
+							Origin:   srcRow.Origin,
+							Roles:    orgRoles,
+						})
+					}
+
+					// Space-level roles with broadcast space targeting.
+					if len(spaceRoles) > 0 && srcRow.SpaceID == "" {
+						spaces, spErr := client.ListOrganizationSpaces(ctx, org.GUID)
+						if spErr != nil {
+							fmt.Fprintf(os.Stderr, "warning: could not list spaces for org %s: %v\n", org.Name, spErr)
+							continue
+						}
+						for _, sp := range spaces {
+							if srcRow.SpaceName != "" && !strings.EqualFold(sp.Name, srcRow.SpaceName) {
+								continue
+							}
+							activeRows = append(activeRows, orgSpaceUserRow{
+								Region:    region,
+								OrgID:     org.GUID,
+								OrgName:   org.Name,
+								SpaceID:   sp.GUID,
+								SpaceName: sp.Name,
+								UserName:  srcRow.UserName,
+								Origin:    srcRow.Origin,
+								Roles:     spaceRoles,
+							})
+						}
+					}
+				}
+			}
+		}
+
 		if len(activeRows) == 0 {
 			return fmt.Errorf("no rows to process after filtering (check --regions, --orgs, or login)")
 		}
-
-		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
-		defer cancel()
 
 		// Preview and confirm.
 		if !skipConfirm {
@@ -319,21 +469,9 @@ confirmation is required before any changes are made.`,
 			fmt.Fprintln(os.Stdout)
 		}
 
-		// Create one CF client per API URL (lazily).
-		clients := map[string]*cf.Client{}
-		getClient := func(apiURL string, tok store.RegionToken) *cf.Client {
-			if c, ok := clients[apiURL]; ok {
-				return c
-			}
-			c := cf.NewClient(apiURL, tok.AccessToken)
-			c.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
-			clients[apiURL] = c
-			return c
-		}
-
 		// Execute.
 		for _, row := range activeRows {
-			apiURL, tok, _ := rowAPIURL(row.Region, creds) // already verified above
+			apiURL, tok, _ := rowAPIURL(row.Region, creds) // verified during expansion
 			client := getClient(apiURL, tok)
 
 			if row.SpaceID == "" {
@@ -379,8 +517,8 @@ confirmation is required before any changes are made.`,
 func init() {
 	createOrgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(createOrgSpaceUsersCmd)
-	createOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10)")
-	createOrgSpaceUsersCmd.Flags().String("users", "", "Path to org-space-users CSV file (required; columns: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles)")
+	createOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
+	createOrgSpaceUsersCmd.Flags().String("users", "", "Path to users CSV file (required); accepts 3-column format (cfuser_name,cfuser_origin,cfuser_roles) for broadcast or 9-column format (region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles) for targeted operations")
 	createOrgSpaceUsersCmd.MarkFlagRequired("users")
 	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to include (columns: region,org_id,org_name); filters rows by org_id or org_name")
 	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
