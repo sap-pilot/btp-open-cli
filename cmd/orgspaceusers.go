@@ -126,7 +126,8 @@ var orgSpaceUsersCmd = &cobra.Command{
 Output formats (--format):
   toon  Token-Oriented Object Notation — compact, human-readable (default)
   json  JSON document
-  csv   CSV rows: region,org_id,org_name,scope,scope_id,scope_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+  csv   CSV rows: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+        (space_id and space_name are empty for org-level users)
 
 Use --org to scope to a single org by GUID, or --orgs to provide a CSV
 file (columns: region,org_id,org_name) listing the orgs to include.
@@ -303,9 +304,9 @@ func writeOspJSON(results []ospRegionData, filter string) error {
 	return nil
 }
 
-// writeOspCSV writes one row per user. The "scope" column is "org" for
-// org-level users and "space" for space-level users; scope_id/scope_name
-// identify the org or space respectively.
+// writeOspCSV writes one row per user with columns:
+// region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+// space_id and space_name are empty for org-level users.
 func writeOspCSV(results []ospRegionData, filter string) error {
 	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
@@ -317,7 +318,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 
 	if err := w.Write([]string{
 		"region", "org_id", "org_name",
-		"scope", "scope_id", "scope_name",
+		"space_id", "space_name",
 		"cfuser_id", "cfuser_name", "cfuser_origin", "cfuser_roles",
 	}); err != nil {
 		return err
@@ -325,9 +326,10 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 	for _, r := range doc.Regions {
 		for _, o := range r.Orgs {
 			for _, u := range o.Users {
+				// Org-level users: space_id and space_name are empty.
 				if err := w.Write([]string{
 					r.ID, o.ID, o.Name,
-					"org", o.ID, o.Name,
+					"", "",
 					u.ID, u.Name, u.Origin, u.Roles,
 				}); err != nil {
 					return err
@@ -337,7 +339,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 				for _, u := range sp.Users {
 					if err := w.Write([]string{
 						r.ID, o.ID, o.Name,
-						"space", sp.ID, sp.Name,
+						sp.ID, sp.Name,
 						u.ID, u.Name, u.Origin, u.Roles,
 					}); err != nil {
 						return err
