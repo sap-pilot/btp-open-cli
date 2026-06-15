@@ -8,16 +8,34 @@ import (
 	"strings"
 )
 
-// csvUser represents one row from a users CSV file (name,origin,roles).
-type csvUser struct {
-	Name   string
-	Origin string
-	Roles  []string
+// orgSpaceUserRow is one row from the org-space-users CSV output (produced by
+// bo org-space-users --format csv). It is the --users input format for both
+// create-org-space-users and delete-org-space-users, enabling precise per-org
+// and per-space targeting without scanning all accessible CF resources.
+//
+// Rows with an empty SpaceID target the org level; rows with a non-empty
+// SpaceID target that specific space.
+type orgSpaceUserRow struct {
+	Region    string   // e.g. "eu20"
+	OrgID     string   // CF org GUID
+	OrgName   string
+	SpaceID   string   // empty → org-level; non-empty → space-level
+	SpaceName string
+	UserName  string   // cfuser_name
+	Origin    string   // cfuser_origin
+	Roles     []string // cfuser_roles, semicolon-separated
 }
 
-// parseUsersCSV reads a CSV file with header "name,origin,roles" and returns
-// the list of users. Roles within a row are semicolon-separated.
-func parseUsersCSV(path string) ([]csvUser, error) {
+// parseOrgSpaceUsersCSV reads a CSV produced by "bo org-space-users --format csv".
+//
+// Required header (9 columns):
+//
+//	region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+//
+// Rows where space_id is empty are org-level; rows where space_id is non-empty
+// are space-level. The cfuser_id column is informational and is not used by
+// create-org-space-users or delete-org-space-users.
+func parseOrgSpaceUsersCSV(path string) ([]orgSpaceUserRow, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening file: %w", err)
@@ -29,11 +47,18 @@ func parseUsersCSV(path string) ([]csvUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
-	if len(header) < 3 || header[0] != "cfuser_name" || header[1] != "cfuser_origin" || header[2] != "cfuser_roles" {
-		return nil, fmt.Errorf("invalid header — expected: cfuser_name,cfuser_origin,cfuser_roles")
+	const wantHeader = "region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles"
+	wantCols := strings.Split(wantHeader, ",")
+	if len(header) < len(wantCols) {
+		return nil, fmt.Errorf("invalid header — expected: %s", wantHeader)
+	}
+	for i, want := range wantCols {
+		if header[i] != want {
+			return nil, fmt.Errorf("header column %d: expected %q, got %q", i+1, want, header[i])
+		}
 	}
 
-	var users []csvUser
+	var rows []orgSpaceUserRow
 	for line := 2; ; line++ {
 		row, err := r.Read()
 		if err == io.EOF {
@@ -42,24 +67,39 @@ func parseUsersCSV(path string) ([]csvUser, error) {
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", line, err)
 		}
-		if len(row) < 3 {
-			return nil, fmt.Errorf("line %d: expected 3 columns, got %d", line, len(row))
+		if len(row) < len(wantCols) {
+			return nil, fmt.Errorf("line %d: expected %d columns, got %d", line, len(wantCols), len(row))
 		}
-		name := strings.TrimSpace(row[0])
-		origin := strings.TrimSpace(row[1])
-		if name == "" || origin == "" {
-			return nil, fmt.Errorf("line %d: name and origin cannot be empty", line)
+		region := strings.TrimSpace(row[0])
+		orgID := strings.TrimSpace(row[1])
+		orgName := strings.TrimSpace(row[2])
+		spaceID := strings.TrimSpace(row[3])
+		spaceName := strings.TrimSpace(row[4])
+		// row[5] = cfuser_id — informational only; not used here
+		userName := strings.TrimSpace(row[6])
+		origin := strings.TrimSpace(row[7])
+		if region == "" || orgID == "" || userName == "" || origin == "" {
+			return nil, fmt.Errorf("line %d: region, org_id, cfuser_name, and cfuser_origin must not be empty", line)
 		}
 		var roles []string
-		for _, r := range strings.Split(row[2], ";") {
-			if v := strings.TrimSpace(r); v != "" {
+		for _, v := range strings.Split(row[8], ";") {
+			if v = strings.TrimSpace(v); v != "" {
 				roles = append(roles, v)
 			}
 		}
-		users = append(users, csvUser{Name: name, Origin: origin, Roles: roles})
+		rows = append(rows, orgSpaceUserRow{
+			Region:    region,
+			OrgID:     orgID,
+			OrgName:   orgName,
+			SpaceID:   spaceID,
+			SpaceName: spaceName,
+			UserName:  userName,
+			Origin:    origin,
+			Roles:     roles,
+		})
 	}
-	if len(users) == 0 {
-		return nil, fmt.Errorf("CSV file contains no user rows")
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("CSV file contains no data rows")
 	}
-	return users, nil
+	return rows, nil
 }
