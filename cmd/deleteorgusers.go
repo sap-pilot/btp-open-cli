@@ -199,7 +199,7 @@ confirmation is required before any changes are made.`,
 			if err := printCosPreview("Roles to be removed:", buildCosPreviewDoc(activeRows)); err != nil {
 				return err
 			}
-			fmt.Fprint(os.Stderr, "Proceed with role deletion? [y/N] ")
+			fmt.Fprint(os.Stdout, "Proceed with role deletion? [y/N] ")
 			text, ok := readLine(ctx)
 			if !ok || strings.ToLower(text) != "y" {
 				fmt.Fprintln(os.Stdout, "Aborted.")

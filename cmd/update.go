@@ -64,7 +64,7 @@ without calling the GitHub API or checking the current version.`,
 			downloadURL := fmt.Sprintf("%s/%s/%s", updateRepoBase, release, assetName)
 
 			if !skipConfirm {
-				fmt.Fprintf(os.Stderr, "Update to release %s? [y/N] ", release)
+				fmt.Fprintf(os.Stdout, "Update to release %s? [y/N] ", release)
 				scanner := bufio.NewScanner(os.Stdin)
 				if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
 					fmt.Fprintln(os.Stdout, "Aborted.")
@@ -106,7 +106,7 @@ without calling the GitHub API or checking the current version.`,
 		}
 
 		if !skipConfirm {
-			fmt.Fprintf(os.Stderr, "Update to version %s? [y/N] ", latestVersion)
+			fmt.Fprintf(os.Stdout, "Update to version %s? [y/N] ", latestVersion)
 			scanner := bufio.NewScanner(os.Stdin)
 			if !scanner.Scan() || strings.ToLower(strings.TrimSpace(scanner.Text())) != "y" {
 				fmt.Fprintln(os.Stdout, "Aborted.")

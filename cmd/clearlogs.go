@@ -44,7 +44,7 @@ var clearLogsCmd = &cobra.Command{
 
 		if !skipConfirm {
 			fmt.Fprintf(os.Stdout, "This will delete %d log file(s) under %s.\n", len(files), logDir)
-			fmt.Fprint(os.Stderr, "Proceed? [y/N] ")
+			fmt.Fprint(os.Stdout, "Proceed? [y/N] ")
 			text, ok := readLine(cmd.Context())
 			if !ok || strings.ToLower(strings.TrimSpace(text)) != "y" {
 				fmt.Fprintln(os.Stdout, "Aborted.")
