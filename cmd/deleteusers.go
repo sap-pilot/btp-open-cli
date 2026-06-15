@@ -248,7 +248,7 @@ If --regions is omitted the regions from the last login are used.`,
 			fmt.Fprintln(os.Stdout, "Users to be deleted:")
 			os.Stdout.Write(out)
 			fmt.Fprintln(os.Stdout)
-			fmt.Fprint(os.Stderr, "Proceed with user deletion? [y/N] ")
+			fmt.Fprint(os.Stdout, "Proceed with user deletion? [y/N] ")
 			text, ok := readLine(ctx)
 			if !ok || strings.ToLower(text) != "y" {
 				fmt.Fprintln(os.Stdout, "Aborted.")
