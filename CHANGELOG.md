@@ -38,6 +38,12 @@
   - The `cfuser_roles` column drives scope targeting: `organization_*` → delete from org; `space_*` → delete from spaces. All roles the user holds at each targeted scope are removed (not only those listed in `cfuser_roles`).
   - The 5-second CF async processing pause only occurs when both space-level and org-level rows are present in the same run (previously it always ran).
 
+### Fixed
+
+- **Confirmation prompt ordering** — `[y/N]` prompts in `create-org-space-users`, `delete-org-space-users`, `delete-users`, `clear-logs`, and `update` were written to `stderr` while the preceding preview output was written to `stdout`. Because the two file descriptors can interleave on the terminal, the prompt sometimes appeared before the preview it referred to. All prompts now write to `stdout`, guaranteeing correct ordering.
+
+### Changed
+
 - **`org-space-users --format csv` — updated column layout** (v0.11 prep, landed in previous commit)
 
   The `scope` column has been removed; `scope_id` and `scope_name` have been renamed to `space_id` and `space_name`. Org-level rows emit empty strings for `space_id` and `space_name`.
