@@ -26,6 +26,21 @@ func writeOspUsersCSV(t *testing.T, rows ...[]string) string {
 	return f.Name()
 }
 
+// writeBroadcastUsersCSV writes a 3-column broadcast CSV (no region/org/space targeting).
+func writeBroadcastUsersCSV(t *testing.T, rows ...[]string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "broadcast-users-*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	f.WriteString("cfuser_name,cfuser_origin,cfuser_roles\n") //nolint:errcheck
+	for _, row := range rows {
+		f.WriteString(strings.Join(row, ",") + "\n") //nolint:errcheck
+	}
+	return f.Name()
+}
+
 func TestCreateOrgSpaceUsers_MissingUsersFlag(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	setupTestEnv(t, "http://fake-cf.example.com")
@@ -38,17 +53,17 @@ func TestCreateOrgSpaceUsers_MissingUsersFlag(t *testing.T) {
 func TestCreateOrgSpaceUsers_InvalidUsersCSV(t *testing.T) {
 	setupTestEnv(t, "http://fake-cf.example.com")
 
-	// Write a file with the OLD (incompatible) header.
+	// Write a file with an unrecognised header (neither 3-column nor 9-column).
 	f, err := os.CreateTemp(t.TempDir(), "bad-*.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.WriteString("cfuser_name,cfuser_origin,cfuser_roles\nalice@example.com,sap.ids,organization_manager\n") //nolint:errcheck
+	f.WriteString("name,origin,roles\nalice@example.com,sap.ids,organization_manager\n") //nolint:errcheck
 	f.Close()
 
 	_, _, err = runCmd(t, "create-org-space-users", "--users", f.Name(), "--yes")
 	if err == nil {
-		t.Fatal("expected error for incompatible CSV header")
+		t.Fatal("expected error for unrecognized CSV header")
 	}
 	if !strings.Contains(err.Error(), "invalid --users CSV") {
 		t.Errorf("unexpected error: %v", err)
@@ -165,5 +180,104 @@ func TestCreateOrgSpaceUsers_OrgFilter(t *testing.T) {
 	// Only one POST should have been made (for org-one only).
 	if postCount != 1 {
 		t.Errorf("expected exactly 1 POST for org-one, got %d", postCount)
+	}
+}
+
+// TestCreateOrgSpaceUsers_Broadcast_OrgLevel tests the 3-column broadcast CSV
+// format where region/org_id are empty. The command should discover orgs from
+// the CF API and create org-level roles in each.
+func TestCreateOrgSpaceUsers_Broadcast_OrgLevel(t *testing.T) {
+	orgListCalled := false
+	postCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v3/organizations" && r.Method == "GET":
+			orgListCalled = true
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+				"resources":  []map[string]interface{}{{"guid": "org1", "name": "my-org"}},
+			})))
+		case r.URL.Path == "/v3/roles" && r.Method == "POST":
+			postCount++
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte("{}")) //nolint:errcheck
+		default:
+			http.Error(w, "no route: "+r.URL.Path+" "+r.Method, 404)
+		}
+	}))
+	defer srv.Close()
+	setupTestEnv(t, srv.URL)
+
+	// 3-column broadcast CSV — no region/org/space targeting.
+	usersFile := writeBroadcastUsersCSV(t,
+		[]string{"alice@example.com", "sap.ids", "organization_manager"},
+	)
+
+	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--yes")
+	if err != nil {
+		t.Fatalf("create-org-space-users broadcast failed: %v", err)
+	}
+	if !orgListCalled {
+		t.Error("expected GET /v3/organizations to be called for broadcast")
+	}
+	if postCount == 0 {
+		t.Error("expected at least one POST to /v3/roles")
+	}
+}
+
+// TestCreateOrgSpaceUsers_Broadcast_SpaceLevel tests the 3-column broadcast CSV
+// with space roles. The command should discover orgs, then all spaces in each org,
+// and create space roles in each.
+func TestCreateOrgSpaceUsers_Broadcast_SpaceLevel(t *testing.T) {
+	orgListCalled := false
+	spaceListCalled := false
+	postCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v3/organizations" && r.Method == "GET":
+			orgListCalled = true
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+				"resources":  []map[string]interface{}{{"guid": "org1", "name": "my-org"}},
+			})))
+		case r.URL.Path == "/v3/spaces" && r.Method == "GET":
+			spaceListCalled = true
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+				"resources": []map[string]interface{}{
+					{"guid": "sp1", "name": "dev",
+						"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}}}},
+				},
+			})))
+		case r.URL.Path == "/v3/roles" && r.Method == "POST":
+			postCount++
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte("{}")) //nolint:errcheck
+		default:
+			http.Error(w, "no route: "+r.URL.Path+" "+r.Method, 404)
+		}
+	}))
+	defer srv.Close()
+	setupTestEnv(t, srv.URL)
+
+	// 3-column broadcast CSV with space role only.
+	usersFile := writeBroadcastUsersCSV(t,
+		[]string{"alice@example.com", "sap.ids", "space_developer"},
+	)
+
+	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--yes")
+	if err != nil {
+		t.Fatalf("create-org-space-users broadcast (space) failed: %v", err)
+	}
+	if !orgListCalled {
+		t.Error("expected GET /v3/organizations to be called for broadcast")
+	}
+	if !spaceListCalled {
+		t.Error("expected GET /v3/spaces to be called for space-role broadcast")
+	}
+	if postCount == 0 {
+		t.Error("expected at least one POST to /v3/roles")
 	}
 }

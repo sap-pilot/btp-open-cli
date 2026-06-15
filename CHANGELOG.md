@@ -4,35 +4,39 @@
 
 ### Changed
 
-- **`create-org-space-users` — new `--users` CSV format (breaking change)**
+- **`create-org-space-users` — broadcast semantics and flexible CSV input**
 
-  The `--users` CSV now uses the format produced by `bo org-space-users --format csv`:
+  Two `--users` CSV formats are now accepted:
 
+  **Simple 3-column format** (broadcast — no targeting info):
+  ```
+  cfuser_name,cfuser_origin,cfuser_roles
+  alice@example.com,sap.ids,organization_manager;space_developer
+  ```
+
+  **Full 9-column format** (produced by `bo org-space-users --format csv`):
   ```
   region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
   ```
 
-  Targeting is now per-row and explicit:
-  - Rows with an empty `space_id` → assign `cfuser_roles` to that org (`org_id`).
-  - Rows with a non-empty `space_id` → assign `cfuser_roles` to that space (`space_id`).
+  When region, org_id, or space_id are empty (or when using the 3-column format), the command applies broadcast semantics:
+  - Empty `region` → target all active CF regions stored in credentials.
+  - Empty `org_id` → discover and target all accessible CF orgs (filtered by `--orgs` / `--excludeOrgs`).
+  - Empty `space_id` + empty `space_name` → target all spaces in each resolved org (for `space_*` roles).
+  - Empty `space_id` + non-empty `space_name` → match spaces by name across each resolved org.
 
-  No CF org/space discovery is performed; the region, org GUID, and space GUID are read directly from each CSV row. This enables piping the output of `bo org-space-users --format csv` directly into this command to replicate an org/space structure.
+  Roles are split by prefix: `organization_*` roles → org level; `space_*` roles → space level.
 
-  **Old format** (`cfuser_name,cfuser_origin,cfuser_roles`) is no longer accepted.
+  The `--regions` flag also restricts which active API URLs are targeted for broadcast rows (not only which CSV rows to include).
 
-  The `--orgs` / `--excludeOrgs` flags now filter rows by `org_id` / `org_name` from the CSV (rather than scanning all accessible CF orgs). The `--regions` flag now filters which rows to process based on the `region` column (rather than determining which CF endpoints to query).
+- **`delete-org-space-users` — broadcast semantics and flexible CSV input**
 
-- **`delete-org-space-users` — new `--users` CSV format (breaking change)**
+  Same two CSV formats and broadcast semantics as `create-org-space-users` above.
 
-  The `--users` CSV now uses the same format produced by `bo org-space-users --format csv` (same as above).
-
-  Targeting is now per-row and explicit:
-  - Rows with an empty `space_id` → remove ALL of the user's roles from that org.
-  - Rows with a non-empty `space_id` → remove ALL of the user's roles from that space.
-
-  **Old format** (`cfuser_name,cfuser_origin`) is no longer accepted.
-
-  The 5-second CF async processing pause now only occurs when both space-level rows _and_ org-level rows are present in the same run (previously it always ran). This makes delete-only-org or delete-only-space operations significantly faster.
+  Additional behaviour:
+  - When `cfuser_id` is non-empty in the CSV, the stored GUID is used directly and the CF user lookup (`GET /v3/users`) is skipped — useful for large-scale operations.
+  - The `cfuser_roles` column drives scope targeting: `organization_*` → delete from org; `space_*` → delete from spaces. All roles the user holds at each targeted scope are removed (not only those listed in `cfuser_roles`).
+  - The 5-second CF async processing pause only occurs when both space-level and org-level rows are present in the same run (previously it always ran).
 
 - **`org-space-users --format csv` — updated column layout** (v0.11 prep, landed in previous commit)
 
