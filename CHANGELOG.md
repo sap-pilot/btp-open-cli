@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.11 — 2026-06-15
+
+### Changed
+
+- **`create-org-space-users` — new `--users` CSV format (breaking change)**
+
+  The `--users` CSV now uses the format produced by `bo org-space-users --format csv`:
+
+  ```
+  region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+  ```
+
+  Targeting is now per-row and explicit:
+  - Rows with an empty `space_id` → assign `cfuser_roles` to that org (`org_id`).
+  - Rows with a non-empty `space_id` → assign `cfuser_roles` to that space (`space_id`).
+
+  No CF org/space discovery is performed; the region, org GUID, and space GUID are read directly from each CSV row. This enables piping the output of `bo org-space-users --format csv` directly into this command to replicate an org/space structure.
+
+  **Old format** (`cfuser_name,cfuser_origin,cfuser_roles`) is no longer accepted.
+
+  The `--orgs` / `--excludeOrgs` flags now filter rows by `org_id` / `org_name` from the CSV (rather than scanning all accessible CF orgs). The `--regions` flag now filters which rows to process based on the `region` column (rather than determining which CF endpoints to query).
+
+- **`delete-org-space-users` — new `--users` CSV format (breaking change)**
+
+  The `--users` CSV now uses the same format produced by `bo org-space-users --format csv` (same as above).
+
+  Targeting is now per-row and explicit:
+  - Rows with an empty `space_id` → remove ALL of the user's roles from that org.
+  - Rows with a non-empty `space_id` → remove ALL of the user's roles from that space.
+
+  **Old format** (`cfuser_name,cfuser_origin`) is no longer accepted.
+
+  The 5-second CF async processing pause now only occurs when both space-level rows _and_ org-level rows are present in the same run (previously it always ran). This makes delete-only-org or delete-only-space operations significantly faster.
+
+- **`org-space-users --format csv` — updated column layout** (v0.11 prep, landed in previous commit)
+
+  The `scope` column has been removed; `scope_id` and `scope_name` have been renamed to `space_id` and `space_name`. Org-level rows emit empty strings for `space_id` and `space_name`.
+
+  New header: `region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles`
+
+  This CSV is now directly usable as input for `create-org-space-users` and `delete-org-space-users`.
+
 ## v0.10 — 2026-05-28
 
 ### Changed

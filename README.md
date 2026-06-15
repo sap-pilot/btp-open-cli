@@ -391,58 +391,67 @@ bo org-space-users --regions us10,us20,eu10
 
 ### `create-org-space-users`
 
-Add users with org and space roles to target CF organizations and their spaces from a CSV file.
+Add users to CF organizations and spaces from a targeted CSV file. The `--users` CSV uses the format produced by `bo org-space-users --format csv`:
 
-CSV format (`cfuser_name,cfuser_origin,cfuser_roles`):
 ```
-cfuser_name,cfuser_origin,cfuser_roles
-user@example.com,sap.ids,organization_user;organization_manager;space_developer;space_manager
+region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+eu20,739543ac-...,my-org,,,u1,alice@example.com,sap.ids,organization_manager;organization_user
+eu20,739543ac-...,my-org,71202847-...,dev,,alice@example.com,sap.ids,space_developer;space_manager
 ```
 
-Org-level roles (`organization_*`) are assigned to each target org.
-Space-level roles (`space_*`) are assigned to every space within each target org.
+Targeting rules:
+- Rows with an **empty `space_id`** → assign `cfuser_roles` to the org (`org_id`).
+- Rows with a **non-empty `space_id`** → assign `cfuser_roles` to that space (`space_id`).
+
+Each row targets a specific org or space directly; no CF org/space discovery is performed.
 
 ```bash
-# Add to all orgs in stored regions (shows TOON preview, prompts y/N)
-bo create-org-space-users --users users.csv
+# Apply all rows (shows TOON preview, prompts y/N)
+bo create-org-space-users --users org-space-users.csv
 
 # Skip confirmation prompt
-bo create-org-space-users --users users.csv -y
+bo create-org-space-users --users org-space-users.csv -y
 
-# Target specific orgs only (CSV: region,org_id,org_name)
-bo create-org-space-users --users users.csv --orgs target-orgs.csv
+# Filter by org (CSV: region,org_id,org_name)
+bo create-org-space-users --users org-space-users.csv --orgs target-orgs.csv
 
-# Exclude orgs such as production environments (CSV: region,org_id,org_name)
-bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
+# Exclude specific orgs (CSV: region,org_id,org_name)
+bo create-org-space-users --users org-space-users.csv --excludeOrgs prod-orgs.csv
 
-# Specific regions
-bo create-org-space-users --users users.csv --regions us10,us20,eu10
+# Only process rows for specific regions
+bo create-org-space-users --users org-space-users.csv --regions eu20,us10
 ```
 
-Without `-y`, a TOON preview of target orgs/spaces and users is shown before any changes are made.
+Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
 
 ### `delete-org-space-users`
 
-Remove users from every space (space roles first, then org roles after a 5-second pause) across all accessible CF orgs.
+Remove users from CF organizations and spaces from a targeted CSV file. The `--users` CSV uses the format produced by `bo org-space-users --format csv`:
 
-CSV format (`cfuser_name,cfuser_origin`):
 ```
-cfuser_name,cfuser_origin
-user@example.com,sap.ids
+region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+eu20,739543ac-...,my-org,,,u1,alice@example.com,sap.ids,organization_manager;organization_user
+eu20,739543ac-...,my-org,71202847-...,dev,,alice@example.com,sap.ids,space_developer;space_manager
 ```
+
+Targeting rules:
+- Rows with an **empty `space_id`** → remove ALL of the user's roles from that org.
+- Rows with a **non-empty `space_id`** → remove ALL of the user's roles from that space.
+
+Space-level removals are performed first. If org-level rows are also present, a 5-second pause follows before org roles are removed (to allow CF's async role processing to settle).
 
 ```bash
-# Preview roles to be deleted, then confirm (y/N)
-bo delete-org-space-users --users users.csv
+# Preview roles to be removed, then confirm (y/N)
+bo delete-org-space-users --users org-space-users.csv
 
 # Skip confirmation prompt
-bo delete-org-space-users --users users.csv -y
+bo delete-org-space-users --users org-space-users.csv -y
 
-# Specific regions
-bo delete-org-space-users --users users.csv --regions us10,us20,eu10
+# Only process rows for specific regions
+bo delete-org-space-users --users org-space-users.csv --regions eu20,us10
 ```
 
-Without `-y`, a TOON preview of all roles that will be deleted is shown before any changes are made.
+Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
 
 ### `users`
 
