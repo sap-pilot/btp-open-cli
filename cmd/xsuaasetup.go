@@ -49,6 +49,45 @@ func resolveXsuaaClients(
 		creds.OrgXsuaa = make(map[string]store.XsuaaData)
 	}
 
+	// Fast path: when a non-empty explicit include list is provided and no orgs
+	// are excluded, check whether every org already has a fresh cached XSUAA token
+	// with OrgName and RegionName stored. If so, return immediately without making
+	// any CF API calls (which avoids triggering a CF token refresh).
+	if len(includeOrgs) > 0 && len(excludeOrgs) == 0 {
+		apiURLSet := make(map[string]bool, len(apiURLs))
+		for _, u := range apiURLs {
+			apiURLSet[u] = true
+		}
+		var fast []xsuaaOrgClient
+		allCached := true
+		for _, ref := range includeOrgs {
+			xd, ok := creds.OrgXsuaa[ref.ID]
+			if !ok || xd.AccessToken == "" || xd.OrgName == "" || xd.RegionName == "" {
+				allCached = false
+				break
+			}
+			if time.Now().Add(60 * time.Second).After(xd.TokenExpiry) {
+				allCached = false
+				break
+			}
+			if !apiURLSet[store.RegionToAPIURL(xd.RegionName)] {
+				allCached = false
+				break
+			}
+			fast = append(fast, xsuaaOrgClient{
+				OrgGUID:    ref.ID,
+				OrgName:    xd.OrgName,
+				RegionName: xd.RegionName,
+				APIURL:     xd.APIURL,
+				Token:      xd.AccessToken,
+			})
+		}
+		if allCached {
+			slog.Debug("all XSUAA tokens served from cache", "orgs", len(fast))
+			return fast, creds, nil
+		}
+	}
+
 	var (
 		mu      sync.Mutex // guards creds.OrgXsuaa writes
 		clients []xsuaaOrgClient
@@ -91,6 +130,15 @@ func resolveXsuaaClients(
 
 			if xd.AccessToken != "" && !time.Now().Add(60*time.Second).After(xd.TokenExpiry) {
 				slog.Debug("using cached XSUAA token", "region", regionName, "org", org.Name)
+				// Backfill OrgName/RegionName if an older cache entry lacks them.
+				if xd.OrgName == "" || xd.RegionName == "" {
+					mu.Lock()
+					updated := creds.OrgXsuaa[org.GUID]
+					updated.OrgName = org.Name
+					updated.RegionName = regionName
+					creds.OrgXsuaa[org.GUID] = updated
+					mu.Unlock()
+				}
 				clients = append(clients, xsuaaOrgClient{
 					OrgGUID:    org.GUID,
 					OrgName:    org.Name,
@@ -175,10 +223,13 @@ func resolveXsuaaClients(
 
 			apiBaseURL := xsuaa.ResolveAPIBaseURL(xsuaaAPIURL, regionName)
 
-			// Persist only the token and API URL (never the client credentials).
+			// Persist token, API URL, org name, and region name.
+			// OrgName and RegionName enable the cache-only fast path on next run.
 			mu.Lock()
 			creds.OrgXsuaa[org.GUID] = store.XsuaaData{
 				APIURL:      apiBaseURL,
+				OrgName:     org.Name,
+				RegionName:  regionName,
 				AccessToken: token,
 				TokenExpiry: expiry,
 			}

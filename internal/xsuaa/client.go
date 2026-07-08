@@ -248,7 +248,7 @@ func CreateUser(ctx context.Context, apiBaseURL, accessToken, userName, origin, 
 	u := strings.TrimRight(apiBaseURL, "/") + "/Users"
 
 	payload := map[string]interface{}{
-		"schemas":  []string{"urn:ietf:params:scim:schemas:core:2.0:User"},
+		"schemas":  []string{"urn:scim:schemas:core:1.0"},
 		"userName": userName,
 		"origin":   origin,
 		"emails":   []map[string]interface{}{{"value": email, "primary": true}},
