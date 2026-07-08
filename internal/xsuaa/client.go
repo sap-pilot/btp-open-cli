@@ -240,6 +240,80 @@ func ListRoleCollections(ctx context.Context, apiBaseURL, accessToken string) ([
 	return rcs, nil
 }
 
+// CreateUser provisions a new user in the XSUAA tenant via the SCIM API.
+// On HTTP 409 (user already exists) it returns (nil, nil) so the caller can
+// still proceed to role-collection assignment.
+func CreateUser(ctx context.Context, apiBaseURL, accessToken, userName, origin, email string) (*User, error) {
+	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	u := strings.TrimRight(apiBaseURL, "/") + "/Users"
+
+	payload := map[string]interface{}{
+		"schemas":  []string{"urn:ietf:params:scim:schemas:core:2.0:User"},
+		"userName": userName,
+		"origin":   origin,
+		"emails":   []map[string]interface{}{{"value": email, "primary": true}},
+		"active":   true,
+	}
+	b, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, nil // already exists — caller continues to role assignment
+	}
+	if resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("XSUAA create user failed (HTTP %d): %s", resp.StatusCode, body)
+	}
+
+	var created User
+	if err := json.Unmarshal(body, &created); err != nil {
+		return nil, fmt.Errorf("parsing XSUAA create user response: %w", err)
+	}
+	return &created, nil
+}
+
+// AssignRoleCollection adds a user to a named XSUAA role collection via the
+// Authorization API. Calls PUT /sap/rest/authorization/v2/rolecollections/{name}/users.
+func AssignRoleCollection(ctx context.Context, apiBaseURL, accessToken, roleCollection, userName, origin string) error {
+	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections/" +
+		url.PathEscape(roleCollection) + "/users"
+
+	payload := []map[string]string{{"origin": origin, "userName": userName}}
+	b, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "PUT", u, strings.NewReader(string(b)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return fmt.Errorf("PUT %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("XSUAA assign role collection %q failed (HTTP %d): %s", roleCollection, resp.StatusCode, body)
+	}
+	return nil
+}
+
 // DeleteUser sends DELETE /Users/{userID} to remove a user from the XSUAA
 // tenant. A 200 or 204 response is treated as success.
 func DeleteUser(ctx context.Context, apiBaseURL, accessToken, userID string) error {

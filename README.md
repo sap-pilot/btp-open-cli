@@ -193,6 +193,7 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 | Command | Description |
 |---|---|
 | [`users`](#users) | List XSUAA users across all accessible CF organizations |
+| [`create-users`](#create-users) | Create XSUAA users and assign role collections |
 | [`delete-users`](#delete-users) | Delete XSUAA users across all accessible CF organizations |
 | [`role-collections`](#role-collections) | List XSUAA roles and role collections across all accessible CF organizations |
 
@@ -541,6 +542,62 @@ regions:
 ```
 
 CSV columns: `region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups`
+
+### `create-users`
+
+Create users in the XSUAA (Authorization and Trust Management) `apiaccess` service and assign them to role collections.
+
+```
+bo create-users <users.csv> [-y]
+```
+
+The CSV must contain at least the columns `region`, `org_id`, `user_origin`, `user_name`, `email`, and `groups`; extra columns are ignored. The `groups` column is semicolon-separated role collection names. The output of `bo users --format csv` can be passed directly:
+
+```bash
+bo users --format csv > users.csv
+bo create-users users.csv
+```
+
+Minimum CSV format:
+```
+region,org_id,user_origin,user_name,email,groups
+eu20,<org-guid>,sap.custom,alice@example.com,alice@example.com,Role A;Role B
+```
+
+For each org, XSUAA tokens are resolved via the `xsuaa`/`apiaccess` service key. Users are created via the SCIM API; if a user already exists (HTTP 409), creation is skipped and role collection assignment still proceeds.
+
+```bash
+# Preview users to be created, then confirm (y/N)
+bo create-users users.csv
+
+# Skip confirmation prompt
+bo create-users users.csv -y
+```
+
+Preview output format (TOON):
+```
+Users to be created:
+regions:
+  - region: eu20
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+        users:
+          - user_origin: sap.custom
+            user_name: alice@example.com
+            email: alice@example.com
+            groups: Role A;Role B
+```
+
+Execution output:
+```
+Creating users...
+  + [eu20] my-org / alice@example.com
+    + role collection: Role A
+    + role collection: Role B
+  ~ [eu20] my-org / bob@example.com (already exists)
+    + role collection: Role A
+```
 
 ### `delete-users`
 
