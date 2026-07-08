@@ -26,7 +26,9 @@ type RegionToken struct {
 // NOT stored here — they are fetched from CF on demand and discarded after
 // obtaining a token, so they never touch the local disk.
 type XsuaaData struct {
-	APIURL      string    `json:"apiurl,omitempty"`          // XSUAA admin API base URL (from service key "apiurl")
+	APIURL      string    `json:"apiurl,omitempty"`       // XSUAA admin API base URL (from service key "apiurl")
+	OrgName     string    `json:"org_name,omitempty"`     // CF org name — enables cache-only resolution
+	RegionName  string    `json:"region_name,omitempty"`  // CF region shorthand (e.g. "eu20")
 	AccessToken string    `json:"access_token,omitempty"`
 	TokenExpiry time.Time `json:"token_expiry,omitempty"`
 }

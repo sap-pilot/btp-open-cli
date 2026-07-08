@@ -185,7 +185,29 @@ execution and confirmation is required.`,
 			return nil
 		}
 
-		// Phase 3: assemble preview, grouped by region then org.
+		// Phase 3: fetch full user attributes from XSUAA for the preview.
+		// Index users by (apiURL, userID) so we can populate all fields.
+		type orgKey struct{ apiURL, orgGUID string }
+		userAttrs := make(map[string]xsuaa.User) // key: userID
+		fetchedOrgs := make(map[orgKey]bool)
+		for _, t := range targets {
+			ok := fetchedOrgs[orgKey{t.apiURL, t.orgGUID}]
+			if ok {
+				continue
+			}
+			fetchedOrgs[orgKey{t.apiURL, t.orgGUID}] = true
+			users, fetchErr := xsuaa.ListUsers(ctx, t.apiURL, t.token)
+			if fetchErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: [%s] %s: could not fetch user list: %v\n",
+					t.regionName, t.orgName, fetchErr)
+				continue
+			}
+			for _, u := range users {
+				userAttrs[u.ID] = u
+			}
+		}
+
+		// Phase 4: assemble preview, grouped by region then org.
 		regionOrder := make([]string, 0)
 		regionSeen := make(map[string]bool)
 		for _, t := range targets {
@@ -203,9 +225,18 @@ execution and confirmation is required.`,
 			if regionOrgs[t.regionName][t.orgGUID] == nil {
 				regionOrgs[t.regionName][t.orgGUID] = &usrOutOrg{ID: t.orgGUID, Name: t.orgName}
 			}
+			u := userAttrs[t.userID]
 			regionOrgs[t.regionName][t.orgGUID].Users = append(
 				regionOrgs[t.regionName][t.orgGUID].Users,
-				usrOutUser{ID: t.userID},
+				usrOutUser{
+					ID:            t.userID,
+					ExternalID:    u.ExternalID,
+					Origin:        u.Origin,
+					UserName:      u.UserName,
+					Email:         xsuaa.PrimaryEmail(u.Emails),
+					LastLogonTime: xsuaa.MSToISO(u.LastLogonTime),
+					Groups:        xsuaa.GroupValues(u.Groups),
+				},
 			)
 		}
 
