@@ -299,7 +299,7 @@ regions:
         org_name: my-org
 ```
 
-The `--format csv` output (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, `delete-users`, and `role-collections`.
+The `--format csv` output (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, and `role-collections`.
 
 ### `org-spaces`
 
@@ -544,38 +544,35 @@ CSV columns: `region,org_id,org_name,user_id,user_externalId,user_origin,userNam
 
 ### `delete-users`
 
-Delete users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
+Delete users from the XSUAA (Authorization and Trust Management) `apiaccess` service.
 
-For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+```
+bo delete-users <users.csv> [-y]
+```
+
+The CSV must contain at least the columns `region`, `org_id`, and `user_id`; extra columns are ignored. This makes the output of `bo users --format csv` directly usable as input:
+
+```bash
+bo users --format csv > users.csv
+bo delete-users users.csv
+```
+
+Minimum CSV format:
+```
+region,org_id,user_id
+eu20,<org-guid>,<xsuaa-user-id>
+```
+
+Users are deleted by XSUAA user GUID scoped to the given org. CF API URLs and org filters are derived from the CSV — only orgs referenced in the CSV have their XSUAA tokens resolved. If no `xsuaa`/`apiaccess` service instance or key is found for an org, a prompt prints CF CLI instructions to create them manually.
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
 
-CSV format (`origin,userName`):
-```
-origin,userName
-sap.default,user@example.com
-```
-
-Users are matched by `origin` + `userName` (case-insensitive). A TOON preview of all matched users is shown before any deletions are made.
-
 ```bash
 # Preview users to be deleted, then confirm (y/N)
-bo delete-users --users delete-users.csv
+bo delete-users users.csv
 
-# Skip deletion confirmation prompt
-bo delete-users --users delete-users.csv -y
-
-# Skip interactive prompts for orgs with no service instance or key
-bo delete-users --users delete-users.csv --no-prompt
-
-# Scope to specific regions
-bo delete-users --users delete-users.csv --regions us10,us20,eu10
-
-# Include only specific orgs (CSV: region,org_id,org_name)
-bo delete-users --users delete-users.csv --orgs target-orgs.csv
-
-# Exclude orgs such as production environments (CSV: region,org_id,org_name)
-bo delete-users --users delete-users.csv --excludeOrgs prod-orgs.csv
+# Skip confirmation prompt
+bo delete-users users.csv -y
 ```
 
 Preview output format (TOON):
@@ -587,13 +584,7 @@ regions:
       - org_id: <org-guid>
         org_name: my-org
         users:
-          - user_id: <user-id>
-            user_externalId: user@example.com
-            user_origin: sap.default
-            userName: user@example.com
-            email: user@example.com
-            lastLogonTime: 2026-01-15T08:30:00Z
-            groups: <group-values>
+          - user_id: <xsuaa-user-id>
 ```
 
 Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is prompted before any changes are made.

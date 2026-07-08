@@ -4,11 +4,9 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 
 	toonenc "github.com/toon-format/toon-go"
 
@@ -18,13 +16,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// deleteXsuaaUser identifies a user to delete by origin and userName.
+// deleteXsuaaUser identifies a user to delete by region, org GUID, and XSUAA user ID.
 type deleteXsuaaUser struct {
-	Origin   string
-	UserName string
+	Region string
+	OrgID  string
+	UserID string
 }
 
-// parseDeleteXsuaaUsersCSV reads a CSV with header "origin,userName".
+// parseDeleteXsuaaUsersCSV reads a CSV that must contain at least the columns
+// region, org_id, and user_id (in any position). Extra columns are ignored,
+// making the output of "bo users --format csv" directly usable as input.
 func parseDeleteXsuaaUsersCSV(path string) ([]deleteXsuaaUser, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -37,8 +38,16 @@ func parseDeleteXsuaaUsersCSV(path string) ([]deleteXsuaaUser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
-	if len(header) < 2 || header[0] != "origin" || header[1] != "userName" {
-		return nil, fmt.Errorf("invalid header — expected: origin,userName")
+
+	colIdx := map[string]int{}
+	for i, h := range header {
+		colIdx[strings.TrimSpace(h)] = i
+	}
+	regionIdx, hasRegion := colIdx["region"]
+	orgIdx, hasOrg := colIdx["org_id"]
+	userIdx, hasUser := colIdx["user_id"]
+	if !hasRegion || !hasOrg || !hasUser {
+		return nil, fmt.Errorf("invalid header — required columns: region, org_id, user_id")
 	}
 
 	var users []deleteXsuaaUser
@@ -50,15 +59,23 @@ func parseDeleteXsuaaUsersCSV(path string) ([]deleteXsuaaUser, error) {
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", line, err)
 		}
-		if len(row) < 2 {
-			return nil, fmt.Errorf("line %d: expected 2 columns, got %d", line, len(row))
+		maxIdx := regionIdx
+		if orgIdx > maxIdx {
+			maxIdx = orgIdx
 		}
-		origin := strings.TrimSpace(row[0])
-		userName := strings.TrimSpace(row[1])
-		if origin == "" || userName == "" {
-			return nil, fmt.Errorf("line %d: origin and userName cannot be empty", line)
+		if userIdx > maxIdx {
+			maxIdx = userIdx
 		}
-		users = append(users, deleteXsuaaUser{Origin: origin, UserName: userName})
+		if len(row) <= maxIdx {
+			return nil, fmt.Errorf("line %d: too few columns", line)
+		}
+		region := strings.TrimSpace(row[regionIdx])
+		orgID := strings.TrimSpace(row[orgIdx])
+		userID := strings.TrimSpace(row[userIdx])
+		if region == "" || orgID == "" || userID == "" {
+			return nil, fmt.Errorf("line %d: region, org_id, and user_id cannot be empty", line)
+		}
+		users = append(users, deleteXsuaaUser{Region: region, OrgID: orgID, UserID: userID})
 	}
 	if len(users) == 0 {
 		return nil, fmt.Errorf("CSV file contains no user rows")
@@ -69,36 +86,34 @@ func parseDeleteXsuaaUsersCSV(path string) ([]deleteXsuaaUser, error) {
 // ── command ───────────────────────────────────────────────────────────────────
 
 var deleteUsersCmd = &cobra.Command{
-	Use:   "delete-users",
+	Use:   "delete-users <users.csv>",
 	Short: "Delete XSUAA users across all accessible organizations",
-	Long: `Delete users from the XSUAA (Authorization and Trust Management) apiaccess service
-across one or more regions and organizations.
+	Long: `Delete users from the XSUAA (Authorization and Trust Management) apiaccess service.
 
-The --users CSV must have the header: origin,userName
+The CSV argument must contain at least the columns: region, org_id, user_id
+
+Extra columns are ignored, so the output of "bo users --format csv" can be passed
+directly:
+
+  bo users --format csv > users.csv
+  bo delete-users users.csv
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
-or key exists, a prompt offers instructions to create them manually (suppress with
---no-prompt to skip the org silently instead).
+or key exists, a prompt offers instructions to create them manually.
 
 Only the access token is cached in ~/.bo/credentials.json — service key credentials
 are fetched from CF on demand and never stored locally.
 
-Without -y, a TOON preview of all users that will be deleted is shown before execution,
-and confirmation is required.
-
-If --regions is omitted the regions from the last login are used.`,
+Without -y, a TOON preview of all users that will be deleted is shown before
+execution and confirmation is required.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		regionsFlag, _ := cmd.Flags().GetString("regions")
-		usersFile, _ := cmd.Flags().GetString("users")
-		orgsFile, _ := cmd.Flags().GetString("orgs")
-		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
-		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 
-		csvUsers, err := parseDeleteXsuaaUsersCSV(usersFile)
+		csvUsers, err := parseDeleteXsuaaUsersCSV(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid --users CSV: %w", err)
+			return fmt.Errorf("invalid users CSV: %w", err)
 		}
 
 		creds, err := store.Load()
@@ -106,138 +121,101 @@ If --regions is omitted the regions from the last login are used.`,
 			return fmt.Errorf("not logged in — run: bo login --regions <region>")
 		}
 
-		var apiURLs []string
-		if regionsFlag != "" {
-			for _, r := range splitCSV(regionsFlag) {
-				apiURLs = append(apiURLs, store.RegionToAPIURL(r))
-			}
-		} else {
-			apiURLs = creds.ActiveAPIURLs
+		// Derive CF API URLs from the unique regions referenced in the CSV.
+		apiURLSet := make(map[string]bool)
+		for _, u := range csvUsers {
+			apiURLSet[store.RegionToAPIURL(u.Region)] = true
 		}
-		if len(apiURLs) == 0 {
-			return fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
+		apiURLs := make([]string, 0, len(apiURLSet))
+		for url := range apiURLSet {
+			apiURLs = append(apiURLs, url)
 		}
 
-		var includeOrgs cosOrgSet
-		if orgsFile != "" {
-			includeOrgs, err = parseCosOrgCSV(orgsFile)
-			if err != nil {
-				return fmt.Errorf("invalid --orgs CSV: %w", err)
-			}
-		}
-
-		var excludeOrgs cosOrgSet
-		if excludeOrgsFile != "" {
-			excludeOrgs, err = parseCosOrgCSV(excludeOrgsFile)
-			if err != nil {
-				return fmt.Errorf("invalid --excludeOrgs CSV: %w", err)
+		// Build an org filter from the CSV so XSUAA tokens are only resolved
+		// for orgs that actually appear in the input.
+		orgFilter := make(cosOrgSet, 0, len(csvUsers))
+		seen := make(map[string]bool)
+		for _, u := range csvUsers {
+			if !seen[u.OrgID] {
+				orgFilter = append(orgFilter, cosOrgRef{ID: u.OrgID})
+				seen[u.OrgID] = true
 			}
 		}
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		// Phase 1: resolve XSUAA tokens for all accessible orgs.
-		clients, _, err := resolveXsuaaClients(ctx, apiURLs, creds, includeOrgs, excludeOrgs, noPrompt)
+		// Phase 1: resolve XSUAA tokens for the orgs referenced in the CSV.
+		clients, _, err := resolveXsuaaClients(ctx, apiURLs, creds, orgFilter, nil, false)
 		if err != nil {
 			return err
 		}
 
-		// Phase 2: fetch XSUAA users for each org in parallel and filter
-		// down to the users listed in the CSV.
-		type orgResult struct {
+		// Phase 2: match each client (org) to the CSV rows that target it.
+		type deleteTarget struct {
 			regionName string
 			orgGUID    string
 			orgName    string
 			apiURL     string
 			token      string
-			matched    []xsuaa.User
-			err        error
+			userID     string
 		}
-		results := make([]orgResult, len(clients))
-		var wg sync.WaitGroup
-
-		for i, w := range clients {
-			wg.Add(1)
-			go func(idx int, w xsuaaOrgClient) {
-				defer wg.Done()
-				slog.Debug("fetching XSUAA users for deletion", "region", w.RegionName, "org", w.OrgName)
-
-				allUsers, err := xsuaa.ListUsers(ctx, w.APIURL, w.Token)
-				if err != nil {
-					results[idx] = orgResult{regionName: w.RegionName, orgGUID: w.OrgGUID, orgName: w.OrgName, err: err}
-					return
+		var targets []deleteTarget
+		for _, w := range clients {
+			for _, u := range csvUsers {
+				if !strings.EqualFold(u.OrgID, w.OrgGUID) {
+					continue
 				}
-
-				var matched []xsuaa.User
-				for _, u := range allUsers {
-					for _, cu := range csvUsers {
-						if strings.EqualFold(u.Origin, cu.Origin) && strings.EqualFold(u.UserName, cu.UserName) {
-							matched = append(matched, u)
-							break
-						}
-					}
+				if !strings.EqualFold(u.Region, w.RegionName) {
+					continue
 				}
-				results[idx] = orgResult{
+				targets = append(targets, deleteTarget{
 					regionName: w.RegionName,
 					orgGUID:    w.OrgGUID,
 					orgName:    w.OrgName,
 					apiURL:     w.APIURL,
 					token:      w.Token,
-					matched:    matched,
-				}
-			}(i, w)
-		}
-		wg.Wait()
-
-		// Phase 3: assemble preview, preserving region order from clients.
-		regionOrder := make([]string, 0)
-		regionSeen := make(map[string]bool)
-		for _, c := range clients {
-			if !regionSeen[c.RegionName] {
-				regionOrder = append(regionOrder, c.RegionName)
-				regionSeen[c.RegionName] = true
-			}
-		}
-
-		regionOrgs := make(map[string][]usrOutOrg)
-		for _, r := range results {
-			if r.err != nil {
-				fmt.Fprintf(os.Stderr, "[%s] %s: %v\n", r.regionName, r.orgName, r.err)
-				continue
-			}
-			if len(r.matched) == 0 {
-				continue
-			}
-			var outUsers []usrOutUser
-			for _, u := range r.matched {
-				outUsers = append(outUsers, usrOutUser{
-					ID:            u.ID,
-					ExternalID:    u.ExternalID,
-					Origin:        u.Origin,
-					UserName:      u.UserName,
-					Email:         xsuaa.PrimaryEmail(u.Emails),
-					LastLogonTime: xsuaa.MSToISO(u.LastLogonTime),
-					Groups:        xsuaa.GroupValues(u.Groups),
+					userID:     u.UserID,
 				})
 			}
-			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], usrOutOrg{
-				ID:    r.orgGUID,
-				Name:  r.orgName,
-				Users: outUsers,
-			})
+		}
+
+		if len(targets) == 0 {
+			fmt.Fprintln(os.Stdout, "No matching users found.")
+			return nil
+		}
+
+		// Phase 3: assemble preview, grouped by region then org.
+		regionOrder := make([]string, 0)
+		regionSeen := make(map[string]bool)
+		for _, t := range targets {
+			if !regionSeen[t.regionName] {
+				regionOrder = append(regionOrder, t.regionName)
+				regionSeen[t.regionName] = true
+			}
+		}
+
+		regionOrgs := make(map[string]map[string]*usrOutOrg)
+		for _, t := range targets {
+			if regionOrgs[t.regionName] == nil {
+				regionOrgs[t.regionName] = make(map[string]*usrOutOrg)
+			}
+			if regionOrgs[t.regionName][t.orgGUID] == nil {
+				regionOrgs[t.regionName][t.orgGUID] = &usrOutOrg{ID: t.orgGUID, Name: t.orgName}
+			}
+			regionOrgs[t.regionName][t.orgGUID].Users = append(
+				regionOrgs[t.regionName][t.orgGUID].Users,
+				usrOutUser{ID: t.userID},
+			)
 		}
 
 		var previewRegions []usrOutRegion
 		for _, rid := range regionOrder {
-			if orgs := regionOrgs[rid]; len(orgs) > 0 {
-				previewRegions = append(previewRegions, usrOutRegion{ID: rid, Orgs: orgs})
+			var orgs []usrOutOrg
+			for _, org := range regionOrgs[rid] {
+				orgs = append(orgs, *org)
 			}
-		}
-
-		if len(previewRegions) == 0 {
-			fmt.Fprintln(os.Stdout, "No matching users found.")
-			return nil
+			previewRegions = append(previewRegions, usrOutRegion{ID: rid, Orgs: orgs})
 		}
 
 		if !skipConfirm {
@@ -257,20 +235,15 @@ If --regions is omitted the regions from the last login are used.`,
 			fmt.Fprintln(os.Stdout)
 		}
 
-		// Phase 4: delete matched users sequentially per org.
+		// Phase 4: delete users by ID.
 		fmt.Fprintln(os.Stdout, "Deleting users...")
-		for _, r := range results {
-			if r.err != nil || len(r.matched) == 0 {
-				continue
-			}
-			for _, u := range r.matched {
-				if err := xsuaa.DeleteUser(ctx, r.apiURL, r.token, u.ID); err != nil {
-					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s (%s): %v\n",
-						r.regionName, r.orgName, u.UserName, u.Origin, err)
-				} else {
-					fmt.Fprintf(os.Stdout, "  - [%s] %s / %s (%s)\n",
-						r.regionName, r.orgName, u.UserName, u.Origin)
-				}
+		for _, t := range targets {
+			if err := xsuaa.DeleteUser(ctx, t.apiURL, t.token, t.userID); err != nil {
+				fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: %v\n",
+					t.regionName, t.orgName, t.userID, err)
+			} else {
+				fmt.Fprintf(os.Stdout, "  - [%s] %s / %s\n",
+					t.regionName, t.orgName, t.userID)
 			}
 		}
 		return nil
@@ -280,11 +253,5 @@ If --regions is omitted the regions from the last login are used.`,
 func init() {
 	deleteUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(deleteUsersCmd)
-	deleteUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	deleteUsersCmd.Flags().String("users", "", "Path to CSV file of users to delete (required; columns: origin,userName)")
-	deleteUsersCmd.MarkFlagRequired("users")
-	deleteUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
-	deleteUsersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for user deletion")
-	deleteUsersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 }

@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.12 — 2026-07-08
+
+### Changed
+
+- **`delete-users` — reworked as `bo delete-users <users.csv>`**
+
+  The command now takes the CSV as a positional argument instead of `--users`. The `--regions`, `--orgs`, `--excludeOrgs`, and `--no-prompt` flags have been removed — targeting is fully driven by the CSV itself.
+
+  The CSV must contain at least the columns `region`, `org_id`, and `user_id`; extra columns are ignored. This makes the output of `bo users --format csv` directly usable as input:
+
+  ```bash
+  bo users --format csv > users.csv
+  bo delete-users users.csv
+  ```
+
+  Users are deleted by XSUAA user GUID (`user_id`) scoped to the exact org. CF API URLs and org filters are derived from the CSV rows — only orgs that appear in the CSV have their XSUAA tokens resolved.
+
+  **Breaking changes:**
+  - The previous `origin,userName` CSV format is no longer accepted.
+  - `--users` flag replaced by a positional argument.
+  - `--regions`, `--orgs`, `--excludeOrgs`, and `--no-prompt` flags removed.
+
 ## v0.11 — 2026-06-15
 
 ### Changed
