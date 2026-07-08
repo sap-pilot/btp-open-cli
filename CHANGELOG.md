@@ -22,6 +22,16 @@
   - `--users` flag replaced by a positional argument.
   - `--regions`, `--orgs`, `--excludeOrgs`, and `--no-prompt` flags removed.
 
+- **`create-users` — new command to provision XSUAA users and assign role collections**
+
+  ```
+  bo create-users <users.csv> [-y]
+  ```
+
+  The CSV must contain at least the columns `region`, `org_id`, `user_origin`, `user_name`, `email`, and `groups` (semicolon-separated role collection names). Extra columns are ignored, so the output of `bo users --format csv` is accepted directly.
+
+  For each org, XSUAA tokens are resolved via the `apiaccess` service key (same mechanism as `delete-users`). Users are created via the SCIM API (`POST /Users`); if a user already exists (HTTP 409), creation is skipped and role collection assignment still proceeds. Role collections are assigned via `PUT /sap/rest/authorization/v2/rolecollections/{name}/users`.
+
 - **`users` — `userName` column renamed to `user_name`**
 
   The `userName` field in TOON, JSON, and CSV output (and the corresponding `--fields`/`--excludeFields` key) has been renamed to `user_name` for consistency with all other underscore-separated column names.
