@@ -24,7 +24,7 @@ type usrOutUser struct {
 	ID            string `json:"user_id"         toon:"user_id"`
 	ExternalID    string `json:"user_externalId"  toon:"user_externalId"`
 	Origin        string `json:"user_origin"      toon:"user_origin"`
-	UserName      string `json:"userName"         toon:"userName"`
+	UserName      string `json:"user_name"        toon:"user_name"`
 	Email         string `json:"email"            toon:"email"`
 	LastLogonTime string `json:"lastLogonTime"    toon:"lastLogonTime"`
 	Groups        string `json:"groups"           toon:"groups"`
@@ -56,7 +56,7 @@ across one or more regions and organizations.
 Output formats (--format):
   toon  Token-Oriented Object Notation — compact, human-readable (default)
   json  JSON document
-  csv   CSV rows: region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups
+  csv   CSV rows: region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
@@ -232,14 +232,14 @@ func writeUsersJSON(doc usrOutDoc) error {
 }
 
 // writeUsersCSV writes one row per user with columns:
-// region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups
+// region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
 func writeUsersCSV(doc usrOutDoc) error {
 	w := csv.NewWriter(os.Stdout)
 	defer w.Flush()
 
 	if err := w.Write([]string{
 		"region", "org_id", "org_name",
-		"user_id", "user_externalId", "user_origin", "userName", "email", "lastLogonTime", "groups",
+		"user_id", "user_externalId", "user_origin", "user_name", "email", "lastLogonTime", "groups",
 	}); err != nil {
 		return err
 	}
@@ -267,8 +267,8 @@ func init() {
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	usersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
-	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, userName, lastLogonTime, groups)")
-	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups)")
+	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, user_name, lastLogonTime, groups)")
+	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups)")
 	usersCmd.Flags().String("excludeFields", "", "Comma-separated fields to exclude from output")
 }
 
@@ -279,7 +279,7 @@ func (f usrFieldSet) active(field string) bool {
 	return f == nil || f[field]
 }
 
-var usrAllFields = []string{"user_id", "user_externalId", "user_origin", "userName", "email", "lastLogonTime", "groups"}
+var usrAllFields = []string{"user_id", "user_externalId", "user_origin", "user_name", "email", "lastLogonTime", "groups"}
 
 // buildUsrFieldSet computes the active field set from --fields and --excludeFields.
 // Returns nil if both are empty (all fields active).
@@ -331,7 +331,7 @@ func usrApplyFields(u xsuaa.User, email, lastLogon, groups string, fields usrFie
 	if fields.active("user_origin") {
 		out.Origin = u.Origin
 	}
-	if fields.active("userName") {
+	if fields.active("user_name") {
 		out.UserName = u.UserName
 	}
 	if fields.active("email") {

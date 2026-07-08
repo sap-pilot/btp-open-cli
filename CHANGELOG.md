@@ -22,6 +22,12 @@
   - `--users` flag replaced by a positional argument.
   - `--regions`, `--orgs`, `--excludeOrgs`, and `--no-prompt` flags removed.
 
+- **`users` — `userName` column renamed to `user_name`**
+
+  The `userName` field in TOON, JSON, and CSV output (and the corresponding `--fields`/`--excludeFields` key) has been renamed to `user_name` for consistency with all other underscore-separated column names.
+
+  **Breaking change:** scripts or pipelines referencing the `userName` key must be updated to `user_name`.
+
 ## v0.11 — 2026-06-15
 
 ### Changed
