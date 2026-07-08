@@ -514,7 +514,7 @@ bo users --filter "@example.com"
 bo users --filter "sap.ids"
 
 # Include only specific fields in output
-bo users --fields user_id,userName,email,user_origin
+bo users --fields user_id,user_name,email,user_origin
 
 # Exclude specific fields from output
 bo users --excludeFields lastLogonTime,groups
@@ -534,13 +534,13 @@ regions:
           - user_id: <user-id>
             user_externalId: user@example.com
             user_origin: sap.ids
-            userName: user@example.com
+            user_name: user@example.com
             email: user@example.com
             lastLogonTime: 2026-01-15T08:30:00Z
             groups: <group-values>
 ```
 
-CSV columns: `region,org_id,org_name,user_id,user_externalId,user_origin,userName,email,lastLogonTime,groups`
+CSV columns: `region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups`
 
 ### `delete-users`
 

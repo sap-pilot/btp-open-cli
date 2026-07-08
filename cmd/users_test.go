@@ -148,12 +148,12 @@ func TestUsers_Fields(t *testing.T) {
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
 
-	stdout, _, err := runCmd(t, "users", "--format", "csv", "--fields", "userName,user_origin", "--no-prompt")
+	stdout, _, err := runCmd(t, "users", "--format", "csv", "--fields", "user_name,user_origin", "--no-prompt")
 	if err != nil {
 		t.Fatalf("users --fields failed: %v", err)
 	}
 	// The CSV header is always all columns; --fields only blanks-out DATA row values.
-	// Verify the data row: user_id (col 3) should be empty, userName (col 6) should be set.
+	// Verify the data row: user_id (col 3) should be empty, user_name (col 6) should be set.
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected at least 2 CSV lines, got %d\nOutput: %s", len(lines), stdout)
@@ -166,9 +166,9 @@ func TestUsers_Fields(t *testing.T) {
 	if cols[3] != "" {
 		t.Errorf("user_id (col 3) should be blank when not in --fields, got: %q", cols[3])
 	}
-	// col 6 = userName — must be populated
+	// col 6 = user_name — must be populated
 	if cols[6] != "alice@example.com" {
-		t.Errorf("userName (col 6) should be alice@example.com, got: %q", cols[6])
+		t.Errorf("user_name (col 6) should be alice@example.com, got: %q", cols[6])
 	}
 }
 
@@ -221,9 +221,9 @@ func TestUsrFieldSet_All(t *testing.T) {
 
 // TestUsrFieldSet_Include verifies that --fields limits the active set.
 func TestUsrFieldSet_Include(t *testing.T) {
-	fs := buildUsrFieldSet("userName,email", "")
-	if !fs.active("userName") {
-		t.Error("userName should be active")
+	fs := buildUsrFieldSet("user_name,email", "")
+	if !fs.active("user_name") {
+		t.Error("user_name should be active")
 	}
 	if fs.active("user_id") {
 		t.Error("user_id should not be active")
@@ -236,7 +236,7 @@ func TestUsrFieldSet_Exclude(t *testing.T) {
 	if fs.active("lastLogonTime") {
 		t.Error("lastLogonTime should not be active after exclusion")
 	}
-	if !fs.active("userName") {
-		t.Error("userName should still be active")
+	if !fs.active("user_name") {
+		t.Error("user_name should still be active")
 	}
 }
