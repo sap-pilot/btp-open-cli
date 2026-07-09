@@ -284,16 +284,108 @@ func CreateUser(ctx context.Context, apiBaseURL, accessToken, userName, origin, 
 	return &created, nil
 }
 
-// AssignRoleCollection adds a user to a named XSUAA role collection via the
-// Authorization API. Calls PUT /sap/rest/authorization/v2/rolecollections/{name}/users.
-func AssignRoleCollection(ctx context.Context, apiBaseURL, accessToken, roleCollection, userName, origin string) error {
-	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
-	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections/" +
-		url.PathEscape(roleCollection) + "/users"
+// GroupResource is a SCIM group entry as returned by the UAA Groups API.
+type GroupResource struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"displayName"`
+}
 
-	payload := []map[string]string{{"origin": origin, "userName": userName}}
+type groupsPage struct {
+	TotalResults int             `json:"totalResults"`
+	StartIndex   int             `json:"startIndex"`
+	ItemsPerPage int             `json:"itemsPerPage"`
+	Resources    []GroupResource `json:"Resources"`
+}
+
+// ListGroupIDs fetches all groups from the UAA SCIM API and returns a
+// displayName→id map (role collection name → group GUID). Call once per org
+// and reuse the map for all AddGroupMember calls in that org.
+func ListGroupIDs(ctx context.Context, apiBaseURL, accessToken string) (map[string]string, error) {
+	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	base := strings.TrimRight(apiBaseURL, "/") + "/Groups"
+
+	result := make(map[string]string)
+	startIndex := 1
+	const pageSize = 500
+
+	for {
+		u := fmt.Sprintf("%s?startIndex=%d&count=%d", base, startIndex, pageSize)
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := c.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("GET %s: %w", u, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("UAA Groups API returned HTTP %d: %s", resp.StatusCode, body)
+		}
+
+		var page groupsPage
+		if err := json.Unmarshal(body, &page); err != nil {
+			return nil, fmt.Errorf("parsing UAA Groups response: %w", err)
+		}
+		for _, g := range page.Resources {
+			result[g.DisplayName] = g.ID
+		}
+		if len(result) >= page.TotalResults || len(page.Resources) == 0 {
+			break
+		}
+		startIndex += len(page.Resources)
+	}
+	return result, nil
+}
+
+// FindUserID returns the XSUAA user ID for a given userName and origin.
+// Used to retrieve the ID of an already-existing user (HTTP 409 on create).
+func FindUserID(ctx context.Context, apiBaseURL, accessToken, userName, origin string) (string, error) {
+	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	filter := fmt.Sprintf("userName eq %q and origin eq %q", userName, origin)
+	u := strings.TrimRight(apiBaseURL, "/") + "/Users?filter=" + url.QueryEscape(filter) + "&count=1"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("UAA Users filter returned HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var page usersPage
+	if err := json.Unmarshal(body, &page); err != nil {
+		return "", fmt.Errorf("parsing UAA Users filter response: %w", err)
+	}
+	if len(page.Resources) == 0 {
+		return "", fmt.Errorf("user %q (origin %q) not found", userName, origin)
+	}
+	return page.Resources[0].ID, nil
+}
+
+// AddGroupMember adds a user to a SCIM group via POST /Groups/{groupId}/members.
+func AddGroupMember(ctx context.Context, apiBaseURL, accessToken, groupID, userID, origin string) error {
+	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	u := strings.TrimRight(apiBaseURL, "/") + "/Groups/" + groupID + "/members"
+
+	payload := map[string]string{"origin": origin, "type": "USER", "value": userID}
 	b, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "PUT", u, strings.NewReader(string(b)))
+	req, err := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
 	if err != nil {
 		return err
 	}
@@ -303,13 +395,14 @@ func AssignRoleCollection(ctx context.Context, apiBaseURL, accessToken, roleColl
 
 	resp, err := c.Do(req)
 	if err != nil {
-		return fmt.Errorf("PUT %s: %w", u, err)
+		return fmt.Errorf("POST %s: %w", u, err)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("XSUAA assign role collection %q failed (HTTP %d): %s", roleCollection, resp.StatusCode, body)
+	// 200 OK or 201 Created both indicate success.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("add member to group %q failed (HTTP %d): %s", groupID, resp.StatusCode, body)
 	}
 	return nil
 }
