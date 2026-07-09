@@ -272,26 +272,59 @@ required before any changes are made.`,
 		}
 
 		// Phase 4: create users and assign role collections.
+		// Build a group displayName→ID map per XSUAA endpoint (once per org).
 		fmt.Fprintln(os.Stdout, "Creating users...")
+		groupIDs := make(map[string]map[string]string) // apiURL → displayName → groupID
+		for _, t := range targets {
+			if _, ok := groupIDs[t.apiURL]; ok {
+				continue
+			}
+			ids, fetchErr := xsuaa.ListGroupIDs(ctx, t.apiURL, t.token)
+			if fetchErr != nil {
+				fmt.Fprintf(os.Stderr, "  ! [%s] %s: could not fetch group list: %v\n",
+					t.regionName, t.orgName, fetchErr)
+				groupIDs[t.apiURL] = map[string]string{} // empty — skip role assignments for this org
+			} else {
+				groupIDs[t.apiURL] = ids
+			}
+		}
+
 		for _, t := range targets {
 			u := t.user
 
+			// Create user; nil return means HTTP 409 (already exists).
 			created, createErr := xsuaa.CreateUser(ctx, t.apiURL, t.token, u.UserName, u.Origin, u.Email)
 			if createErr != nil {
 				fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: create failed: %v\n",
 					t.regionName, t.orgName, u.UserName, createErr)
 				continue
 			}
-			if created == nil {
-				fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n",
-					t.regionName, t.orgName, u.UserName)
+
+			var userID string
+			if created != nil {
+				userID = created.ID
+				fmt.Fprintf(os.Stdout, "  + [%s] %s / %s\n", t.regionName, t.orgName, u.UserName)
 			} else {
-				fmt.Fprintf(os.Stdout, "  + [%s] %s / %s\n",
-					t.regionName, t.orgName, u.UserName)
+				fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n", t.regionName, t.orgName, u.UserName)
+				// Look up the existing user's ID so we can add them to groups.
+				var findErr error
+				userID, findErr = xsuaa.FindUserID(ctx, t.apiURL, t.token, u.UserName, u.Origin)
+				if findErr != nil {
+					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: could not find user ID: %v\n",
+						t.regionName, t.orgName, u.UserName, findErr)
+					continue
+				}
 			}
 
+			orgGroups := groupIDs[t.apiURL]
 			for _, rc := range u.Groups {
-				if err := xsuaa.AssignRoleCollection(ctx, t.apiURL, t.token, rc, u.UserName, u.Origin); err != nil {
+				groupID, found := orgGroups[rc]
+				if !found {
+					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s / %q: role collection not found\n",
+						t.regionName, t.orgName, u.UserName, rc)
+					continue
+				}
+				if err := xsuaa.AddGroupMember(ctx, t.apiURL, t.token, groupID, userID, u.Origin); err != nil {
 					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s / %q: %v\n",
 						t.regionName, t.orgName, u.UserName, rc, err)
 				} else {
