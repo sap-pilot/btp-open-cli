@@ -286,6 +286,7 @@ confirmation is required before any changes are made.`,
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 		skipPattern, _ := cmd.Flags().GetString("skip")
+		includePattern, _ := cmd.Flags().GetString("include")
 
 		rows, err := parseOrgSpaceUsersCSV(usersFile)
 		if err != nil {
@@ -457,11 +458,15 @@ confirmation is required before any changes are made.`,
 			return fmt.Errorf("no rows to process after filtering (check --regions, --orgs, or login)")
 		}
 
-		// Apply --skip filter.
-		if skipPattern != "" {
+		// Apply --include / --skip filters.
+		if includePattern != "" || skipPattern != "" {
 			var filtered []orgSpaceUserRow
 			for _, row := range activeRows {
-				if skipMatches(skipPattern, row.UserName, row.Origin, strings.Join(row.Roles, ";")) {
+				fields := []string{row.UserName, row.Origin, strings.Join(row.Roles, ";")}
+				if includePattern != "" && !skipMatches(includePattern, fields...) {
+					continue
+				}
+				if skipPattern != "" && skipMatches(skipPattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, row)
@@ -469,7 +474,7 @@ confirmation is required before any changes are made.`,
 			activeRows = filtered
 		}
 		if len(activeRows) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to create after applying --skip.")
+			fmt.Fprintln(os.Stdout, "No users to create after applying --include/--skip.")
 			return nil
 		}
 
@@ -540,4 +545,5 @@ func init() {
 	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
 	createOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 	createOrgSpaceUsersCmd.Flags().String("skip", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
+	createOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
 }

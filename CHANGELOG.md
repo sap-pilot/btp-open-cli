@@ -4,9 +4,9 @@
 
 ### Added
 
-- **`--skip <pattern>` flag for `create-users`, `delete-users`, `create-org-space-users`, and `delete-org-space-users`**
+- **`--skip <pattern>` and `--include <pattern>` flags for `create-users`, `delete-users`, `create-org-space-users`, and `delete-org-space-users`**
 
-  When `--skip <pattern>` is provided, any row whose relevant user fields contain the pattern (case-insensitive substring match) is silently excluded before the preview and before any changes are made.
+  Both flags perform a case-insensitive substring match against the relevant user fields and are applied before the preview and before any changes are made. When both are provided, `--include` is evaluated first, then `--skip`.
 
   Matched fields per command:
   - `create-users` / `delete-users`: `user_name`, `email`, `groups` (and `user_id` for `delete-users`)
@@ -14,11 +14,14 @@
 
   Example use cases:
   ```bash
+  # Only delete users from a specific custom origin
+  bo delete-users users.csv --include sap.custom -y
+
   # Skip technical/service accounts that share a known origin
   bo delete-users users.csv --skip sap.default -y
 
-  # Exclude a specific user from bulk org-space assignment
-  bo create-org-space-users org-space-users.csv --skip alice@example.com -y
+  # Combine: only process sap.custom users, but skip a specific one
+  bo create-org-space-users org-space-users.csv --include sap.custom --skip alice@example.com -y
   ```
 
 ### Changed

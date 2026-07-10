@@ -142,6 +142,7 @@ required before any changes are made.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 		skipPattern, _ := cmd.Flags().GetString("skip")
+		includePattern, _ := cmd.Flags().GetString("include")
 
 		csvUsers, err := parseCreateXsuaaUsersCSV(args[0])
 		if err != nil {
@@ -217,11 +218,15 @@ required before any changes are made.`,
 			return nil
 		}
 
-		// Apply --skip filter.
-		if skipPattern != "" {
+		// Apply --include / --skip filters.
+		if includePattern != "" || skipPattern != "" {
 			var filtered []createTarget
 			for _, t := range targets {
-				if skipMatches(skipPattern, t.user.UserName, t.user.Email, strings.Join(t.user.Groups, ";")) {
+				fields := []string{t.user.UserName, t.user.Email, strings.Join(t.user.Groups, ";")}
+				if includePattern != "" && !skipMatches(includePattern, fields...) {
+					continue
+				}
+				if skipPattern != "" && skipMatches(skipPattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, t)
@@ -229,7 +234,7 @@ required before any changes are made.`,
 			targets = filtered
 		}
 		if len(targets) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to create after applying --skip.")
+			fmt.Fprintln(os.Stdout, "No users to create after applying --include/--skip.")
 			return nil
 		}
 
@@ -358,4 +363,5 @@ func init() {
 	rootCmd.AddCommand(createUsersCmd)
 	createUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 	createUsersCmd.Flags().String("skip", "", "Skip users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
+	createUsersCmd.Flags().String("include", "", "Only include users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
 }
