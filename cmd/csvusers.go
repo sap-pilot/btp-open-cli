@@ -137,3 +137,18 @@ func csvHeaderMatches(header, want []string) bool {
 	}
 	return true
 }
+
+// skipMatches reports whether pattern is a case-insensitive substring of any
+// of the given values. Returns false when pattern is empty.
+func skipMatches(pattern string, values ...string) bool {
+	if pattern == "" {
+		return false
+	}
+	pl := strings.ToLower(pattern)
+	for _, v := range values {
+		if strings.Contains(strings.ToLower(v), pl) {
+			return true
+		}
+	}
+	return false
+}

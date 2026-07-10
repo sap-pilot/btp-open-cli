@@ -52,6 +52,7 @@ confirmation is required before any changes are made.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		skipPattern, _ := cmd.Flags().GetString("skip")
 
 		rows, err := parseOrgSpaceUsersCSV(args[0])
 		if err != nil {
@@ -194,6 +195,22 @@ confirmation is required before any changes are made.`,
 			return fmt.Errorf("no rows to process after filtering (check --regions or login)")
 		}
 
+		// Apply --skip filter.
+		if skipPattern != "" {
+			var filtered []orgSpaceUserRow
+			for _, row := range activeRows {
+				if skipMatches(skipPattern, row.UserName, row.Origin, strings.Join(row.Roles, ";")) {
+					continue
+				}
+				filtered = append(filtered, row)
+			}
+			activeRows = filtered
+		}
+		if len(activeRows) == 0 {
+			fmt.Fprintln(os.Stdout, "No users to delete after applying --skip.")
+			return nil
+		}
+
 		// Preview and confirm.
 		if !skipConfirm {
 			if err := printCosPreview("Roles to be removed:", buildCosPreviewDoc(activeRows)); err != nil {
@@ -319,4 +336,5 @@ func init() {
 	rootCmd.AddCommand(deleteOrgSpaceUsersCmd)
 	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
 	deleteOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	deleteOrgSpaceUsersCmd.Flags().String("skip", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
 }

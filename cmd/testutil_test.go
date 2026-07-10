@@ -40,6 +40,33 @@ func setupTestEnv(t *testing.T, apiURLs ...string) {
 	}
 }
 
+// setupTestEnvWithFullXsuaa is like setupTestEnvWithXsuaa but also stores
+// OrgName and RegionName in the XSUAA cache entry so that resolveXsuaaClients
+// can take the fast path and bypass all CF API calls. Use this when the command
+// under test derives API URLs from CSV data (delete-users, create-users).
+func setupTestEnvWithFullXsuaa(t *testing.T, cfAPIURL, orgGUID, orgName, regionName, xsuaaAPIURL string) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	creds := &store.Credentials{
+		ActiveAPIURLs: []string{cfAPIURL},
+		Tokens: map[string]store.RegionToken{
+			cfAPIURL: {APIURL: cfAPIURL, AccessToken: "test-token", TokenType: "bearer"},
+		},
+		OrgXsuaa: map[string]store.XsuaaData{
+			orgGUID: {
+				APIURL:      xsuaaAPIURL,
+				OrgName:     orgName,
+				RegionName:  regionName,
+				AccessToken: "xsuaa-test-token",
+				TokenExpiry: time.Now().Add(time.Hour),
+			},
+		},
+	}
+	if err := store.Save(creds); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // setupTestEnvWithXsuaa redirects HOME and writes credentials that include a
 // pre-cached XSUAA token for orgGUID pointing at xsuaaAPIURL. The cached token
 // is valid for one hour so resolveXsuaaClients skips the CF credential-fetch flow.
