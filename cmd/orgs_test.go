@@ -101,6 +101,52 @@ func TestOrgs_MultipleRegions(t *testing.T) {
 	}
 }
 
+func TestOrgs_Include(t *testing.T) {
+	twoOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": twoOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--include", "prod")
+	if err != nil {
+		t.Fatalf("orgs --include failed: %v", err)
+	}
+	if !strings.Contains(stdout, "prod-org") {
+		t.Errorf("expected prod-org in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev-org") {
+		t.Errorf("dev-org should have been excluded by --include, got: %q", stdout)
+	}
+}
+
+func TestOrgs_Exclude(t *testing.T) {
+	twoOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": twoOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--exclude", "prod")
+	if err != nil {
+		t.Fatalf("orgs --exclude failed: %v", err)
+	}
+	if strings.Contains(stdout, "prod-org") {
+		t.Errorf("prod-org should have been excluded, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "dev-org") {
+		t.Errorf("expected dev-org in output, got: %q", stdout)
+	}
+}
+
 func TestOrgs_EmptyRegion(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": emptyPage(),

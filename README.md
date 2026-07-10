@@ -283,6 +283,12 @@ bo orgs --format csv
 # Specific regions
 bo orgs --regions us10,us20,eu10
 
+# Only show orgs whose org_name contains a pattern
+bo orgs --include prod
+
+# Exclude orgs whose org_name contains a pattern
+bo orgs --exclude sandbox
+
 # Save as CSV for use with --orgs / --excludeOrgs flags
 bo orgs --format csv --regions us10,us20 > my-orgs.csv
 
@@ -318,6 +324,12 @@ bo org-spaces --format csv
 
 # Specific regions
 bo org-spaces --regions us10,us20,eu10
+
+# Only show spaces where org_name or space_name contains a pattern
+bo org-spaces --include prod
+
+# Exclude spaces where org_name or space_name contains a pattern
+bo org-spaces --exclude sandbox
 ```
 
 TOON output format:

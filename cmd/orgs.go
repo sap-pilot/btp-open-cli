@@ -53,6 +53,8 @@ If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -110,6 +112,12 @@ If --regions is omitted, the regions from the last login are used.`,
 			}
 			outOrgs := make([]orgsOutOrg, 0, len(r.orgs))
 			for _, o := range r.orgs {
+				if includePattern != "" && !skipMatches(includePattern, o.Name) {
+					continue
+				}
+				if excludePattern != "" && skipMatches(excludePattern, o.Name) {
+					continue
+				}
 				outOrgs = append(outOrgs, orgsOutOrg{ID: o.GUID, Name: o.Name})
 			}
 			doc.Regions = append(doc.Regions, orgsOutRegion{ID: r.region, Orgs: outOrgs})
@@ -170,4 +178,6 @@ func init() {
 	rootCmd.AddCommand(orgsCmd)
 	orgsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgsCmd.Flags().String("include", "", "Only include orgs whose org_name contains this pattern (case-insensitive substring match)")
+	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains this pattern (case-insensitive substring match)")
 }
