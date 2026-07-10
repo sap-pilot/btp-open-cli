@@ -40,6 +40,10 @@
 
 ### Fixed
 
+- **`create-users` — case-insensitive email+origin used to match existing users**
+
+  XSUAA lowercases `userName` on creation (`JOHN@example.com` → `john@example.com`), so the pre-fetched user cache was previously keyed by raw CSV `userName`, causing a case mismatch and cache miss for any user whose name contained uppercase characters. The cache is now keyed by **lower-cased primary email + origin**, and the CSV lookup uses **lower-cased CSV email + origin**. This ensures existing users are correctly recognised regardless of case, eliminating the cascade of spurious `member_already_exists` 409 errors.
+
 - **`create-users` — pre-fetch existing users and role-collection assignments to eliminate duplicate-create/assign 409 errors**
 
   Before processing the CSV, the command now calls `ListUsers` once per XSUAA endpoint to retrieve all current users together with their group memberships. During the main loop:
