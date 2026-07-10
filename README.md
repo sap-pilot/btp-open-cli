@@ -435,6 +435,9 @@ bo create-org-space-users org-space-users.csv --excludeOrgs prod-orgs.csv
 
 # Only process rows for specific regions (also restricts broadcast rows)
 bo create-org-space-users org-space-users.csv --regions eu20,us10
+
+# Skip users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
+bo create-org-space-users org-space-users.csv --skip sap.ids -y
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -473,6 +476,9 @@ bo delete-org-space-users org-space-users.csv -y
 
 # Only process rows for specific regions (also restricts broadcast rows)
 bo delete-org-space-users org-space-users.csv --regions eu20,us10
+
+# Skip users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
+bo delete-org-space-users org-space-users.csv --skip sap.ids -y
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -573,6 +579,9 @@ bo create-users users.csv
 
 # Skip confirmation prompt
 bo create-users users.csv -y
+
+# Skip users whose user_name, email, or groups match a pattern
+bo create-users users.csv --skip sap.ids -y
 ```
 
 Preview output format (TOON):
@@ -631,6 +640,9 @@ bo delete-users users.csv
 
 # Skip confirmation prompt
 bo delete-users users.csv -y
+
+# Skip users whose user_id, user_name, email, or groups match a pattern
+bo delete-users users.csv --skip alice@example.com -y
 ```
 
 Preview output format (TOON):

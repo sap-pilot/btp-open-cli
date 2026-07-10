@@ -110,6 +110,7 @@ execution and confirmation is required.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		skipPattern, _ := cmd.Flags().GetString("skip")
 
 		csvUsers, err := parseDeleteXsuaaUsersCSV(args[0])
 		if err != nil {
@@ -207,6 +208,23 @@ execution and confirmation is required.`,
 			}
 		}
 
+		// Apply --skip filter using fetched user attributes.
+		if skipPattern != "" {
+			var filtered []deleteTarget
+			for _, t := range targets {
+				u := userAttrs[t.userID]
+				if skipMatches(skipPattern, t.userID, u.UserName, xsuaa.PrimaryEmail(u.Emails), xsuaa.GroupValues(u.Groups)) {
+					continue
+				}
+				filtered = append(filtered, t)
+			}
+			targets = filtered
+		}
+		if len(targets) == 0 {
+			fmt.Fprintln(os.Stdout, "No users to delete after applying --skip.")
+			return nil
+		}
+
 		// Phase 4: assemble preview, grouped by region then org.
 		regionOrder := make([]string, 0)
 		regionSeen := make(map[string]bool)
@@ -285,4 +303,5 @@ func init() {
 	deleteUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(deleteUsersCmd)
 	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for user deletion")
+	deleteUsersCmd.Flags().String("skip", "", "Skip users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
 }

@@ -1,14 +1,16 @@
 package cmd
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// writeDeleteUsersCSV writes a temporary CSV file with origin,userName rows
-// and returns its path (registered for cleanup via t.Cleanup).
+// writeDeleteUsersCSV writes a temporary CSV file with region,org_id,user_id rows
+// and returns its path (registered for cleanup via t.TempDir).
 func writeDeleteUsersCSV(t *testing.T, rows ...[]string) string {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "delete-users-*.csv")
@@ -16,53 +18,86 @@ func writeDeleteUsersCSV(t *testing.T, rows ...[]string) string {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	f.WriteString("origin,userName\n") //nolint:errcheck
+	f.WriteString("region,org_id,user_id\n") //nolint:errcheck
 	for _, row := range rows {
 		f.WriteString(strings.Join(row, ",") + "\n") //nolint:errcheck
 	}
 	return f.Name()
 }
 
-func TestDeleteUsers_MissingUsersFlag(t *testing.T) {
+func TestDeleteUsers_MissingArg(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	setupTestEnv(t, "http://fake-cf.example.com")
-	_, _, err := runCmd(t, "delete-users", "--no-prompt")
+	_, _, err := runCmd(t, "delete-users")
 	if err == nil {
-		t.Fatal("expected error when --users is not provided")
+		t.Fatal("expected error when CSV argument is not provided")
 	}
 }
 
 func TestDeleteUsers_InvalidCSV(t *testing.T) {
-	const orgGUID = "org1"
-	// Credentials file with XSUAA cache — no actual server needed because
-	// invalid CSV should fail before any API call.
 	t.Setenv("HOME", t.TempDir())
 	setupTestEnv(t, "http://fake-cf.example.com")
 
-	// Write CSV with wrong header
 	badCSV := filepath.Join(t.TempDir(), "bad.csv")
 	os.WriteFile(badCSV, []byte("wrong,header\n"), 0644) //nolint:errcheck
 
-	_, _, err := runCmd(t, "delete-users", "--users", badCSV, "--no-prompt")
+	_, _, err := runCmd(t, "delete-users", badCSV)
 	if err == nil {
 		t.Fatal("expected error for invalid CSV header")
 	}
+	if !strings.Contains(err.Error(), "invalid users CSV") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
-func TestDeleteUsers_NoOrgsFound(t *testing.T) {
-	// With --no-prompt and no XSUAA cache, the command should skip all orgs
-	// (no prompt) and report no users to delete.
-	srv := fakeCFServer(t, map[string]string{
-		"/v3/organizations": singleOrgPage("org1", "my-org"),
-		// No xsuaa plan → FindServicePlan returns empty → org skipped
-		"/v3/service_plans": emptyPage(),
-	})
-	setupTestEnv(t, srv.URL)
+// TestDeleteUsers_Skip verifies that --skip filters out matched users and only
+// deletes the remaining ones.
+func TestDeleteUsers_Skip(t *testing.T) {
+	const (
+		orgGUID    = "org1"
+		regionName = "eu20"
+	)
 
-	usersFile := writeDeleteUsersCSV(t, []string{"sap.ids", "alice@example.com"})
+	deleteCount := 0
+	var deletedIDs []string
+	xsuaaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/Users" && r.Method == "GET":
+			w.Write([]byte(xsuaaUsersPage( //nolint:errcheck
+				xsuaaUser("u1", "alice@example.com", "sap.ids"),
+				xsuaaUser("u2", "bob@example.com", "sap.ids"),
+			)))
+		case strings.HasPrefix(r.URL.Path, "/Users/") && r.Method == "DELETE":
+			deleteCount++
+			deletedIDs = append(deletedIDs, strings.TrimPrefix(r.URL.Path, "/Users/"))
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected: "+r.URL.Path, 404)
+		}
+	}))
+	defer xsuaaSrv.Close()
 
-	// Should succeed but skip all orgs since there's no XSUAA instance
-	_, _, err := runCmd(t, "delete-users", "--users", usersFile, "--no-prompt", "--yes")
-	// Error is acceptable here; we're testing it doesn't hang or crash
-	_ = err
+	// Use a fake CF API URL that matches the "eu20" region mapping, but the
+	// XSUAA fast path bypasses CF calls entirely when OrgName+RegionName are cached.
+	cfAPIURL := "https://api.cf.eu20.hana.ondemand.com"
+	setupTestEnvWithFullXsuaa(t, cfAPIURL, orgGUID, "my-org", regionName, xsuaaSrv.URL)
+
+	usersFile := writeDeleteUsersCSV(t,
+		[]string{regionName, orgGUID, "u1"}, // alice — should be skipped
+		[]string{regionName, orgGUID, "u2"}, // bob   — should be deleted
+	)
+
+	_, _, err := runCmd(t, "delete-users", usersFile, "--skip", "alice", "--yes")
+	if err != nil {
+		t.Fatalf("delete-users --skip failed: %v", err)
+	}
+	if deleteCount != 1 {
+		t.Errorf("expected exactly 1 DELETE, got %d (deleted: %v)", deleteCount, deletedIDs)
+	}
+	for _, id := range deletedIDs {
+		if id == "u1" {
+			t.Error("alice (u1) should have been skipped but was deleted")
+		}
+	}
 }

@@ -141,6 +141,7 @@ required before any changes are made.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		skipPattern, _ := cmd.Flags().GetString("skip")
 
 		csvUsers, err := parseCreateXsuaaUsersCSV(args[0])
 		if err != nil {
@@ -213,6 +214,22 @@ required before any changes are made.`,
 
 		if len(targets) == 0 {
 			fmt.Fprintln(os.Stdout, "No matching orgs found.")
+			return nil
+		}
+
+		// Apply --skip filter.
+		if skipPattern != "" {
+			var filtered []createTarget
+			for _, t := range targets {
+				if skipMatches(skipPattern, t.user.UserName, t.user.Email, strings.Join(t.user.Groups, ";")) {
+					continue
+				}
+				filtered = append(filtered, t)
+			}
+			targets = filtered
+		}
+		if len(targets) == 0 {
+			fmt.Fprintln(os.Stdout, "No users to create after applying --skip.")
 			return nil
 		}
 
@@ -340,4 +357,5 @@ func init() {
 	createUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(createUsersCmd)
 	createUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	createUsersCmd.Flags().String("skip", "", "Skip users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
 }

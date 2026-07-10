@@ -285,6 +285,7 @@ confirmation is required before any changes are made.`,
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		skipPattern, _ := cmd.Flags().GetString("skip")
 
 		rows, err := parseOrgSpaceUsersCSV(usersFile)
 		if err != nil {
@@ -456,6 +457,22 @@ confirmation is required before any changes are made.`,
 			return fmt.Errorf("no rows to process after filtering (check --regions, --orgs, or login)")
 		}
 
+		// Apply --skip filter.
+		if skipPattern != "" {
+			var filtered []orgSpaceUserRow
+			for _, row := range activeRows {
+				if skipMatches(skipPattern, row.UserName, row.Origin, strings.Join(row.Roles, ";")) {
+					continue
+				}
+				filtered = append(filtered, row)
+			}
+			activeRows = filtered
+		}
+		if len(activeRows) == 0 {
+			fmt.Fprintln(os.Stdout, "No users to create after applying --skip.")
+			return nil
+		}
+
 		// Preview and confirm.
 		if !skipConfirm {
 			if err := printCosPreview("Users to be added:", buildCosPreviewDoc(activeRows)); err != nil {
@@ -522,4 +539,5 @@ func init() {
 	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to include (columns: region,org_id,org_name); filters rows by org_id or org_name")
 	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
 	createOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	createOrgSpaceUsersCmd.Flags().String("skip", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
 }
