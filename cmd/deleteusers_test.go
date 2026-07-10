@@ -101,3 +101,52 @@ func TestDeleteUsers_Skip(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteUsers_Include verifies that --include filters to only matched users.
+func TestDeleteUsers_Include(t *testing.T) {
+	const (
+		orgGUID    = "org1"
+		regionName = "eu20"
+	)
+
+	deleteCount := 0
+	var deletedIDs []string
+	xsuaaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/Users" && r.Method == "GET":
+			w.Write([]byte(xsuaaUsersPage( //nolint:errcheck
+				xsuaaUser("u1", "alice@example.com", "sap.ids"),
+				xsuaaUser("u2", "bob@example.com", "sap.ids"),
+			)))
+		case strings.HasPrefix(r.URL.Path, "/Users/") && r.Method == "DELETE":
+			deleteCount++
+			deletedIDs = append(deletedIDs, strings.TrimPrefix(r.URL.Path, "/Users/"))
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unexpected: "+r.URL.Path, 404)
+		}
+	}))
+	defer xsuaaSrv.Close()
+
+	cfAPIURL := "https://api.cf.eu20.hana.ondemand.com"
+	setupTestEnvWithFullXsuaa(t, cfAPIURL, orgGUID, "my-org", regionName, xsuaaSrv.URL)
+
+	usersFile := writeDeleteUsersCSV(t,
+		[]string{regionName, orgGUID, "u1"}, // alice — should be included
+		[]string{regionName, orgGUID, "u2"}, // bob   — should be excluded
+	)
+
+	_, _, err := runCmd(t, "delete-users", usersFile, "--include", "alice", "--yes")
+	if err != nil {
+		t.Fatalf("delete-users --include failed: %v", err)
+	}
+	if deleteCount != 1 {
+		t.Errorf("expected exactly 1 DELETE, got %d (deleted: %v)", deleteCount, deletedIDs)
+	}
+	for _, id := range deletedIDs {
+		if id == "u2" {
+			t.Error("bob (u2) should have been excluded by --include but was deleted")
+		}
+	}
+}

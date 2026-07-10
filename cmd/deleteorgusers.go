@@ -53,6 +53,7 @@ confirmation is required before any changes are made.`,
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 		skipPattern, _ := cmd.Flags().GetString("skip")
+		includePattern, _ := cmd.Flags().GetString("include")
 
 		rows, err := parseOrgSpaceUsersCSV(args[0])
 		if err != nil {
@@ -195,11 +196,15 @@ confirmation is required before any changes are made.`,
 			return fmt.Errorf("no rows to process after filtering (check --regions or login)")
 		}
 
-		// Apply --skip filter.
-		if skipPattern != "" {
+		// Apply --include / --skip filters.
+		if includePattern != "" || skipPattern != "" {
 			var filtered []orgSpaceUserRow
 			for _, row := range activeRows {
-				if skipMatches(skipPattern, row.UserName, row.Origin, strings.Join(row.Roles, ";")) {
+				fields := []string{row.UserName, row.Origin, strings.Join(row.Roles, ";")}
+				if includePattern != "" && !skipMatches(includePattern, fields...) {
+					continue
+				}
+				if skipPattern != "" && skipMatches(skipPattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, row)
@@ -207,7 +212,7 @@ confirmation is required before any changes are made.`,
 			activeRows = filtered
 		}
 		if len(activeRows) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to delete after applying --skip.")
+			fmt.Fprintln(os.Stdout, "No users to delete after applying --include/--skip.")
 			return nil
 		}
 
@@ -337,4 +342,5 @@ func init() {
 	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
 	deleteOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
 	deleteOrgSpaceUsersCmd.Flags().String("skip", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
+	deleteOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
 }

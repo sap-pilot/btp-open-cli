@@ -111,6 +111,7 @@ execution and confirmation is required.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 		skipPattern, _ := cmd.Flags().GetString("skip")
+		includePattern, _ := cmd.Flags().GetString("include")
 
 		csvUsers, err := parseDeleteXsuaaUsersCSV(args[0])
 		if err != nil {
@@ -208,12 +209,16 @@ execution and confirmation is required.`,
 			}
 		}
 
-		// Apply --skip filter using fetched user attributes.
-		if skipPattern != "" {
+		// Apply --include / --skip filters using fetched user attributes.
+		if includePattern != "" || skipPattern != "" {
 			var filtered []deleteTarget
 			for _, t := range targets {
 				u := userAttrs[t.userID]
-				if skipMatches(skipPattern, t.userID, u.UserName, xsuaa.PrimaryEmail(u.Emails), xsuaa.GroupValues(u.Groups)) {
+				fields := []string{t.userID, u.UserName, xsuaa.PrimaryEmail(u.Emails), xsuaa.GroupValues(u.Groups)}
+				if includePattern != "" && !skipMatches(includePattern, fields...) {
+					continue
+				}
+				if skipPattern != "" && skipMatches(skipPattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, t)
@@ -221,7 +226,7 @@ execution and confirmation is required.`,
 			targets = filtered
 		}
 		if len(targets) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to delete after applying --skip.")
+			fmt.Fprintln(os.Stdout, "No users to delete after applying --include/--skip.")
 			return nil
 		}
 
@@ -304,4 +309,5 @@ func init() {
 	rootCmd.AddCommand(deleteUsersCmd)
 	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for user deletion")
 	deleteUsersCmd.Flags().String("skip", "", "Skip users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
+	deleteUsersCmd.Flags().String("include", "", "Only include users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
 }

@@ -313,3 +313,34 @@ func TestCreateOrgSpaceUsers_Skip(t *testing.T) {
 		t.Errorf("expected exactly 1 POST (for bob), got %d", postCount)
 	}
 }
+
+// TestCreateOrgSpaceUsers_Include verifies that --include filters to only matched rows.
+func TestCreateOrgSpaceUsers_Include(t *testing.T) {
+	postCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v3/roles" && r.Method == "POST" {
+			postCount++
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte("{}")) //nolint:errcheck
+			return
+		}
+		http.Error(w, "no route: "+r.URL.Path, 404)
+	}))
+	defer srv.Close()
+	setupTestEnv(t, srv.URL)
+
+	// Two rows: alice (included) and bob (excluded).
+	usersFile := writeOspUsersCSV(t,
+		[]string{srv.URL, "org1", "my-org", "", "", "", "alice@example.com", "sap.ids", "organization_manager"},
+		[]string{srv.URL, "org1", "my-org", "", "", "", "bob@example.com", "sap.ids", "organization_manager"},
+	)
+
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--include", "alice", "--yes")
+	if err != nil {
+		t.Fatalf("create-org-space-users --include failed: %v", err)
+	}
+	if postCount != 1 {
+		t.Errorf("expected exactly 1 POST (for alice), got %d", postCount)
+	}
+}

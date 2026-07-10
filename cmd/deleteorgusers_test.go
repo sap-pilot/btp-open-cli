@@ -223,3 +223,46 @@ func TestDeleteOrgUsers_Skip(t *testing.T) {
 		t.Errorf("expected exactly 1 DELETE (for bob), got %d", deleteCount)
 	}
 }
+
+// TestDeleteOrgUsers_Include verifies that --include filters to only matched rows.
+func TestDeleteOrgUsers_Include(t *testing.T) {
+	deleteCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v3/roles" && r.Method == "GET":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources": []map[string]interface{}{
+					{"guid": "role1", "type": "organization_manager",
+						"relationships": map[string]interface{}{
+							"user":         map[string]interface{}{"data": map[string]string{"guid": "u1"}},
+							"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}},
+							"space":        map[string]interface{}{"data": nil},
+						}},
+				},
+			})))
+		case strings.HasPrefix(r.URL.Path, "/v3/roles/") && r.Method == "DELETE":
+			deleteCount++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "no route: "+r.URL.Path+" "+r.Method, 404)
+		}
+	}))
+	defer srv.Close()
+	setupTestEnv(t, srv.URL)
+
+	// Two rows: alice (included) and bob (excluded).
+	usersFile := writeOspUsersCSV(t,
+		[]string{srv.URL, "org1", "my-org", "", "", "u1", "alice@example.com", "sap.ids", "organization_manager"},
+		[]string{srv.URL, "org1", "my-org", "", "", "u2", "bob@example.com", "sap.ids", "organization_manager"},
+	)
+
+	_, _, err := runCmd(t, "delete-org-space-users", usersFile, "--include", "alice", "--yes")
+	if err != nil {
+		t.Fatalf("delete-org-space-users --include failed: %v", err)
+	}
+	if deleteCount != 1 {
+		t.Errorf("expected exactly 1 DELETE (for alice), got %d", deleteCount)
+	}
+}
