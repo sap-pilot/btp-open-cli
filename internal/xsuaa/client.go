@@ -1,15 +1,19 @@
 package xsuaa
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,7 +60,7 @@ type tokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-// ── HTTP transport (mirrors cf/transport.go to honour proxy env vars) ─────────
+// ── HTTP transport, shared clients, and retry ─────────────────────────────────
 
 func newTransport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
@@ -66,7 +70,79 @@ func newTransport() *http.Transport {
 	return t
 }
 
+// httpClient is used for short-lived auth token requests.
 var httpClient = &http.Client{Timeout: 30 * time.Second, Transport: newTransport()}
+
+// scimClient is used for all SCIM API calls (users, groups).
+var scimClient = &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+
+const (
+	maxRetries     = 5
+	backoffBase    = 2 * time.Second
+	backoffMaxWait = 60 * time.Second
+)
+
+// doWithRetry executes makeReq and retries on HTTP 429 (Too Many Requests).
+// If the response includes a Retry-After header the delay is taken from it;
+// otherwise randomised exponential backoff is used. The context is respected
+// during waits so Ctrl-C cancels promptly.
+func doWithRetry(ctx context.Context, makeReq func() (*http.Request, error)) (*http.Response, []byte, error) {
+	for attempt := 0; ; attempt++ {
+		req, err := makeReq()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		resp, err := scimClient.Do(req)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRetries {
+			return resp, body, nil
+		}
+
+		wait := retryAfterDelay(resp.Header.Get("Retry-After"), attempt)
+		slog.Warn("XSUAA rate limit hit; retrying", "attempt", attempt+1, "wait", wait.Round(time.Millisecond))
+
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+// retryAfterDelay returns how long to wait before the next attempt.
+// If the Retry-After header is present it is respected (seconds or HTTP-date);
+// otherwise randomised exponential backoff is applied.
+func retryAfterDelay(header string, attempt int) time.Duration {
+	if header != "" {
+		// Seconds form: "Retry-After: 30"
+		if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		// HTTP-date form: "Retry-After: Wed, 21 Oct 2025 07:28:00 GMT"
+		if t, err := http.ParseTime(header); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+		}
+	}
+	// Exponential backoff: base * 2^attempt, capped, plus random jitter in [0, base).
+	exp := backoffBase * (1 << attempt)
+	if exp > backoffMaxWait {
+		exp = backoffMaxWait
+	}
+	jitter := time.Duration(rand.Int63n(int64(backoffBase)))
+	return exp + jitter
+}
 
 // ── auth ──────────────────────────────────────────────────────────────────────
 
@@ -109,7 +185,6 @@ func GetAccessToken(ctx context.Context, xsuaaURL, clientID, clientSecret string
 // ListUsers fetches all users from the XSUAA admin API, paginating through
 // all pages. apiBaseURL is e.g. "https://api.authentication.us10.hana.ondemand.com".
 func ListUsers(ctx context.Context, apiBaseURL, accessToken string) ([]User, error) {
-	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	base := strings.TrimRight(apiBaseURL, "/") + "/Users"
 
 	var all []User
@@ -118,20 +193,18 @@ func ListUsers(ctx context.Context, apiBaseURL, accessToken string) ([]User, err
 
 	for {
 		u := fmt.Sprintf("%s?startIndex=%d&count=%d", base, startIndex, pageSize)
-		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
+		resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", "Bearer "+accessToken)
+			req.Header.Set("Accept", "application/json")
+			return req, nil
+		})
 		if err != nil {
 			return nil, fmt.Errorf("GET %s: %w", u, err)
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("XSUAA users API returned HTTP %d: %s", resp.StatusCode, body)
 		}
@@ -181,23 +254,20 @@ type RoleCollection struct {
 // ListRoles fetches all roles from the XSUAA Authorization API.
 // The API returns a flat JSON array (no pagination envelope).
 func ListRoles(ctx context.Context, apiBaseURL, accessToken string) ([]Role, error) {
-	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/roles"
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("XSUAA roles API returned HTTP %d: %s", resp.StatusCode, body)
 	}
@@ -212,23 +282,20 @@ func ListRoles(ctx context.Context, apiBaseURL, accessToken string) ([]Role, err
 // ListRoleCollections fetches all role collections from the XSUAA Authorization
 // API with showRoles=true. The API returns a flat JSON array (no pagination envelope).
 func ListRoleCollections(ctx context.Context, apiBaseURL, accessToken string) ([]RoleCollection, error) {
-	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections?showRoles=true"
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("XSUAA role collections API returned HTTP %d: %s", resp.StatusCode, body)
 	}
@@ -244,7 +311,6 @@ func ListRoleCollections(ctx context.Context, apiBaseURL, accessToken string) ([
 // On HTTP 409 (user already exists) it returns (nil, nil) so the caller can
 // still proceed to role-collection assignment.
 func CreateUser(ctx context.Context, apiBaseURL, accessToken, userName, origin, email string) (*User, error) {
-	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	u := strings.TrimRight(apiBaseURL, "/") + "/Users"
 
 	payload := map[string]interface{}{
@@ -255,20 +321,20 @@ func CreateUser(ctx context.Context, apiBaseURL, accessToken, userName, origin, 
 		"active":   true,
 	}
 	b, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("POST %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
 
 	if resp.StatusCode == http.StatusConflict {
 		return nil, nil // already exists — caller continues to role assignment
@@ -301,7 +367,6 @@ type groupsPage struct {
 // displayName→id map (role collection name → group GUID). Call once per org
 // and reuse the map for all AddGroupMember calls in that org.
 func ListGroupIDs(ctx context.Context, apiBaseURL, accessToken string) (map[string]string, error) {
-	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	base := strings.TrimRight(apiBaseURL, "/") + "/Groups"
 
 	result := make(map[string]string)
@@ -310,20 +375,18 @@ func ListGroupIDs(ctx context.Context, apiBaseURL, accessToken string) (map[stri
 
 	for {
 		u := fmt.Sprintf("%s?startIndex=%d&count=%d", base, startIndex, pageSize)
-		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := c.Do(req)
+		resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", "Bearer "+accessToken)
+			req.Header.Set("Accept", "application/json")
+			return req, nil
+		})
 		if err != nil {
 			return nil, fmt.Errorf("GET %s: %w", u, err)
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
 		if resp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("UAA Groups API returned HTTP %d: %s", resp.StatusCode, body)
 		}
@@ -346,24 +409,21 @@ func ListGroupIDs(ctx context.Context, apiBaseURL, accessToken string) (map[stri
 // FindUserID returns the XSUAA user ID for a given userName and origin.
 // Used to retrieve the ID of an already-existing user (HTTP 409 on create).
 func FindUserID(ctx context.Context, apiBaseURL, accessToken, userName, origin string) (string, error) {
-	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	filter := fmt.Sprintf("userName eq %q and origin eq %q", userName, origin)
 	u := strings.TrimRight(apiBaseURL, "/") + "/Users?filter=" + url.QueryEscape(filter) + "&count=1"
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return "", fmt.Errorf("GET %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("UAA Users filter returned HTTP %d: %s", resp.StatusCode, body)
 	}
@@ -381,24 +441,21 @@ func FindUserID(ctx context.Context, apiBaseURL, accessToken, userName, origin s
 // FindUserByName returns the first XSUAA user whose userName matches, regardless
 // of origin. Used to detect cross-origin conflicts after a 409 on create.
 func FindUserByName(ctx context.Context, apiBaseURL, accessToken, userName string) (*User, error) {
-	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	filter := fmt.Sprintf("userName eq %q", userName)
 	u := strings.TrimRight(apiBaseURL, "/") + "/Users?filter=" + url.QueryEscape(filter) + "&count=1"
 
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("UAA Users filter returned HTTP %d: %s", resp.StatusCode, body)
 	}
@@ -415,26 +472,24 @@ func FindUserByName(ctx context.Context, apiBaseURL, accessToken, userName strin
 
 // AddGroupMember adds a user to a SCIM group via POST /Groups/{groupId}/members.
 func AddGroupMember(ctx context.Context, apiBaseURL, accessToken, groupID, userID, origin string) error {
-	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	u := strings.TrimRight(apiBaseURL, "/") + "/Groups/" + groupID + "/members"
 
 	payload := map[string]string{"origin": origin, "type": "USER", "value": userID}
 	b, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST", u, strings.NewReader(string(b)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
 	// 200 OK or 201 Created both indicate success.
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("add member to group %q failed (HTTP %d): %s", groupID, resp.StatusCode, body)
@@ -445,22 +500,19 @@ func AddGroupMember(ctx context.Context, apiBaseURL, accessToken, groupID, userI
 // DeleteUser sends DELETE /Users/{userID} to remove a user from the XSUAA
 // tenant. A 200 or 204 response is treated as success.
 func DeleteUser(ctx context.Context, apiBaseURL, accessToken, userID string) error {
-	client := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
 	u := strings.TrimRight(apiBaseURL, "/") + "/Users/" + userID
 
-	req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
-
-	resp, err := client.Do(req)
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		return req, nil
+	})
 	if err != nil {
 		return fmt.Errorf("DELETE %s: %w", u, err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("XSUAA delete user failed (HTTP %d): %s", resp.StatusCode, body)
 	}

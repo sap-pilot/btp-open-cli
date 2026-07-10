@@ -40,6 +40,16 @@
 
 ### Fixed
 
+- **`create-users`, `delete-users` — XSUAA API rate limit (HTTP 429) handled with automatic retry**
+
+  All XSUAA SCIM calls (`CreateUser`, `DeleteUser`, `AddGroupMember`, `FindUserID`, `ListUsers`, `ListGroupIDs`, and related lookups) now retry automatically when the XSUAA service returns HTTP 429 Too Many Requests. Up to 5 retries are attempted. If the response includes a `Retry-After` header (seconds or HTTP-date), that delay is respected exactly; otherwise randomised exponential backoff starting at 2 s is used, capped at 60 s. The context is respected during waits, so Ctrl-C cancels immediately. A warning is logged at each retry:
+
+  ```
+  WARN  XSUAA rate limit hit; retrying  attempt=1 wait=2.1s
+  ```
+
+  The CF API calls made by `create-org-space-users` and `delete-org-space-users` already had equivalent retry logic.
+
 - **`create-users` — cross-origin conflict reported as missing user**
 
   XSUAA enforces `userName` uniqueness globally across all origins. Previously, when a user such as `alice@example.com` already existed with origin `sap.ids` and `create-users` attempted to create them with origin `sap.custom`, XSUAA returned HTTP 409 ("already exists"). The command then tried to look up the user by `(userName, origin=sap.custom)`, found nothing, and printed a confusing "could not find user ID" error.
