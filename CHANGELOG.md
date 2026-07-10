@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.13 — 2026-07-09
+
+### Changed
+
+- **`create-org-space-users` and `delete-org-space-users` — CSV file is now a positional argument**
+
+  The `--users` flag has been replaced by a positional argument:
+
+  ```bash
+  bo create-org-space-users <org-space-users.csv> [flags]
+  bo delete-org-space-users <org-space-users.csv> [flags]
+  ```
+
+  All other flags (`--orgs`, `--excludeOrgs`, `--regions`, `-y`) are unchanged.
+
+  **Breaking change:** `--users <file>` is no longer accepted; pass the CSV path directly as the first argument.
+
 ## v0.12 — 2026-07-08
 
 ### Changed
