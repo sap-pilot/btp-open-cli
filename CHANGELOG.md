@@ -38,6 +38,18 @@
   bo create-org-space-users org-space-users.csv --include sap.custom --exclude alice@example.com -y
   ```
 
+### Fixed
+
+- **`create-users` — cross-origin conflict reported as missing user**
+
+  XSUAA enforces `userName` uniqueness globally across all origins. Previously, when a user such as `alice@example.com` already existed with origin `sap.ids` and `create-users` attempted to create them with origin `sap.custom`, XSUAA returned HTTP 409 ("already exists"). The command then tried to look up the user by `(userName, origin=sap.custom)`, found nothing, and printed a confusing "could not find user ID" error.
+
+  The command now detects this cross-origin conflict: when a 409 occurs and the requested `(userName, origin)` pair is not found, it performs a fallback lookup by `userName` only. If a user is found under a different origin the output clearly reports the actual origin:
+
+  ```
+  ! [eu20] my-org / alice@example.com: user already exists with origin "sap.ids" (expected "sap.custom") — skipping
+  ```
+
 ### Changed
 
 - **`create-org-space-users` and `delete-org-space-users` — CSV file is now a positional argument**

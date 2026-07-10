@@ -327,15 +327,23 @@ required before any changes are made.`,
 				userID = created.ID
 				fmt.Fprintf(os.Stdout, "  + [%s] %s / %s\n", t.regionName, t.orgName, u.UserName)
 			} else {
-				fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n", t.regionName, t.orgName, u.UserName)
-				// Look up the existing user's ID so we can add them to groups.
+				// HTTP 409: XSUAA enforces userName uniqueness globally, so this may
+				// fire even when the user exists only with a different origin.
 				var findErr error
 				userID, findErr = xsuaa.FindUserID(ctx, t.apiURL, t.token, u.UserName, u.Origin)
 				if findErr != nil {
-					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: could not find user ID: %v\n",
-						t.regionName, t.orgName, u.UserName, findErr)
+					// Not found with the requested origin — check if another origin holds the name.
+					conflict, _ := xsuaa.FindUserByName(ctx, t.apiURL, t.token, u.UserName)
+					if conflict != nil {
+						fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: user already exists with origin %q (expected %q) — skipping\n",
+							t.regionName, t.orgName, u.UserName, conflict.Origin, u.Origin)
+					} else {
+						fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: could not find user ID: %v\n",
+							t.regionName, t.orgName, u.UserName, findErr)
+					}
 					continue
 				}
+				fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n", t.regionName, t.orgName, u.UserName)
 			}
 
 			orgGroups := groupIDs[t.apiURL]

@@ -378,6 +378,41 @@ func FindUserID(ctx context.Context, apiBaseURL, accessToken, userName, origin s
 	return page.Resources[0].ID, nil
 }
 
+// FindUserByName returns the first XSUAA user whose userName matches, regardless
+// of origin. Used to detect cross-origin conflicts after a 409 on create.
+func FindUserByName(ctx context.Context, apiBaseURL, accessToken, userName string) (*User, error) {
+	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
+	filter := fmt.Sprintf("userName eq %q", userName)
+	u := strings.TrimRight(apiBaseURL, "/") + "/Users?filter=" + url.QueryEscape(filter) + "&count=1"
+
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", u, err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("UAA Users filter returned HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var page usersPage
+	if err := json.Unmarshal(body, &page); err != nil {
+		return nil, fmt.Errorf("parsing UAA Users filter response: %w", err)
+	}
+	if len(page.Resources) == 0 {
+		return nil, nil
+	}
+	return &page.Resources[0], nil
+}
+
 // AddGroupMember adds a user to a SCIM group via POST /Groups/{groupId}/members.
 func AddGroupMember(ctx context.Context, apiBaseURL, accessToken, groupID, userID, origin string) error {
 	c := &http.Client{Timeout: 60 * time.Second, Transport: newTransport()}
