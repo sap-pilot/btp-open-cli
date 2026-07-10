@@ -315,7 +315,11 @@ required before any changes are made.`,
 		// Pre-fetch existing users with their current group memberships once per
 		// endpoint. This lets us skip CreateUser and AddGroupMember calls that
 		// would otherwise return 409 (user/role-collection already exists).
-		existingUsers := make(map[string]map[string]xsuaa.User) // apiURL → "userName\x00origin" → User
+		// apiURL → "lower(email)\x00origin" → User
+		// XSUAA lowercases userName on creation (e.g. "JOHN@example.com" →
+		// "john@example.com"), so we key by lower-cased email + origin to
+		// guarantee a match regardless of the case used in the CSV.
+		existingUsers := make(map[string]map[string]xsuaa.User)
 		for _, t := range targets {
 			if _, ok := existingUsers[t.apiURL]; ok {
 				continue
@@ -328,7 +332,11 @@ required before any changes are made.`,
 			} else {
 				byKey := make(map[string]xsuaa.User, len(users))
 				for _, u := range users {
-					byKey[u.UserName+"\x00"+u.Origin] = u
+					email := strings.ToLower(xsuaa.PrimaryEmail(u.Emails))
+					if email == "" {
+						email = strings.ToLower(u.UserName)
+					}
+					byKey[email+"\x00"+u.Origin] = u
 				}
 				existingUsers[t.apiURL] = byKey
 			}
@@ -336,7 +344,7 @@ required before any changes are made.`,
 
 		for _, t := range targets {
 			u := t.user
-			cacheKey := u.UserName + "\x00" + u.Origin
+			cacheKey := strings.ToLower(u.Email) + "\x00" + u.Origin
 
 			existingUser, alreadyExists := existingUsers[t.apiURL][cacheKey]
 
