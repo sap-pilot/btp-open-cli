@@ -180,9 +180,9 @@ func TestDeleteOrgUsers_Broadcast_OrgLevel(t *testing.T) {
 	}
 }
 
-// TestDeleteOrgUsers_Skip verifies that --skip filters out matched rows and only
+// TestDeleteOrgUsers_Exclude verifies that --exclude filters out matched rows and only
 // deletes roles for remaining users.
-func TestDeleteOrgUsers_Skip(t *testing.T) {
+func TestDeleteOrgUsers_Exclude(t *testing.T) {
 	deleteCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -215,9 +215,9 @@ func TestDeleteOrgUsers_Skip(t *testing.T) {
 		[]string{srv.URL, "org1", "my-org", "", "", "u2", "bob@example.com", "sap.ids", "organization_manager"},
 	)
 
-	_, _, err := runCmd(t, "delete-org-space-users", usersFile, "--skip", "alice", "--yes")
+	_, _, err := runCmd(t, "delete-org-space-users", usersFile, "--exclude", "alice", "--yes")
 	if err != nil {
-		t.Fatalf("delete-org-space-users --skip failed: %v", err)
+		t.Fatalf("delete-org-space-users --exclude failed: %v", err)
 	}
 	if deleteCount != 1 {
 		t.Errorf("expected exactly 1 DELETE (for bob), got %d", deleteCount)

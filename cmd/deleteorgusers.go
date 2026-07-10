@@ -52,7 +52,7 @@ confirmation is required before any changes are made.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
-		skipPattern, _ := cmd.Flags().GetString("skip")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		includePattern, _ := cmd.Flags().GetString("include")
 
 		rows, err := parseOrgSpaceUsersCSV(args[0])
@@ -196,15 +196,15 @@ confirmation is required before any changes are made.`,
 			return fmt.Errorf("no rows to process after filtering (check --regions or login)")
 		}
 
-		// Apply --include / --skip filters.
-		if includePattern != "" || skipPattern != "" {
+		// Apply --include / --exclude filters.
+		if includePattern != "" || excludePattern != "" {
 			var filtered []orgSpaceUserRow
 			for _, row := range activeRows {
 				fields := []string{row.UserName, row.Origin, strings.Join(row.Roles, ";")}
 				if includePattern != "" && !skipMatches(includePattern, fields...) {
 					continue
 				}
-				if skipPattern != "" && skipMatches(skipPattern, fields...) {
+				if excludePattern != "" && skipMatches(excludePattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, row)
@@ -212,7 +212,7 @@ confirmation is required before any changes are made.`,
 			activeRows = filtered
 		}
 		if len(activeRows) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to delete after applying --include/--skip.")
+			fmt.Fprintln(os.Stdout, "No users to delete after applying --include/--exclude.")
 			return nil
 		}
 
@@ -341,6 +341,6 @@ func init() {
 	rootCmd.AddCommand(deleteOrgSpaceUsersCmd)
 	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
 	deleteOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
-	deleteOrgSpaceUsersCmd.Flags().String("skip", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
+	deleteOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
 	deleteOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
 }

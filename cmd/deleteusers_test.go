@@ -50,9 +50,9 @@ func TestDeleteUsers_InvalidCSV(t *testing.T) {
 	}
 }
 
-// TestDeleteUsers_Skip verifies that --skip filters out matched users and only
+// TestDeleteUsers_Exclude verifies that --exclude filters out matched users and only
 // deletes the remaining ones.
-func TestDeleteUsers_Skip(t *testing.T) {
+func TestDeleteUsers_Exclude(t *testing.T) {
 	const (
 		orgGUID    = "org1"
 		regionName = "eu20"
@@ -88,9 +88,9 @@ func TestDeleteUsers_Skip(t *testing.T) {
 		[]string{regionName, orgGUID, "u2"}, // bob   — should be deleted
 	)
 
-	_, _, err := runCmd(t, "delete-users", usersFile, "--skip", "alice", "--yes")
+	_, _, err := runCmd(t, "delete-users", usersFile, "--exclude", "alice", "--yes")
 	if err != nil {
-		t.Fatalf("delete-users --skip failed: %v", err)
+		t.Fatalf("delete-users --exclude failed: %v", err)
 	}
 	if deleteCount != 1 {
 		t.Errorf("expected exactly 1 DELETE, got %d (deleted: %v)", deleteCount, deletedIDs)

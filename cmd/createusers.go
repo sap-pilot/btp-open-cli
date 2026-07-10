@@ -141,7 +141,7 @@ required before any changes are made.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
-		skipPattern, _ := cmd.Flags().GetString("skip")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		includePattern, _ := cmd.Flags().GetString("include")
 
 		csvUsers, err := parseCreateXsuaaUsersCSV(args[0])
@@ -218,15 +218,15 @@ required before any changes are made.`,
 			return nil
 		}
 
-		// Apply --include / --skip filters.
-		if includePattern != "" || skipPattern != "" {
+		// Apply --include / --exclude filters.
+		if includePattern != "" || excludePattern != "" {
 			var filtered []createTarget
 			for _, t := range targets {
 				fields := []string{t.user.UserName, t.user.Email, strings.Join(t.user.Groups, ";")}
 				if includePattern != "" && !skipMatches(includePattern, fields...) {
 					continue
 				}
-				if skipPattern != "" && skipMatches(skipPattern, fields...) {
+				if excludePattern != "" && skipMatches(excludePattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, t)
@@ -234,7 +234,7 @@ required before any changes are made.`,
 			targets = filtered
 		}
 		if len(targets) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to create after applying --include/--skip.")
+			fmt.Fprintln(os.Stdout, "No users to create after applying --include/--exclude.")
 			return nil
 		}
 
@@ -362,6 +362,6 @@ func init() {
 	createUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(createUsersCmd)
 	createUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
-	createUsersCmd.Flags().String("skip", "", "Skip users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
+	createUsersCmd.Flags().String("exclude", "", "Skip users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
 	createUsersCmd.Flags().String("include", "", "Only include users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
 }

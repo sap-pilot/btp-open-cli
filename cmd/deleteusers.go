@@ -110,7 +110,7 @@ execution and confirmation is required.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
-		skipPattern, _ := cmd.Flags().GetString("skip")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		includePattern, _ := cmd.Flags().GetString("include")
 
 		csvUsers, err := parseDeleteXsuaaUsersCSV(args[0])
@@ -209,8 +209,8 @@ execution and confirmation is required.`,
 			}
 		}
 
-		// Apply --include / --skip filters using fetched user attributes.
-		if includePattern != "" || skipPattern != "" {
+		// Apply --include / --exclude filters using fetched user attributes.
+		if includePattern != "" || excludePattern != "" {
 			var filtered []deleteTarget
 			for _, t := range targets {
 				u := userAttrs[t.userID]
@@ -218,7 +218,7 @@ execution and confirmation is required.`,
 				if includePattern != "" && !skipMatches(includePattern, fields...) {
 					continue
 				}
-				if skipPattern != "" && skipMatches(skipPattern, fields...) {
+				if excludePattern != "" && skipMatches(excludePattern, fields...) {
 					continue
 				}
 				filtered = append(filtered, t)
@@ -226,7 +226,7 @@ execution and confirmation is required.`,
 			targets = filtered
 		}
 		if len(targets) == 0 {
-			fmt.Fprintln(os.Stdout, "No users to delete after applying --include/--skip.")
+			fmt.Fprintln(os.Stdout, "No users to delete after applying --include/--exclude.")
 			return nil
 		}
 
@@ -308,6 +308,6 @@ func init() {
 	deleteUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(deleteUsersCmd)
 	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for user deletion")
-	deleteUsersCmd.Flags().String("skip", "", "Skip users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
+	deleteUsersCmd.Flags().String("exclude", "", "Skip users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
 	deleteUsersCmd.Flags().String("include", "", "Only include users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
 }
