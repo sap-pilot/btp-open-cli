@@ -18,9 +18,9 @@
   bo org-spaces --exclude dev    # removes dev spaces and spaces in dev orgs
   ```
 
-- **`--skip <pattern>` and `--include <pattern>` flags for `create-users`, `delete-users`, `create-org-space-users`, and `delete-org-space-users`**
+- **`--exclude <pattern>` and `--include <pattern>` flags for `create-users`, `delete-users`, `create-org-space-users`, and `delete-org-space-users`**
 
-  Both flags perform a case-insensitive substring match against the relevant user fields and are applied before the preview and before any changes are made. When both are provided, `--include` is evaluated first, then `--skip`.
+  Both flags perform a case-insensitive substring match against the relevant user fields and are applied before the preview and before any changes are made. When both are provided, `--include` is evaluated first, then `--exclude`.
 
   Matched fields per command:
   - `create-users` / `delete-users`: `user_name`, `email`, `groups` (and `user_id` for `delete-users`)
@@ -32,10 +32,10 @@
   bo delete-users users.csv --include sap.custom -y
 
   # Skip technical/service accounts that share a known origin
-  bo delete-users users.csv --skip sap.default -y
+  bo delete-users users.csv --exclude sap.default -y
 
-  # Combine: only process sap.custom users, but skip a specific one
-  bo create-org-space-users org-space-users.csv --include sap.custom --skip alice@example.com -y
+  # Combine: only process sap.custom users, but exclude a specific one
+  bo create-org-space-users org-space-users.csv --include sap.custom --exclude alice@example.com -y
   ```
 
 ### Changed

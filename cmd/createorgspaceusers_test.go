@@ -282,9 +282,9 @@ func TestCreateOrgSpaceUsers_Broadcast_SpaceLevel(t *testing.T) {
 	}
 }
 
-// TestCreateOrgSpaceUsers_Skip verifies that --skip filters out matched rows and
+// TestCreateOrgSpaceUsers_Exclude verifies that --exclude filters out matched rows and
 // only creates roles for the remaining users.
-func TestCreateOrgSpaceUsers_Skip(t *testing.T) {
+func TestCreateOrgSpaceUsers_Exclude(t *testing.T) {
 	postCount := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -305,9 +305,9 @@ func TestCreateOrgSpaceUsers_Skip(t *testing.T) {
 		[]string{srv.URL, "org1", "my-org", "", "", "", "bob@example.com", "sap.ids", "organization_manager"},
 	)
 
-	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--skip", "alice", "--yes")
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--exclude", "alice", "--yes")
 	if err != nil {
-		t.Fatalf("create-org-space-users --skip failed: %v", err)
+		t.Fatalf("create-org-space-users --exclude failed: %v", err)
 	}
 	if postCount != 1 {
 		t.Errorf("expected exactly 1 POST (for bob), got %d", postCount)
