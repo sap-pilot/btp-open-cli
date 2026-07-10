@@ -40,6 +40,17 @@
 
 ### Fixed
 
+- **`create-users` — pre-fetch existing users and role-collection assignments to eliminate duplicate-create/assign 409 errors**
+
+  Before processing the CSV, the command now calls `ListUsers` once per XSUAA endpoint to retrieve all current users together with their group memberships. During the main loop:
+
+  - If a user is already present (matched by `userName` + `origin`), `CreateUser` is skipped entirely — no HTTP 409 is generated.
+  - If a role collection is already assigned to the user (matched by group ID from the pre-fetched membership list), `AddGroupMember` is skipped entirely — no `member_already_exists` 409 is generated.
+
+  The command is now idempotent: re-running it against the same CSV is silent for entries that already exist and only emits output for net-new users and assignments.
+
+  If `ListUsers` fails (e.g. transient network error), the pre-fetch is skipped for that endpoint and the original create/assign path is used as a fallback (409 errors may reappear).
+
 - **`create-users`, `delete-users` — XSUAA API rate limit (HTTP 429) handled with automatic retry**
 
   All XSUAA SCIM calls (`CreateUser`, `DeleteUser`, `AddGroupMember`, `FindUserID`, `ListUsers`, `ListGroupIDs`, and related lookups) now retry automatically when the XSUAA service returns HTTP 429 Too Many Requests. Up to 5 retries are attempted. If the response includes a `Retry-After` header (seconds or HTTP-date), that delay is respected exactly; otherwise randomised exponential backoff starting at 2 s is used, capped at 60 s. The context is respected during waits, so Ctrl-C cancels immediately. A warning is logged at each retry:

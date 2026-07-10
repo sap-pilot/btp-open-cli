@@ -294,8 +294,9 @@ required before any changes are made.`,
 		}
 
 		// Phase 4: create users and assign role collections.
-		// Build a group displayName→ID map per XSUAA endpoint (once per org).
 		fmt.Fprintln(os.Stdout, "Creating users...")
+
+		// Build group displayName→ID map per endpoint (once per org).
 		groupIDs := make(map[string]map[string]string) // apiURL → displayName → groupID
 		for _, t := range targets {
 			if _, ok := groupIDs[t.apiURL]; ok {
@@ -305,45 +306,78 @@ required before any changes are made.`,
 			if fetchErr != nil {
 				fmt.Fprintf(os.Stderr, "  ! [%s] %s: could not fetch group list: %v\n",
 					t.regionName, t.orgName, fetchErr)
-				groupIDs[t.apiURL] = map[string]string{} // empty — skip role assignments for this org
+				groupIDs[t.apiURL] = map[string]string{} // empty — role assignments will be skipped
 			} else {
 				groupIDs[t.apiURL] = ids
 			}
 		}
 
+		// Pre-fetch existing users with their current group memberships once per
+		// endpoint. This lets us skip CreateUser and AddGroupMember calls that
+		// would otherwise return 409 (user/role-collection already exists).
+		existingUsers := make(map[string]map[string]xsuaa.User) // apiURL → "userName\x00origin" → User
 		for _, t := range targets {
-			u := t.user
-
-			// Create user; nil return means HTTP 409 (already exists).
-			created, createErr := xsuaa.CreateUser(ctx, t.apiURL, t.token, u.UserName, u.Origin, u.Email)
-			if createErr != nil {
-				fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: create failed: %v\n",
-					t.regionName, t.orgName, u.UserName, createErr)
+			if _, ok := existingUsers[t.apiURL]; ok {
 				continue
 			}
+			users, fetchErr := xsuaa.ListUsers(ctx, t.apiURL, t.token)
+			if fetchErr != nil {
+				fmt.Fprintf(os.Stderr, "  ! [%s] %s: could not fetch existing users (will attempt create anyway): %v\n",
+					t.regionName, t.orgName, fetchErr)
+				existingUsers[t.apiURL] = map[string]xsuaa.User{}
+			} else {
+				byKey := make(map[string]xsuaa.User, len(users))
+				for _, u := range users {
+					byKey[u.UserName+"\x00"+u.Origin] = u
+				}
+				existingUsers[t.apiURL] = byKey
+			}
+		}
+
+		for _, t := range targets {
+			u := t.user
+			cacheKey := u.UserName + "\x00" + u.Origin
+
+			existingUser, alreadyExists := existingUsers[t.apiURL][cacheKey]
 
 			var userID string
-			if created != nil {
-				userID = created.ID
-				fmt.Fprintf(os.Stdout, "  + [%s] %s / %s\n", t.regionName, t.orgName, u.UserName)
+			if alreadyExists {
+				userID = existingUser.ID
+				fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n", t.regionName, t.orgName, u.UserName)
 			} else {
-				// HTTP 409: XSUAA enforces userName uniqueness globally, so this may
-				// fire even when the user exists only with a different origin.
-				var findErr error
-				userID, findErr = xsuaa.FindUserID(ctx, t.apiURL, t.token, u.UserName, u.Origin)
-				if findErr != nil {
-					// Not found with the requested origin — check if another origin holds the name.
-					conflict, _ := xsuaa.FindUserByName(ctx, t.apiURL, t.token, u.UserName)
-					if conflict != nil {
-						fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: user already exists with origin %q (expected %q) — skipping\n",
-							t.regionName, t.orgName, u.UserName, conflict.Origin, u.Origin)
-					} else {
-						fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: could not find user ID: %v\n",
-							t.regionName, t.orgName, u.UserName, findErr)
-					}
+				// User not in pre-fetched cache — attempt creation.
+				created, createErr := xsuaa.CreateUser(ctx, t.apiURL, t.token, u.UserName, u.Origin, u.Email)
+				if createErr != nil {
+					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: create failed: %v\n",
+						t.regionName, t.orgName, u.UserName, createErr)
 					continue
 				}
-				fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n", t.regionName, t.orgName, u.UserName)
+				if created != nil {
+					userID = created.ID
+					fmt.Fprintf(os.Stdout, "  + [%s] %s / %s\n", t.regionName, t.orgName, u.UserName)
+				} else {
+					// HTTP 409 despite not being in cache — race condition or cross-origin conflict.
+					var findErr error
+					userID, findErr = xsuaa.FindUserID(ctx, t.apiURL, t.token, u.UserName, u.Origin)
+					if findErr != nil {
+						conflict, _ := xsuaa.FindUserByName(ctx, t.apiURL, t.token, u.UserName)
+						if conflict != nil {
+							fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: user already exists with origin %q (expected %q) — skipping\n",
+								t.regionName, t.orgName, u.UserName, conflict.Origin, u.Origin)
+						} else {
+							fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s: could not find user ID: %v\n",
+								t.regionName, t.orgName, u.UserName, findErr)
+						}
+						continue
+					}
+					fmt.Fprintf(os.Stdout, "  ~ [%s] %s / %s (already exists)\n", t.regionName, t.orgName, u.UserName)
+				}
+			}
+
+			// Build set of group IDs already assigned to this user (from pre-fetch).
+			assignedGroups := make(map[string]bool, len(existingUser.Groups))
+			for _, g := range existingUser.Groups {
+				assignedGroups[g.Value] = true
 			}
 
 			orgGroups := groupIDs[t.apiURL]
@@ -353,6 +387,9 @@ required before any changes are made.`,
 					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s / %q: role collection not found\n",
 						t.regionName, t.orgName, u.UserName, rc)
 					continue
+				}
+				if assignedGroups[groupID] {
+					continue // already assigned — skip silently
 				}
 				if err := xsuaa.AddGroupMember(ctx, t.apiURL, t.token, groupID, userID, u.Origin); err != nil {
 					fmt.Fprintf(os.Stderr, "  ! [%s] %s / %s / %q: %v\n",
