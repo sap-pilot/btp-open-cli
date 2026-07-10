@@ -46,7 +46,7 @@ func TestCreateOrgSpaceUsers_MissingUsersFlag(t *testing.T) {
 	setupTestEnv(t, "http://fake-cf.example.com")
 	_, _, err := runCmd(t, "create-org-space-users")
 	if err == nil {
-		t.Fatal("expected error when --users is not provided")
+		t.Fatal("expected error when CSV argument is not provided")
 	}
 }
 
@@ -61,11 +61,11 @@ func TestCreateOrgSpaceUsers_InvalidUsersCSV(t *testing.T) {
 	f.WriteString("name,origin,roles\nalice@example.com,sap.ids,organization_manager\n") //nolint:errcheck
 	f.Close()
 
-	_, _, err = runCmd(t, "create-org-space-users", "--users", f.Name(), "--yes")
+	_, _, err = runCmd(t, "create-org-space-users", f.Name(), "--yes")
 	if err == nil {
 		t.Fatal("expected error for unrecognized CSV header")
 	}
-	if !strings.Contains(err.Error(), "invalid --users CSV") {
+	if !strings.Contains(err.Error(), "invalid users CSV") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -78,7 +78,7 @@ func TestCreateOrgSpaceUsers_InvalidOrgsCSV(t *testing.T) {
 	)
 	nonexistent := t.TempDir() + "/nonexistent.csv"
 
-	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--orgs", nonexistent, "--yes")
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--orgs", nonexistent, "--yes")
 	if err == nil {
 		t.Fatal("expected error for nonexistent --orgs CSV")
 	}
@@ -105,7 +105,7 @@ func TestCreateOrgSpaceUsers_AutoConfirm_OrgLevel(t *testing.T) {
 		[]string{srv.URL, "org1", "my-org", "", "", "", "alice@example.com", "sap.ids", "organization_manager"},
 	)
 
-	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("create-org-space-users --yes failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestCreateOrgSpaceUsers_AutoConfirm_SpaceLevel(t *testing.T) {
 		[]string{srv.URL, "org1", "my-org", "sp1", "dev", "", "alice@example.com", "sap.ids", "space_developer"},
 	)
 
-	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("create-org-space-users --yes (space-level) failed: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestCreateOrgSpaceUsers_OrgFilter(t *testing.T) {
 	orgsFile.WriteString("region,org_id,org_name\n,,org-one\n") //nolint:errcheck
 	orgsFile.Close()
 
-	_, _, err = runCmd(t, "create-org-space-users", "--users", usersFile, "--orgs", orgsFile.Name(), "--yes")
+	_, _, err = runCmd(t, "create-org-space-users", usersFile, "--orgs", orgsFile.Name(), "--yes")
 	if err != nil {
 		t.Fatalf("create-org-space-users --orgs filter failed: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestCreateOrgSpaceUsers_Broadcast_OrgLevel(t *testing.T) {
 		[]string{"alice@example.com", "sap.ids", "organization_manager"},
 	)
 
-	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("create-org-space-users broadcast failed: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestCreateOrgSpaceUsers_Broadcast_SpaceLevel(t *testing.T) {
 		[]string{"alice@example.com", "sap.ids", "space_developer"},
 	)
 
-	_, _, err := runCmd(t, "create-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "create-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("create-org-space-users broadcast (space) failed: %v", err)
 	}

@@ -12,7 +12,7 @@ func TestDeleteOrgUsers_MissingUsersFlag(t *testing.T) {
 	setupTestEnv(t, "http://fake-cf.example.com")
 	_, _, err := runCmd(t, "delete-org-space-users")
 	if err == nil {
-		t.Fatal("expected error when --users is not provided")
+		t.Fatal("expected error when CSV argument is not provided")
 	}
 }
 
@@ -21,7 +21,7 @@ func TestDeleteOrgUsers_InvalidUsersCSV(t *testing.T) {
 
 	// Write a file with the 9-column header but zero data rows.
 	f := writeOspUsersCSV(t) // zero rows — just the header
-	_, _, err := runCmd(t, "delete-org-space-users", "--users", f, "--yes")
+	_, _, err := runCmd(t, "delete-org-space-users", f, "--yes")
 	if err == nil {
 		t.Fatal("expected error for CSV with no data rows")
 	}
@@ -63,7 +63,7 @@ func TestDeleteOrgUsers_AutoConfirm_OrgLevel(t *testing.T) {
 		[]string{srv.URL, "org1", "my-org", "", "", "u1", "alice@example.com", "sap.ids", "organization_manager"},
 	)
 
-	_, _, err := runCmd(t, "delete-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "delete-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("delete-org-space-users --yes (org-level) failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestDeleteOrgUsers_AutoConfirm_SpaceLevel(t *testing.T) {
 		[]string{srv.URL, "org1", "my-org", "sp1", "dev", "u1", "alice@example.com", "sap.ids", "space_developer"},
 	)
 
-	_, _, err := runCmd(t, "delete-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "delete-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("delete-org-space-users --yes (space-level) failed: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestDeleteOrgUsers_Broadcast_OrgLevel(t *testing.T) {
 		[]string{"alice@example.com", "sap.ids", "organization_manager"},
 	)
 
-	_, _, err := runCmd(t, "delete-org-space-users", "--users", usersFile, "--yes")
+	_, _, err := runCmd(t, "delete-org-space-users", usersFile, "--yes")
 	if err != nil {
 		t.Fatalf("delete-org-space-users broadcast failed: %v", err)
 	}

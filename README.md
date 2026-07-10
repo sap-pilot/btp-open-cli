@@ -288,7 +288,7 @@ bo orgs --format csv --regions us10,us20 > my-orgs.csv
 
 # Exclude production orgs when creating users
 bo orgs --format csv --regions us10,us20 | grep prod > prod-orgs.csv
-bo create-org-space-users --users users.csv --excludeOrgs prod-orgs.csv
+bo create-org-space-users users.csv --excludeOrgs prod-orgs.csv
 ```
 
 Default TOON output:
@@ -392,7 +392,7 @@ bo org-space-users --regions us10,us20,eu10
 
 ### `create-org-space-users`
 
-Add users to CF organizations and spaces from a CSV file. Two `--users` CSV formats are accepted:
+Add users to CF organizations and spaces from a CSV file. Two CSV formats are accepted:
 
 **Simple 3-column format** (broadcast — no targeting info; the command discovers all accessible orgs and spaces):
 
@@ -422,26 +422,26 @@ Roles are split by prefix: `organization_*` roles are applied at the org level; 
 
 ```bash
 # Apply all rows (shows TOON preview, prompts y/N)
-bo create-org-space-users --users org-space-users.csv
+bo create-org-space-users org-space-users.csv
 
 # Skip confirmation prompt
-bo create-org-space-users --users org-space-users.csv -y
+bo create-org-space-users org-space-users.csv -y
 
 # Filter by org (CSV: region,org_id,org_name)
-bo create-org-space-users --users org-space-users.csv --orgs target-orgs.csv
+bo create-org-space-users org-space-users.csv --orgs target-orgs.csv
 
 # Exclude specific orgs (CSV: region,org_id,org_name)
-bo create-org-space-users --users org-space-users.csv --excludeOrgs prod-orgs.csv
+bo create-org-space-users org-space-users.csv --excludeOrgs prod-orgs.csv
 
 # Only process rows for specific regions (also restricts broadcast rows)
-bo create-org-space-users --users org-space-users.csv --regions eu20,us10
+bo create-org-space-users org-space-users.csv --regions eu20,us10
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
 
 ### `delete-org-space-users`
 
-Remove users from CF organizations and spaces from a CSV file. Two `--users` CSV formats are accepted:
+Remove users from CF organizations and spaces from a CSV file. Two CSV formats are accepted:
 
 **Simple 3-column format** (broadcast — the command discovers all accessible orgs and spaces):
 
@@ -466,13 +466,13 @@ Space-level removals are performed first. If org-level rows are also present, a 
 
 ```bash
 # Preview roles to be removed, then confirm (y/N)
-bo delete-org-space-users --users org-space-users.csv
+bo delete-org-space-users org-space-users.csv
 
 # Skip confirmation prompt
-bo delete-org-space-users --users org-space-users.csv -y
+bo delete-org-space-users org-space-users.csv -y
 
 # Only process rows for specific regions (also restricts broadcast rows)
-bo delete-org-space-users --users org-space-users.csv --regions eu20,us10
+bo delete-org-space-users org-space-users.csv --regions eu20,us10
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -554,8 +554,9 @@ bo create-users <users.csv> [-y]
 The CSV must contain at least the columns `region`, `org_id`, `user_origin`, `user_name`, `email`, and `groups`; extra columns are ignored. The `groups` column is semicolon-separated role collection names. The output of `bo users --format csv` can be passed directly:
 
 ```bash
-bo users --format csv > users.csv
-bo create-users users.csv
+bo users --org {orgId} --filter sap.default --format csv > default-users.csv
+sed -i 's/sap.default/sap.custom/g' default-users.csv
+bo create-users default-users.csv
 ```
 
 Minimum CSV format:

@@ -252,11 +252,11 @@ func targetAPIURLs(srcRegion string, creds *store.Credentials, regionsFilter map
 // ── command ───────────────────────────────────────────────────────────────────
 
 var createOrgSpaceUsersCmd = &cobra.Command{
-	Use:   "create-org-space-users",
+	Use:   "create-org-space-users <org-space-users.csv>",
 	Short: "Add users with org and space roles from a CSV file",
 	Long: `Add users to CF organizations and spaces from a CSV file.
 
-Two --users CSV formats are accepted:
+Two CSV formats are accepted:
 
   Simple 3-column format (broadcast — no targeting info):
     cfuser_name,cfuser_origin,cfuser_roles
@@ -278,16 +278,17 @@ space_* roles are applied at the space level.
 
 Without -y, a TOON preview of all targeted users and scopes is shown and
 confirmation is required before any changes are made.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
-		usersFile, _ := cmd.Flags().GetString("users")
+		usersFile := args[0]
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 
 		rows, err := parseOrgSpaceUsersCSV(usersFile)
 		if err != nil {
-			return fmt.Errorf("invalid --users CSV: %w", err)
+			return fmt.Errorf("invalid users CSV: %w", err)
 		}
 
 		var includeOrgs cosOrgSet
@@ -518,8 +519,6 @@ func init() {
 	createOrgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(createOrgSpaceUsersCmd)
 	createOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
-	createOrgSpaceUsersCmd.Flags().String("users", "", "Path to users CSV file (required); accepts 3-column format (cfuser_name,cfuser_origin,cfuser_roles) for broadcast or 9-column format (region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles) for targeted operations")
-	createOrgSpaceUsersCmd.MarkFlagRequired("users")
 	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to include (columns: region,org_id,org_name); filters rows by org_id or org_name")
 	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
 	createOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
