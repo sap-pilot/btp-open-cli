@@ -64,6 +64,8 @@ If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -140,7 +142,17 @@ If --regions is omitted, the regions from the last login are used.`,
 				})
 				var outSpaces []osOutSpace
 				for _, sp := range spaces {
+					if includePattern != "" && !skipMatches(includePattern, org.Name, sp.Name) {
+						continue
+					}
+					if excludePattern != "" && skipMatches(excludePattern, org.Name, sp.Name) {
+						continue
+					}
 					outSpaces = append(outSpaces, osOutSpace{ID: sp.GUID, Name: sp.Name})
+				}
+				// When a filter is active, omit orgs that have no remaining spaces.
+				if (includePattern != "" || excludePattern != "") && len(outSpaces) == 0 {
+					continue
 				}
 				outOrgs = append(outOrgs, osOutOrg{
 					ID:     org.GUID,
@@ -199,4 +211,6 @@ func init() {
 	rootCmd.AddCommand(orgSpacesCmd)
 	orgSpacesCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgSpacesCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgSpacesCmd.Flags().String("include", "", "Only include spaces where org_name or space_name contains this pattern (case-insensitive substring match)")
+	orgSpacesCmd.Flags().String("exclude", "", "Exclude spaces where org_name or space_name contains this pattern (case-insensitive substring match)")
 }

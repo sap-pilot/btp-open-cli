@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`--include <pattern>` and `--exclude <pattern>` flags for `orgs` and `org-spaces`**
+
+  Both flags perform a case-insensitive substring match and filter the output before it is printed.
+
+  - `orgs`: matches against `org_name`. Orgs that don't pass the filter are omitted.
+  - `org-spaces`: matches against `org_name` OR `space_name`. Spaces that don't pass the filter are omitted; orgs with no remaining spaces are omitted entirely.
+
+  ```bash
+  bo orgs --include prod
+  bo orgs --exclude sandbox
+  bo org-spaces --include prod   # keeps spaces in prod orgs AND spaces named prod*
+  bo org-spaces --exclude dev    # removes dev spaces and spaces in dev orgs
+  ```
+
 - **`--skip <pattern>` and `--include <pattern>` flags for `create-users`, `delete-users`, `create-org-space-users`, and `delete-org-space-users`**
 
   Both flags perform a case-insensitive substring match against the relevant user fields and are applied before the preview and before any changes are made. When both are provided, `--include` is evaluated first, then `--skip`.

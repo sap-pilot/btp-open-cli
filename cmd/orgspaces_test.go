@@ -81,6 +81,103 @@ func TestOrgSpaces_JSON(t *testing.T) {
 	}
 }
 
+// TestOrgSpaces_IncludeByOrgName verifies that --include matching org_name keeps
+// all spaces of that org and drops orgs that don't match.
+func TestOrgSpaces_IncludeByOrgName(t *testing.T) {
+	twoOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+		"resources": []map[string]string{
+			{"guid": "org1", "name": "prod-org"},
+			{"guid": "org2", "name": "dev-org"},
+		},
+	})
+	twoSpaces := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+		"resources": []map[string]interface{}{
+			{"guid": "sp1", "name": "dev",
+				"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}}}},
+			{"guid": "sp2", "name": "staging",
+				"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org2"}}}},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": twoOrgs,
+		"/v3/spaces":        twoSpaces,
+	})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "org-spaces", "--include", "prod")
+	if err != nil {
+		t.Fatalf("org-spaces --include (org_name) failed: %v", err)
+	}
+	if !strings.Contains(stdout, "prod-org") {
+		t.Errorf("expected prod-org in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev-org") {
+		t.Errorf("dev-org should be excluded by --include, got: %q", stdout)
+	}
+}
+
+// TestOrgSpaces_IncludeBySpaceName verifies that --include matching space_name
+// keeps only the matching spaces (from any org).
+func TestOrgSpaces_IncludeBySpaceName(t *testing.T) {
+	twoSpaces := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+		"resources": []map[string]interface{}{
+			{"guid": "sp1", "name": "prod",
+				"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}}}},
+			{"guid": "sp2", "name": "dev",
+				"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}}}},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        twoSpaces,
+	})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "org-spaces", "--include", "prod")
+	if err != nil {
+		t.Fatalf("org-spaces --include (space_name) failed: %v", err)
+	}
+	if !strings.Contains(stdout, "prod") {
+		t.Errorf("expected prod space in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev") {
+		t.Errorf("dev space should be excluded by --include, got: %q", stdout)
+	}
+}
+
+// TestOrgSpaces_ExcludeBySpaceName verifies that --exclude matching space_name
+// removes matching spaces from output.
+func TestOrgSpaces_ExcludeBySpaceName(t *testing.T) {
+	twoSpaces := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1, "next": nil},
+		"resources": []map[string]interface{}{
+			{"guid": "sp1", "name": "prod",
+				"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}}}},
+			{"guid": "sp2", "name": "dev",
+				"relationships": map[string]interface{}{"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}}}},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        twoSpaces,
+	})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "org-spaces", "--exclude", "prod")
+	if err != nil {
+		t.Fatalf("org-spaces --exclude (space_name) failed: %v", err)
+	}
+	if strings.Contains(stdout, "prod") {
+		t.Errorf("prod space should be excluded, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "dev") {
+		t.Errorf("expected dev space in output, got: %q", stdout)
+	}
+}
+
 func TestOrgSpaces_CSV(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": singleOrgPage("org1", "my-org"),
