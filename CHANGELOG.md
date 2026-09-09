@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.14.0 — 2026-09-09
+
+### Added
+
+- **`count-lines [<folder>]` — count total lines of source code**
+
+  Walks `<folder>` (default: current folder) and reports the number of lines in
+  every source code file, broken down by file extension, with a `TOTAL` row.
+
+  ```bash
+  bo count-lines
+  bo count-lines internal
+  ```
+
+  - The `.git` directory is always skipped.
+  - If a `.gitignore` file is present at the root of `<folder>`, its rules are
+    honoured and matching files and directories are excluded from the count. A
+    common subset of the gitignore syntax is supported: comments, negation with
+    `!`, directory-only patterns, anchored patterns, and the `*`, `?` and `**`
+    wildcards.
+  - Only files with a recognised source code extension (or a well-known name such
+    as `Makefile` or `Dockerfile`) are counted; everything else is ignored.
+  - Machine-generated lock files (`package-lock.json`) are always ignored, even
+    though `.json` is otherwise a counted extension.
+  - A trailing line without a newline is counted; a completely empty file counts
+    as zero lines.
+
 ## v0.13 — 2026-07-09
 
 ### Added

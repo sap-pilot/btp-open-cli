@@ -222,6 +222,7 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 |---|---|
 | [`clear-logs`](#clear-logs) | Delete all local log files under `~/.bo/log/` |
 | [`completion`](#completion) | Generate shell autocompletion script (bash, zsh, fish, PowerShell) |
+| [`count-lines`](#count-lines) | Count total lines of source code files within a folder |
 | [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
 
 ### `login`
@@ -1157,6 +1158,35 @@ old_path,new_path
 
 Cross-page references (a page referencing an attachment owned by another page) are updated to the correct relative path (e.g. `../design/architecture-diagram.pdf`). Collision-safe: if the target filename already exists, `-2`, `-3`, … is appended before the extension.
 
+### `count-lines`
+
+Count the total number of lines in source code files within a folder, broken down by file extension.
+
+```bash
+# Count the current folder
+bo count-lines
+
+# Count a specific folder
+bo count-lines internal
+```
+
+```
+EXTENSION  FILES  LINES
+---------  -----  -----
+.go           66  13866
+.md            3   1931
+.yml           1     81
+.sh            1     17
+---------  -----  -----
+TOTAL         71  15895
+```
+
+- The `.git` directory is always skipped.
+- If a `.gitignore` file is present at the root of the folder, its rules are honoured and matching files and directories are excluded. A common subset of the gitignore syntax is supported: comments, negation with `!`, directory-only patterns, anchored patterns, and the `*`, `?` and `**` wildcards.
+- Only files with a recognised source code extension (`.go`, `.py`, `.ts`, `.java`, `.rs`, `.md`, `.yaml`, …) or a well-known name (`Makefile`, `Dockerfile`, …) are counted; everything else is ignored.
+- Machine-generated lock files (`package-lock.json`) are always ignored, even though `.json` is otherwise a counted extension.
+- A trailing line without a newline is counted; a completely empty file counts as zero lines.
+
 ### `clear-logs`
 
 Delete all daily log files stored under `~/.bo/log/`.
@@ -1328,5 +1358,6 @@ bo describe-subaccount --help
 # Utilities
 bo clear-logs --help
 bo completion --help
+bo count-lines --help
 bo reorg-wiki-attachments --help
 ```
