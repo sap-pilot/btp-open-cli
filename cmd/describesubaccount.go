@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -324,6 +325,9 @@ If --regions is omitted the regions from the last login are used.`,
 		for _, target := range targets {
 			doc, descErr := describeOneSubaccount(ctx, creds, cisData, target, subaccountFlag, noPrompt)
 			if descErr != nil {
+				if errors.Is(descErr, errAborted) {
+					return descErr
+				}
 				fmt.Fprintf(os.Stderr, "warning: [%s] %v\n", target.Org.Name, descErr)
 				continue
 			}
@@ -544,23 +548,26 @@ func describeOneSubaccount(
 
 	var roleCollections []rcOutRoleCollection
 
-	func() {
+	if abortErr := func() error {
 		includeTargetOrg := cosOrgSet{cosOrgRef{ID: target.Org.GUID}}
 		xsuaaClients, _, err := resolveXsuaaClients(ctx, []string{target.APIURL}, creds,
 			includeTargetOrg, nil, noPrompt)
 		if err != nil {
+			if errors.Is(err, errAborted) {
+				return err
+			}
 			fmt.Fprintf(os.Stderr, "warning: XSUAA setup: %v\n", err)
-			return
+			return nil
 		}
 		if len(xsuaaClients) == 0 {
-			return
+			return nil
 		}
 		xc := xsuaaClients[0]
 
 		rcs, err := xsuaa.ListRoleCollections(ctx, xc.APIURL, xc.Token)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: listing role collections: %v\n", err)
-			return
+			return nil
 		}
 
 		for _, rc := range rcs {
@@ -589,7 +596,10 @@ func describeOneSubaccount(
 		sort.Slice(roleCollections, func(i, j int) bool {
 			return roleCollections[i].Name < roleCollections[j].Name
 		})
-	}()
+		return nil
+	}(); abortErr != nil {
+		return dscOutDoc{}, abortErr
+	}
 
 	return dscOutDoc{
 		Subaccount:      cisSubaccountToOut(sa),

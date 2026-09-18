@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -108,11 +109,11 @@ func resolveOrgDestClient(
 		creds.SpaceDestServices = make(map[string]map[string]*store.DestInstanceCache)
 	}
 
-	tryFindClient := func() (sdDestClient, bool) {
+	tryFindClient := func() (sdDestClient, bool, error) {
 		spaces, spacesErr := cfClient.ListOrganizationSpaces(ctx, found.guid)
 		if spacesErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: listing spaces in org %q: %v\n", found.name, spacesErr)
-			return sdDestClient{}, false
+			return sdDestClient{}, false, nil
 		}
 
 		for _, space := range spaces {
@@ -145,20 +146,25 @@ func resolveOrgDestClient(
 								"warning: no service key for destination instance %q in space %q — skipping\n",
 								inst.Name, space.Name)
 						} else {
-							fmt.Fprintf(cmd.ErrOrStderr(),
-								"\nWARNING: No service key found for destination instance %q (space: %s)\n"+
-									"  Create one manually, e.g. via CF CLI:\n"+
-									"    cf create-service-key %s bo-dest-key\n"+
-									"  Then press Enter to retry, or Ctrl-C to skip.\n",
-								inst.Name, space.Name, inst.Name)
-							if _, ok := readLine(ctx); ok {
+							for key == nil {
+								fmt.Fprintf(cmd.ErrOrStderr(),
+									"\nWARNING: No service key found for destination instance %q (space: %s)\n"+
+										"  Create one manually, e.g. via CF CLI:\n"+
+										"    cf create-service-key %s bo-dest-key\n"+
+										"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
+									inst.Name, space.Name, inst.Name)
+								retry, skip := promptRetryOrSkip(ctx)
+								if !retry && !skip {
+									return sdDestClient{}, false, errAborted
+								}
+								if skip {
+									break
+								}
 								key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
 								if keyErr != nil || key == nil {
-									fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q — skipping\n", inst.Name)
-									continue
+									fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
+									key = nil
 								}
-							} else {
-								continue
 							}
 						}
 						if key == nil {
@@ -205,13 +211,15 @@ func resolveOrgDestClient(
 					InstanceName: cached.InstanceName,
 					URI:          cached.URI,
 					Token:        cached.AccessToken,
-				}, true
+				}, true, nil
 			}
 		}
-		return sdDestClient{}, false
+		return sdDestClient{}, false, nil
 	}
 
-	if c, ok := tryFindClient(); ok {
+	if c, ok, tryErr := tryFindClient(); tryErr != nil {
+		return "", "", sdDestClient{}, tryErr
+	} else if ok {
 		saveDestCache(cmd, creds)
 		return found.guid, found.name, c, nil
 	}
@@ -221,26 +229,32 @@ func resolveOrgDestClient(
 		return "", "", sdDestClient{},
 			fmt.Errorf("no destination service instance found in org %q — create one and run again", found.name)
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(),
-		"\nWARNING: No destination service instance found in org %q\n"+
-			"  Create one in any space, e.g.:\n"+
-			"    cf create-service destination lite <instance-name>\n"+
-			"    cf create-service-key <instance-name> bo-dest-key\n"+
-			"  Then press Enter to retry, or Ctrl-C to abort.\n",
-		found.name)
-	if _, ok := readLine(ctx); !ok {
-		return "", "", sdDestClient{}, fmt.Errorf("no destination service instance available in org %q", found.name)
-	}
+	for {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"\nWARNING: No destination service instance found in org %q\n"+
+				"  Create one in any space, e.g.:\n"+
+				"    cf create-service destination lite <instance-name>\n"+
+				"    cf create-service-key <instance-name> bo-dest-key\n"+
+				"  Then press Enter to retry, type 's' to skip this org, or Ctrl-C to abort.\n",
+			found.name)
+		retry, skip := promptRetryOrSkip(ctx)
+		if !retry && !skip {
+			return "", "", sdDestClient{}, errAborted
+		}
+		if skip {
+			return "", "", sdDestClient{}, fmt.Errorf("no destination service instance available in org %q", found.name)
+		}
 
-	// Retry once.
-	if c, ok := tryFindClient(); ok {
-		saveDestCache(cmd, creds)
-		return found.guid, found.name, c, nil
+		c, ok, tryErr := tryFindClient()
+		if tryErr != nil {
+			return "", "", sdDestClient{}, tryErr
+		}
+		if ok {
+			saveDestCache(cmd, creds)
+			return found.guid, found.name, c, nil
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no destination service instance found in org %q\n", found.name)
 	}
-
-	saveDestCache(cmd, creds)
-	return "", "", sdDestClient{},
-		fmt.Errorf("no destination service instance found in org %q after retry — aborting", found.name)
 }
 
 // ── subaccount-destinations ───────────────────────────────────────────────────
@@ -319,6 +333,9 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		for _, target := range orgTargets {
 			orgGUID, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
 			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 				continue
 			}
@@ -456,6 +473,9 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		for _, target := range orgTargets {
 			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
 			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 				continue
 			}
@@ -530,6 +550,9 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		for _, target := range orgTargets {
 			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
 			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 				continue
 			}
@@ -606,6 +629,9 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		for _, target := range orgTargets {
 			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
 			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 				continue
 			}

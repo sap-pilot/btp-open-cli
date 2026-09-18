@@ -36,7 +36,8 @@ type xsuaaOrgClient struct {
 //
 // When no service instance or key is found for an org:
 //   - noPrompt=false: prints instructions and prompts the user to create the
-//     resource manually, then retries once on Enter; skips on Ctrl-C.
+//     resource manually, then retries on Enter, skips this org on 's', or
+//     aborts the whole call (returning errAborted) on Ctrl-C.
 //   - noPrompt=true: prints a warning and skips the org.
 func resolveXsuaaClients(
 	ctx context.Context,
@@ -174,10 +175,14 @@ func resolveXsuaaClients(
 				inst = &instances[0]
 			}
 			if inst == nil {
-				inst = xsuaaPromptRetryInstance(ctx, cfClient,
+				var promptErr error
+				inst, promptErr = xsuaaPromptRetryInstance(ctx, cfClient,
 					fmt.Sprintf("[%s] %s: no xsuaa/%s service instance found in any space",
 						regionName, org.Name, xsuaaServicePlan),
 					org.GUID, xsuaaPlan.GUID, noPrompt)
+				if promptErr != nil {
+					return clients, creds, promptErr
+				}
 				if inst == nil {
 					continue
 				}
@@ -190,10 +195,14 @@ func resolveXsuaaClients(
 				continue
 			}
 			if key == nil {
-				key = xsuaaPromptRetryKey(ctx, cfClient,
+				var promptErr error
+				key, promptErr = xsuaaPromptRetryKey(ctx, cfClient,
 					fmt.Sprintf("[%s] %s: no service key found for xsuaa instance %q",
 						regionName, org.Name, inst.Name),
 					inst.GUID, noPrompt)
+				if promptErr != nil {
+					return clients, creds, promptErr
+				}
 				if key == nil {
 					continue
 				}
@@ -254,59 +263,73 @@ func resolveXsuaaClients(
 }
 
 // xsuaaPromptRetryInstance warns that no xsuaa/apiaccess service instance was
-// found, optionally prompts the user to create one manually, then retries once.
+// found, optionally prompts the user to create one manually, then retries until it succeeds, is skipped, or the whole call is aborted.
+// Returns errAborted if the user pressed Ctrl-C — callers must stop entirely.
 func xsuaaPromptRetryInstance(
 	ctx context.Context,
 	cfClient *cf.Client,
 	message, orgGUID, planGUID string,
 	noPrompt bool,
-) *cf.ServiceInstance {
+) (*cf.ServiceInstance, error) {
 	if noPrompt {
 		fmt.Fprintf(os.Stderr, "warning: %s — skipping\n", message)
-		return nil
+		return nil, nil
 	}
-	fmt.Fprintf(os.Stderr,
-		"\nWARNING: %s\n"+
-			"  Create a service instance in any space, e.g.:\n"+
-			"    cf create-service xsuaa apiaccess <instance-name>\n"+
-			"  Then press Enter to retry, or Ctrl-C to skip this org.\n",
-		message)
-	if _, ok := readLine(ctx); !ok {
-		return nil
+	for {
+		fmt.Fprintf(os.Stderr,
+			"\nWARNING: %s\n"+
+				"  Create a service instance in any space, e.g.:\n"+
+				"    cf create-service xsuaa apiaccess <instance-name>\n"+
+				"  Then press Enter to retry, type 's' to skip this org, or Ctrl-C to abort.\n",
+			message)
+		retry, skip := promptRetryOrSkip(ctx)
+		if skip {
+			return nil, nil
+		}
+		if !retry {
+			return nil, errAborted
+		}
+		instances, err := cfClient.ListServiceInstancesByPlanGUID(ctx, planGUID, orgGUID)
+		if err != nil || len(instances) == 0 {
+			fmt.Fprintf(os.Stderr, "warning: still no xsuaa/%s instance found\n", xsuaaServicePlan)
+			continue
+		}
+		return &instances[0], nil
 	}
-	instances, err := cfClient.ListServiceInstancesByPlanGUID(ctx, planGUID, orgGUID)
-	if err != nil || len(instances) == 0 {
-		fmt.Fprintf(os.Stderr, "warning: still no xsuaa/%s instance found — skipping\n", xsuaaServicePlan)
-		return nil
-	}
-	return &instances[0]
 }
 
 // xsuaaPromptRetryKey warns that no service key was found for an xsuaa instance,
-// optionally prompts the user to create one manually, then retries once.
+// optionally prompts the user to create one manually, then retries until it succeeds, is skipped, or the whole call is aborted.
+// Returns errAborted if the user pressed Ctrl-C — callers must stop entirely.
 func xsuaaPromptRetryKey(
 	ctx context.Context,
 	cfClient *cf.Client,
 	message, instanceGUID string,
 	noPrompt bool,
-) *cf.ServiceCredentialBinding {
+) (*cf.ServiceCredentialBinding, error) {
 	if noPrompt {
 		fmt.Fprintf(os.Stderr, "warning: %s — skipping\n", message)
-		return nil
+		return nil, nil
 	}
-	fmt.Fprintf(os.Stderr,
-		"\nWARNING: %s\n"+
-			"  Create a service key, e.g.:\n"+
-			"    cf create-service-key <instance-name> <key-name>\n"+
-			"  Then press Enter to retry, or Ctrl-C to skip this org.\n",
-		message)
-	if _, ok := readLine(ctx); !ok {
-		return nil
+	for {
+		fmt.Fprintf(os.Stderr,
+			"\nWARNING: %s\n"+
+				"  Create a service key, e.g.:\n"+
+				"    cf create-service-key <instance-name> <key-name>\n"+
+				"  Then press Enter to retry, type 's' to skip this org, or Ctrl-C to abort.\n",
+			message)
+		retry, skip := promptRetryOrSkip(ctx)
+		if skip {
+			return nil, nil
+		}
+		if !retry {
+			return nil, errAborted
+		}
+		key, err := cfClient.FindAnyServiceCredentialBinding(ctx, instanceGUID)
+		if err != nil || key == nil {
+			fmt.Fprintf(os.Stderr, "warning: still no service key found\n")
+			continue
+		}
+		return key, nil
 	}
-	key, err := cfClient.FindAnyServiceCredentialBinding(ctx, instanceGUID)
-	if err != nil || key == nil {
-		fmt.Fprintf(os.Stderr, "warning: still no service key found — skipping\n")
-		return nil
-	}
-	return key
 }

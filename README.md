@@ -541,7 +541,7 @@ Without `-y`, a TOON preview of all targeted users and scopes is shown before an
 
 List users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
 
-For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials (clientId, clientSecret) are fetched on demand and never stored locally.
 
@@ -736,7 +736,7 @@ Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is pr
 
 List XSUAA roles and role collections (with their role references) across all accessible CF organizations.
 
-For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
 
@@ -890,7 +890,7 @@ rolecollections:
 
 List all instance-level destinations across every destination service instance found in a given CF space.
 
-The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
+The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry, type 's' to skip that instance, or Ctrl-C to abort.
 
 ```bash
 # List destinations — default output: Name, URL, sap-client (TOON)

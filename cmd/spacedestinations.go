@@ -170,19 +170,27 @@ func resolveSpaceDestClients(
 			}
 			if key == nil {
 				// No key — warn and offer an interactive prompt to create one.
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"\nWARNING: No service key found for destination service instance %q (%s)\n"+
-						"  Create one manually, e.g. via CF CLI:\n"+
-						"    cf create-service-key %s bo-dest-key\n"+
-						"  Then press Enter to retry, or Ctrl-C to skip this instance.\n",
-					inst.Name, inst.GUID, inst.Name)
-				_, ok := readLine(ctx)
-				if !ok {
-					continue
+				for key == nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"\nWARNING: No service key found for destination service instance %q (%s)\n"+
+							"  Create one manually, e.g. via CF CLI:\n"+
+							"    cf create-service-key %s bo-dest-key\n"+
+							"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
+						inst.Name, inst.GUID, inst.Name)
+					retry, skip := promptRetryOrSkip(ctx)
+					if !retry && !skip {
+						return spaceName, nil, errAborted
+					}
+					if skip {
+						break
+					}
+					key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
+					if keyErr != nil || key == nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
+						key = nil
+					}
 				}
-				key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-				if keyErr != nil || key == nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q — skipping\n", inst.Name)
+				if key == nil {
 					continue
 				}
 			}
