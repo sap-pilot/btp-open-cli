@@ -6,7 +6,7 @@
 
 - **`bo orgs` — interactive default org scope for session commands**
 
-  `bo orgs` now shows a numbered checkbox picker (arrow keys or digit-jump to move, space to toggle, `a` to select all, `c` to clear, enter to confirm) and saves the selection as a session-scoped default scope, cleared on `login`/`logoff`. `org-users`, `org-space-users`, `apps`, `users`, `role-collections`, `subaccount-destinations` (including its `create`/`update`/`delete` variants), and `describe-subaccount` use this default scope whenever `--org`/`--orgs` is omitted, and point you at `bo orgs` if none has been set yet — they no longer prompt interactively themselves. The destination write commands also gained `--orgs` support and now apply to multiple target orgs like the read commands. All of the above gained an `--output`/`-o` flag, since the interactive picker owns stdout and shell `>` redirection doesn't work for them. `bo orgs`'s own output columns are now ordered `region,org_name,org_id` to match the picker; `--orgs`/`--excludeOrgs` CSV parsing accepts either column order.
+  `bo orgs` now shows a numbered checkbox picker (arrow keys or digit-jump to move, space to toggle, `a` to select all, `c` to clear, enter to confirm) and saves the selection as a session-scoped default scope, cleared on `login`/`logoff`. `org-users`, `org-space-users`, `apps`, `users`, `role-collections`, `subaccount-destinations` (including its `create`/`update`/`delete` variants), and `describe-subaccount` use this default scope whenever `--org`/`--orgs` is omitted, and point you at `bo orgs` if none has been set yet — they no longer prompt interactively themselves. The destination write commands also gained `--orgs` support and now apply to multiple target orgs like the read commands. All of the above gained an `--output`/`-o` flag, since the interactive picker owns stdout and shell `>` redirection doesn't work for them. `bo orgs`'s own output columns are now ordered `region,org_name,org_id` to match the picker; `--orgs`/`--excludeOrgs` CSV parsing accepts either column order. Re-running `bo orgs` within the same session now pre-checks whatever is currently selected in the picker, so you can tweak the scope instead of starting from scratch — only `login`/`logoff` clear it.
 
 - **`--format uar.csv` for `users` and `org-space-users` — User Access Review exports**
 
@@ -36,6 +36,16 @@
     as zero lines.
 
 ### Changed
+
+- **`--filter` removed — replaced everywhere by `--include`/`--exclude`**
+
+  The `--filter` flag (a single-pattern filter) has been removed from `users`, `org-users`, `org-space-users`, `apps`, `space-destinations`, and `subaccount-destinations`; it was strictly subsumed by `--include`/`--exclude` (a single `--include` keyword behaves identically to the old `--filter`). `apps`, `space-destinations`, and `subaccount-destinations` gain `--include`/`--exclude` for the first time as part of this change — the destination commands keep `--filter`'s glob-pattern support (`API*PP`) per keyword, in addition to plain substrings.
+
+  ```bash
+  bo apps --include STARTED,STOPPED
+  bo space-destinations --space <space-guid> --include "API*PP"
+  bo subaccount-destinations --org <org-guid> --exclude sandbox,test
+  ```
 
 - **`--include`/`--exclude` now accept a comma-separated list of keywords**
 

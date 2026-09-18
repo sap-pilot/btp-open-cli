@@ -86,6 +86,11 @@ If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
 pick one interactively, or pass --org/--orgs directly.
 
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and an app matches if mta_id, app_id,
+app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb
+contains any of them (case-insensitive).
+
 Use --output/-o to write the result to a file instead of stdout.
 
 If --regions is omitted the regions from the last login are used.`,
@@ -96,7 +101,8 @@ If --regions is omitted the regions from the last login are used.`,
 		orgGUID, _ := cmd.Flags().GetString("org")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
-		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -260,18 +266,18 @@ If --regions is omitted the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeAppsJSON(out, results, filter)
+			return writeAppsJSON(out, results, includePattern, excludePattern)
 		case "csv":
-			return writeAppsCSV(out, results, filter)
+			return writeAppsCSV(out, results, includePattern, excludePattern)
 		default:
-			return writeAppsToon(out, results, filter)
+			return writeAppsToon(out, results, includePattern, excludePattern)
 		}
 	},
 }
 
 // ── output builders ───────────────────────────────────────────────────────────
 
-func buildAppsDoc(results []appsRegionResult, filter string) (appsOutDoc, []error) {
+func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern string) (appsOutDoc, []error) {
 	var doc appsOutDoc
 	var errs []error
 
@@ -312,7 +318,7 @@ func buildAppsDoc(results []appsRegionResult, filter string) (appsOutDoc, []erro
 						DiskInMB:      proc.DiskInMB,
 						TotalMemoryMB: proc.Instances * proc.MemoryInMB,
 					}
-					if appsMatchesFilter(a, filter) {
+					if appsMatchesIncludeExclude(a, includePattern, excludePattern) {
 						os_.Apps = append(os_.Apps, a)
 					}
 				}
@@ -331,8 +337,8 @@ func buildAppsDoc(results []appsRegionResult, filter string) (appsOutDoc, []erro
 	return doc, errs
 }
 
-func writeAppsToon(w io.Writer, results []appsRegionResult, filter string) error {
-	doc, errs := buildAppsDoc(results, filter)
+func writeAppsToon(w io.Writer, results []appsRegionResult, includePattern, excludePattern string) error {
+	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -347,8 +353,8 @@ func writeAppsToon(w io.Writer, results []appsRegionResult, filter string) error
 	return err
 }
 
-func writeAppsJSON(w io.Writer, results []appsRegionResult, filter string) error {
-	doc, errs := buildAppsDoc(results, filter)
+func writeAppsJSON(w io.Writer, results []appsRegionResult, includePattern, excludePattern string) error {
+	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -360,8 +366,8 @@ func writeAppsJSON(w io.Writer, results []appsRegionResult, filter string) error
 	return nil
 }
 
-func writeAppsCSV(w io.Writer, results []appsRegionResult, filter string) error {
-	doc, errs := buildAppsDoc(results, filter)
+func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, excludePattern string) error {
+	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -402,21 +408,21 @@ func writeAppsCSV(w io.Writer, results []appsRegionResult, filter string) error 
 	return nil
 }
 
-// appsMatchesFilter reports whether the app matches the filter string
-// (case-insensitive substring against mta_id, app_id, app_name, app_state,
-// app_created_at, app_updated_at, and process_memory_in_mb).
-func appsMatchesFilter(a appsOutApp, filter string) bool {
-	if filter == "" {
-		return true
+// appsMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) against mta_id, app_id, app_name, app_state, app_created_at,
+// app_updated_at, and process_memory_in_mb.
+func appsMatchesIncludeExclude(a appsOutApp, includePattern, excludePattern string) bool {
+	fields := []string{
+		a.MtaID, a.ID, a.Name, a.State, a.CreatedAt, a.UpdatedAt, strconv.Itoa(a.MemoryInMB),
 	}
-	fl := strings.ToLower(filter)
-	return strings.Contains(strings.ToLower(a.MtaID), fl) ||
-		strings.Contains(strings.ToLower(a.ID), fl) ||
-		strings.Contains(strings.ToLower(a.Name), fl) ||
-		strings.Contains(strings.ToLower(a.State), fl) ||
-		strings.Contains(strings.ToLower(a.CreatedAt), fl) ||
-		strings.Contains(strings.ToLower(a.UpdatedAt), fl) ||
-		strings.Contains(strconv.Itoa(a.MemoryInMB), filter)
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
 }
 
 func init() {
@@ -428,5 +434,6 @@ func init() {
 	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	appsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
-	appsCmd.Flags().String("filter", "", "Case-insensitive substring filter on mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, process_memory_in_mb")
+	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
+	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 }

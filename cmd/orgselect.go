@@ -107,9 +107,10 @@ func orgNumWidth(n int) int {
 // If enter is pressed with nothing checked, the currently highlighted entry
 // is selected. Numbers are zero-padded to a fixed width (1 digit for fewer
 // than 10 orgs, 2 for fewer than 100, 3 otherwise) so a digit sequence of
-// that width unambiguously identifies one entry. Returns the selected orgs
-// in list order.
-func selectOrgsInteractive(ctx context.Context, choices []orgChoice) ([]orgChoice, error) {
+// that width unambiguously identifies one entry. preselectedIDs (keyed by
+// org ID) controls which entries start out checked — pass nil for none.
+// Returns the selected orgs in list order.
+func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselectedIDs map[string]bool) ([]orgChoice, error) {
 	if len(choices) == 0 {
 		return nil, fmt.Errorf("no accessible orgs found")
 	}
@@ -134,6 +135,11 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice) ([]orgChoic
 	numWidth := orgNumWidth(len(choices))
 
 	selected := make([]bool, len(choices))
+	for i, c := range choices {
+		if preselectedIDs[c.ID] {
+			selected[i] = true
+		}
+	}
 	cursor := 0
 	const headerLines = 2
 

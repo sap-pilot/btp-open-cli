@@ -65,9 +65,10 @@ type ospOutDoc struct {
 }
 
 // buildOspOutputDoc converts raw fetch results into the shared output model.
-// filter is an optional substring matched case-insensitively against user
-// id/name/origin/roles; spaces and orgs with no matching users are omitted.
-func buildOspOutputDoc(results []ospRegionData, filter, includePattern, excludePattern string) (ospOutDoc, []error) {
+// includePattern/excludePattern are optional comma-separated keyword lists
+// matched case-insensitively against user id/name/origin/roles; spaces and
+// orgs with no matching users are omitted.
+func buildOspOutputDoc(results []ospRegionData, includePattern, excludePattern string) (ospOutDoc, []error) {
 	var doc ospOutDoc
 	var errs []error
 	for _, r := range results {
@@ -85,7 +86,7 @@ func buildOspOutputDoc(results []ospRegionData, filter, includePattern, excludeP
 					Origin: u.Origin,
 					Roles:  strings.Join(od.Roles[u.GUID], ";"),
 				}
-				if userMatchesFilter(ou, filter) && userMatchesIncludeExclude(ou, includePattern, excludePattern) {
+				if userMatchesIncludeExclude(ou, includePattern, excludePattern) {
 					oo.Users = append(oo.Users, ou)
 				}
 			}
@@ -98,7 +99,7 @@ func buildOspOutputDoc(results []ospRegionData, filter, includePattern, excludeP
 						Origin: u.Origin,
 						Roles:  strings.Join(sd.Roles[u.GUID], ";"),
 					}
-					if userMatchesFilter(ou, filter) && userMatchesIncludeExclude(ou, includePattern, excludePattern) {
+					if userMatchesIncludeExclude(ou, includePattern, excludePattern) {
 						sp.Users = append(sp.Users, ou)
 					}
 				}
@@ -151,7 +152,6 @@ If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
-		filter, _ := cmd.Flags().GetString("filter")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		orgGUID, _ := cmd.Flags().GetString("org")
@@ -297,19 +297,19 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOspJSON(out, results, filter, includePattern, excludePattern)
+			return writeOspJSON(out, results, includePattern, excludePattern)
 		case "csv":
-			return writeOspCSV(out, results, filter, includePattern, excludePattern)
+			return writeOspCSV(out, results, includePattern, excludePattern)
 		case "uar.csv":
-			return writeOspUARCSV(out, results, filter, includePattern, excludePattern)
+			return writeOspUARCSV(out, results, includePattern, excludePattern)
 		default: // "toon"
-			return writeOspToon(out, results, filter, includePattern, excludePattern)
+			return writeOspToon(out, results, includePattern, excludePattern)
 		}
 	},
 }
 
-func writeOspToon(w io.Writer, results []ospRegionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOspOutputDoc(results, filter, includePattern, excludePattern)
+func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -324,8 +324,8 @@ func writeOspToon(w io.Writer, results []ospRegionData, filter, includePattern, 
 	return err
 }
 
-func writeOspJSON(w io.Writer, results []ospRegionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOspOutputDoc(results, filter, includePattern, excludePattern)
+func writeOspJSON(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -340,8 +340,8 @@ func writeOspJSON(w io.Writer, results []ospRegionData, filter, includePattern, 
 // writeOspCSV writes one row per user with columns:
 // region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 // space_id and space_name are empty for org-level users.
-func writeOspCSV(w io.Writer, results []ospRegionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOspOutputDoc(results, filter, includePattern, excludePattern)
+func writeOspCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -386,8 +386,8 @@ func writeOspCSV(w io.Writer, results []ospRegionData, filter, includePattern, e
 
 // writeOspUARCSV writes the uar.csv format: one row per org/space membership,
 // columns Space/Org ID,Space/Org Name,Group Type,Member,Role.
-func writeOspUARCSV(w io.Writer, results []ospRegionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOspOutputDoc(results, filter, includePattern, excludePattern)
+func writeOspUARCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -428,7 +428,6 @@ func init() {
 	rootCmd.AddCommand(orgSpaceUsersCmd)
 	orgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv")
-	orgSpaceUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
 	orgSpaceUsersCmd.Flags().String("include", "", "Only include users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgSpaceUsersCmd.Flags().String("exclude", "", "Exclude users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgSpaceUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")

@@ -105,7 +105,6 @@ If --regions is omitted the regions from the last login are used.`,
 		orgGUID, _ := cmd.Flags().GetString("org")
 		outputFile, _ := cmd.Flags().GetString("output")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
-		filter, _ := cmd.Flags().GetString("filter")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		fieldsCSV, _ := cmd.Flags().GetString("fields")
@@ -227,9 +226,6 @@ If --regions is omitted the regions from the last login are used.`,
 				email := xsuaa.PrimaryEmail(u.Emails)
 				lastLogon := xsuaa.MSToISO(u.LastLogonTime)
 				groups := xsuaa.GroupValues(u.Groups)
-				if !usrMatchesFilter(u, email, lastLogon, groups, filter) {
-					continue
-				}
 				if !usrMatchesIncludeExclude(u, email, lastLogon, groups, includePattern, excludePattern) {
 					continue
 				}
@@ -263,7 +259,7 @@ If --regions is omitted the regions from the last login are used.`,
 		case "csv":
 			return writeUsersCSV(out, doc)
 		case "uar.csv":
-			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, filter, includePattern, excludePattern))
+			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, includePattern, excludePattern))
 		default: // "toon"
 			return writeUsersToon(out, doc)
 		}
@@ -288,7 +284,7 @@ type uarRow struct {
 // buildUARRows pivots per-org users and role collections into one row per
 // role collection membership (or one "N/A" row for role collections with no
 // members), sorted by role collection name within each org.
-func buildUARRows(regionOrder []string, results []usrOrgResult, filter, includePattern, excludePattern string) []uarRow {
+func buildUARRows(regionOrder []string, results []usrOrgResult, includePattern, excludePattern string) []uarRow {
 	regionResults := make(map[string][]usrOrgResult)
 	for _, r := range results {
 		if r.err != nil {
@@ -300,17 +296,14 @@ func buildUARRows(regionOrder []string, results []usrOrgResult, filter, includeP
 	var rows []uarRow
 	for _, rid := range regionOrder {
 		for _, r := range regionResults[rid] {
+			// Group every user's role-collection memberships first, unfiltered:
+			// --include/--exclude is applied per output row below (matching the
+			// uar.csv columns), not by dropping users beforehand — otherwise a
+			// role collection whose only members get filtered out would look
+			// like it has no members at all and wrongly emit an "N/A" row.
 			members := make(map[string][]uarMember)
 			for _, u := range r.users {
 				email := xsuaa.PrimaryEmail(u.Emails)
-				lastLogon := xsuaa.MSToISO(u.LastLogonTime)
-				groups := xsuaa.GroupValues(u.Groups)
-				if !usrMatchesFilter(u, email, lastLogon, groups, filter) {
-					continue
-				}
-				if !usrMatchesIncludeExclude(u, email, lastLogon, groups, includePattern, excludePattern) {
-					continue
-				}
 				for _, g := range u.Groups {
 					name := g.Display
 					if name == "" {
@@ -340,13 +333,16 @@ func buildUARRows(regionOrder []string, results []usrOrgResult, filter, includeP
 			for _, rc := range rcs {
 				mem := members[rc.name]
 				if len(mem) == 0 {
-					rows = append(rows, uarRow{
+					row := uarRow{
 						RoleCollection: rc.name,
 						Description:    rc.description,
 						Member:         "N/A",
 						Origin:         "N/A",
 						SubaccountID:   r.orgGUID,
-					})
+					}
+					if uarRowMatchesIncludeExclude(row, includePattern, excludePattern) {
+						rows = append(rows, row)
+					}
 					continue
 				}
 				sort.Slice(mem, func(i, j int) bool {
@@ -356,13 +352,16 @@ func buildUARRows(regionOrder []string, results []usrOrgResult, filter, includeP
 					return mem[i].Origin < mem[j].Origin
 				})
 				for _, m := range mem {
-					rows = append(rows, uarRow{
+					row := uarRow{
 						RoleCollection: rc.name,
 						Description:    rc.description,
 						Member:         m.Email,
 						Origin:         m.Origin,
 						SubaccountID:   r.orgGUID,
-					})
+					}
+					if uarRowMatchesIncludeExclude(row, includePattern, excludePattern) {
+						rows = append(rows, row)
+					}
 				}
 			}
 		}
@@ -449,7 +448,6 @@ func init() {
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	usersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	usersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
-	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, user_name, lastLogonTime, groups)")
 	usersCmd.Flags().String("include", "", "Only include users where any user field contains any of these comma-separated, case-insensitive keywords")
 	usersCmd.Flags().String("exclude", "", "Exclude users where any user field contains any of these comma-separated, case-insensitive keywords")
 	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups)")
@@ -487,27 +485,29 @@ func buildUsrFieldSet(fieldsCSV, excludeCSV string) usrFieldSet {
 	return active
 }
 
-// usrMatchesFilter reports whether a user matches the given substring filter.
-// Empty filter matches all users.
-func usrMatchesFilter(u xsuaa.User, email, lastLogon, groups, filter string) bool {
-	if filter == "" {
-		return true
-	}
-	fl := strings.ToLower(filter)
-	return strings.Contains(strings.ToLower(u.ID), fl) ||
-		strings.Contains(strings.ToLower(u.ExternalID), fl) ||
-		strings.Contains(strings.ToLower(u.Origin), fl) ||
-		strings.Contains(strings.ToLower(u.UserName), fl) ||
-		strings.Contains(strings.ToLower(email), fl) ||
-		strings.Contains(strings.ToLower(lastLogon), fl) ||
-		strings.Contains(strings.ToLower(groups), fl)
-}
-
 // usrMatchesIncludeExclude applies --include/--exclude keyword filtering
 // (comma-separated, case-insensitive, matched if any keyword is a substring
-// of any field) against the same fields usrMatchesFilter checks.
+// of any field: user_id, user_externalId, user_origin, user_name, email,
+// lastLogonTime, groups).
 func usrMatchesIncludeExclude(u xsuaa.User, email, lastLogon, groups, includePattern, excludePattern string) bool {
 	fields := []string{u.ID, u.ExternalID, u.Origin, u.UserName, email, lastLogon, groups}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
+}
+
+// uarRowMatchesIncludeExclude applies --include/--exclude keyword filtering
+// to a uar.csv row's own displayed columns (Role Collection, Description,
+// Member, Origin, Subaccount ID) rather than the underlying user's fields —
+// so a role collection whose only members get filtered out is dropped
+// entirely instead of falling back to a misleading "N/A" row, and an "N/A"
+// row itself is only kept when it matches (e.g. by role collection name).
+func uarRowMatchesIncludeExclude(row uarRow, includePattern, excludePattern string) bool {
+	fields := []string{row.RoleCollection, row.Description, row.Member, row.Origin, row.SubaccountID}
 	if includePattern != "" && !skipMatches(includePattern, fields...) {
 		return false
 	}

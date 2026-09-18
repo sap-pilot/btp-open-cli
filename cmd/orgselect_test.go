@@ -86,7 +86,7 @@ func TestSelectOrgsInteractive_NonTTYError(t *testing.T) {
 	choices := []orgChoice{{Region: "us10", ID: "g1", Name: "my-org"}}
 	// The test process's stdin is not an interactive terminal, so the prompt
 	// must fail fast instead of blocking on a read that will never resolve.
-	_, err := selectOrgsInteractive(context.Background(), choices)
+	_, err := selectOrgsInteractive(context.Background(), choices, nil)
 	if err == nil {
 		t.Fatal("expected error when stdin is not a terminal")
 	}
@@ -96,7 +96,7 @@ func TestSelectOrgsInteractive_NonTTYError(t *testing.T) {
 }
 
 func TestSelectOrgsInteractive_NoChoices(t *testing.T) {
-	_, err := selectOrgsInteractive(context.Background(), nil)
+	_, err := selectOrgsInteractive(context.Background(), nil, nil)
 	if err == nil {
 		t.Fatal("expected error for empty choices")
 	}

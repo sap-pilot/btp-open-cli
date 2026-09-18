@@ -34,6 +34,16 @@ type orgsOutDoc struct {
 	Regions []orgsOutRegion `json:"regions" toon:"regions"`
 }
 
+// orgScopeIDSet converts a stored default org scope into a set of org IDs,
+// for use as selectOrgsInteractive's preselection.
+func orgScopeIDSet(scope []store.OrgScopeRef) map[string]bool {
+	set := make(map[string]bool, len(scope))
+	for _, ref := range scope {
+		set[ref.ID] = true
+	}
+	return set
+}
+
 // buildOrgsOutDoc groups the selected orgs by region, in selection order.
 func buildOrgsOutDoc(selected []orgChoice) orgsOutDoc {
 	var doc orgsOutDoc
@@ -77,7 +87,9 @@ and an org matches if org_name contains any of them (case-insensitive).
 The selection is saved to ~/.bo/credentials.json and applies only to the
 current login session: running 'bo login' or 'bo logoff' clears it, and you
 will be prompted to run 'bo orgs' again (or pass --org/--orgs) the next time
-you run an org-aware command without an explicit scope.
+you run an org-aware command without an explicit scope. Running 'bo orgs'
+again within the same session pre-checks whatever is currently selected, so
+you can tweak the scope instead of starting over — only login/logoff clear it.
 
 Output formats (--format), showing the orgs just selected, columns/fields
 ordered region, org_name, org_id to match the picker:
@@ -143,7 +155,11 @@ If --regions is omitted the regions from the last login are used.`,
 		if allOrgs {
 			selected = candidates
 		} else {
-			selected, err = selectOrgsInteractive(ctx, candidates)
+			// Reflect the org scope selected earlier in this login session (if
+			// any) as the picker's starting selection, so re-running `bo orgs`
+			// is a tweak rather than starting over. This is cleared only by
+			// `bo login`/`bo logoff`, not by this command itself.
+			selected, err = selectOrgsInteractive(ctx, candidates, orgScopeIDSet(creds.DefaultOrgScope))
 			if err != nil {
 				return err
 			}

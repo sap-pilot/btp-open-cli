@@ -64,7 +64,7 @@ func TestOrgUsers_DefaultToon(t *testing.T) {
 	}
 }
 
-func TestOrgUsers_Filter(t *testing.T) {
+func TestOrgUsers_Include(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": singleOrgPage("org1", "my-org"),
 		"/v3/organizations/org1/users": orgUsersPage(
@@ -76,9 +76,9 @@ func TestOrgUsers_Filter(t *testing.T) {
 	setupTestEnv(t, srv.URL)
 	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
-	stdout, _, err := runCmd(t, "org-users", "--filter", "alice")
+	stdout, _, err := runCmd(t, "org-users", "--include", "alice")
 	if err != nil {
-		t.Fatalf("org-users --filter failed: %v", err)
+		t.Fatalf("org-users --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "alice@example.com") {
 		t.Errorf("expected alice in filtered output, got: %q", stdout)

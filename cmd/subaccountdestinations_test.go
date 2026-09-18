@@ -118,7 +118,7 @@ func TestSubaccountDests_DefaultScope(t *testing.T) {
 	}
 }
 
-func TestSubaccountDests_Filter(t *testing.T) {
+func TestSubaccountDests_Include(t *testing.T) {
 	const orgGUID = "org1"
 	const spaceGUID = "sp1"
 	const instanceGUID = "inst1"
@@ -153,9 +153,9 @@ func TestSubaccountDests_Filter(t *testing.T) {
 
 	setupTestEnvWithDestCache(t, cfSrv.URL, spaceGUID, instanceGUID, destSrv.URL)
 
-	stdout, _, err := runCmd(t, "subaccount-destinations", "--org", "my-org", "--filter", "alpha", "--no-prompt")
+	stdout, _, err := runCmd(t, "subaccount-destinations", "--org", "my-org", "--include", "alpha", "--no-prompt")
 	if err != nil {
-		t.Fatalf("subaccount-destinations --filter failed: %v", err)
+		t.Fatalf("subaccount-destinations --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "alpha-dest") {
 		t.Errorf("expected alpha-dest in output, got: %q", stdout)

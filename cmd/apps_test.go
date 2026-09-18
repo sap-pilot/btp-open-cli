@@ -85,7 +85,7 @@ func TestApps_DefaultToon(t *testing.T) {
 	}
 }
 
-func TestApps_Filter(t *testing.T) {
+func TestApps_Include(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": singleOrgPage("org1", "my-org"),
 		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
@@ -111,15 +111,53 @@ func TestApps_Filter(t *testing.T) {
 	setupTestEnv(t, srv.URL)
 	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
-	stdout, _, err := runCmd(t, "apps", "--filter", "my-app")
+	stdout, _, err := runCmd(t, "apps", "--include", "my-app")
 	if err != nil {
-		t.Fatalf("apps --filter failed: %v", err)
+		t.Fatalf("apps --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "my-app") {
 		t.Errorf("expected my-app in filtered output, got: %q", stdout)
 	}
 	if strings.Contains(stdout, "other-app") {
 		t.Errorf("other-app should be filtered out, got: %q", stdout)
+	}
+}
+
+func TestApps_Exclude(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps": mustJSONStr(map[string]interface{}{
+			"pagination": map[string]interface{}{"total_pages": 1},
+			"resources": []map[string]interface{}{
+				{
+					"guid": "app1", "name": "my-app", "state": "STARTED",
+					"created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z",
+					"metadata":      map[string]interface{}{"annotations": map[string]string{}},
+					"relationships": map[string]interface{}{"space": map[string]interface{}{"data": map[string]string{"guid": "sp1"}}},
+				},
+				{
+					"guid": "app2", "name": "other-app", "state": "STOPPED",
+					"created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-01T00:00:00Z",
+					"metadata":      map[string]interface{}{"annotations": map[string]string{}},
+					"relationships": map[string]interface{}{"space": map[string]interface{}{"data": map[string]string{"guid": "sp1"}}},
+				},
+			},
+		}),
+		"/v3/processes": processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "apps", "--exclude", "STOPPED,other")
+	if err != nil {
+		t.Fatalf("apps --exclude failed: %v", err)
+	}
+	if !strings.Contains(stdout, "my-app") {
+		t.Errorf("expected my-app in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "other-app") {
+		t.Errorf("other-app should be excluded, got: %q", stdout)
 	}
 }
 

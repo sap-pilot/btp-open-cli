@@ -57,19 +57,6 @@ type outDoc struct {
 	Regions []outRegion `json:"regions" toon:"regions"`
 }
 
-// userMatchesFilter reports whether any of a user's id, name, or origin
-// contains the filter string (case-insensitive). Always true when filter is "".
-func userMatchesFilter(u outUser, filter string) bool {
-	if filter == "" {
-		return true
-	}
-	f := strings.ToLower(filter)
-	return strings.Contains(strings.ToLower(u.ID), f) ||
-		strings.Contains(strings.ToLower(u.Name), f) ||
-		strings.Contains(strings.ToLower(u.Origin), f) ||
-		strings.Contains(strings.ToLower(u.Roles), f)
-}
-
 // userMatchesIncludeExclude applies --include/--exclude keyword filtering
 // (comma-separated, case-insensitive, matched if any keyword is a substring
 // of any field) against a user's id, name, origin, and roles.
@@ -85,9 +72,10 @@ func userMatchesIncludeExclude(u outUser, includePattern, excludePattern string)
 }
 
 // buildOutputDoc converts raw fetch results into the shared output model.
-// filter is an optional substring applied to user id/name/origin; orgs and
-// regions with no matching users are omitted from the result.
-func buildOutputDoc(results []regionData, filter, includePattern, excludePattern string) (outDoc, []error) {
+// includePattern/excludePattern are optional comma-separated keyword lists
+// applied to user id/name/origin/roles; orgs and regions with no matching
+// users are omitted from the result.
+func buildOutputDoc(results []regionData, includePattern, excludePattern string) (outDoc, []error) {
 	var doc outDoc
 	var errs []error
 	for _, r := range results {
@@ -105,7 +93,7 @@ func buildOutputDoc(results []regionData, filter, includePattern, excludePattern
 					Origin: u.Origin,
 					Roles:  strings.Join(od.Roles[u.GUID], ";"),
 				}
-				if userMatchesFilter(ou, filter) && userMatchesIncludeExclude(ou, includePattern, excludePattern) {
+				if userMatchesIncludeExclude(ou, includePattern, excludePattern) {
 					oo.Users = append(oo.Users, ou)
 				}
 			}
@@ -149,7 +137,6 @@ If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
-		filter, _ := cmd.Flags().GetString("filter")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		orgGUID, _ := cmd.Flags().GetString("org")
@@ -261,11 +248,11 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOrgUsersJSON(out, results, filter, includePattern, excludePattern)
+			return writeOrgUsersJSON(out, results, includePattern, excludePattern)
 		case "csv":
-			return writeOrgUsersCSV(out, results, filter, includePattern, excludePattern)
+			return writeOrgUsersCSV(out, results, includePattern, excludePattern)
 		default: // "toon"
-			return writeOrgUsersToon(out, results, filter, includePattern, excludePattern)
+			return writeOrgUsersToon(out, results, includePattern, excludePattern)
 		}
 	},
 }
@@ -282,8 +269,8 @@ If --regions is omitted, the regions from the last login are used.`,
 //	        users[2]{id,name,origin}:
 //	          xyz-789,user@example.com,sap.ids
 //	          xyz-111,admin@example.com,uaa
-func writeOrgUsersToon(w io.Writer, results []regionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOutputDoc(results, filter, includePattern, excludePattern)
+func writeOrgUsersToon(w io.Writer, results []regionData, includePattern, excludePattern string) error {
+	doc, errs := buildOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -299,8 +286,8 @@ func writeOrgUsersToon(w io.Writer, results []regionData, filter, includePattern
 }
 
 // writeOrgUsersJSON serializes the output document as indented JSON.
-func writeOrgUsersJSON(w io.Writer, results []regionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOutputDoc(results, filter, includePattern, excludePattern)
+func writeOrgUsersJSON(w io.Writer, results []regionData, includePattern, excludePattern string) error {
+	doc, errs := buildOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -313,8 +300,8 @@ func writeOrgUsersJSON(w io.Writer, results []regionData, filter, includePattern
 }
 
 // writeOrgUsersCSV writes region,org_id,org_name,user_id,user_name,user_origin rows.
-func writeOrgUsersCSV(w io.Writer, results []regionData, filter, includePattern, excludePattern string) error {
-	doc, errs := buildOutputDoc(results, filter, includePattern, excludePattern)
+func writeOrgUsersCSV(w io.Writer, results []regionData, includePattern, excludePattern string) error {
+	doc, errs := buildOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -344,7 +331,6 @@ func init() {
 	rootCmd.AddCommand(orgUsersCmd)
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
-	orgUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
 	orgUsersCmd.Flags().String("include", "", "Only include users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgUsersCmd.Flags().String("exclude", "", "Exclude users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")

@@ -156,7 +156,7 @@ func TestUsers_CSV(t *testing.T) {
 	}
 }
 
-func TestUsers_Filter(t *testing.T) {
+func TestUsers_Include(t *testing.T) {
 	const orgGUID = "org1"
 	xsuaaSrv := newXsuaaServer(t,
 		xsuaaUser("u1", "alice@example.com", "sap.ids"),
@@ -168,9 +168,9 @@ func TestUsers_Filter(t *testing.T) {
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
 	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
-	stdout, _, err := runCmd(t, "users", "--filter", "alice", "--no-prompt")
+	stdout, _, err := runCmd(t, "users", "--include", "alice", "--no-prompt")
 	if err != nil {
-		t.Fatalf("users --filter failed: %v", err)
+		t.Fatalf("users --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "alice@example.com") {
 		t.Errorf("expected alice in filtered output, got: %q", stdout)
@@ -367,7 +367,7 @@ func TestUsers_UARCSV(t *testing.T) {
 	}
 }
 
-func TestUsers_UARCSV_Filter(t *testing.T) {
+func TestUsers_UARCSV_Include(t *testing.T) {
 	const orgGUID = "org1"
 	users := []map[string]interface{}{
 		xsuaaUserWithGroups("u1", "alice@example.com", "sap.ids", xsuaaGroup("g1", "AFC_FULLACCESS")),
@@ -380,15 +380,59 @@ func TestUsers_UARCSV_Filter(t *testing.T) {
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
 	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
-	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--filter", "alice", "--no-prompt")
+	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--include", "alice", "--no-prompt")
 	if err != nil {
-		t.Fatalf("users --format uar.csv --filter failed: %v", err)
+		t.Fatalf("users --format uar.csv --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "alice@example.com") {
 		t.Errorf("expected alice in filtered output, got: %q", stdout)
 	}
 	if strings.Contains(stdout, "bob@example.com") {
 		t.Errorf("bob should be filtered out, got: %q", stdout)
+	}
+}
+
+// TestUsers_UARCSV_IncludeDropsUnmatchedNARows reproduces a bug where
+// --include on the uar.csv format still emitted "N/A" placeholder rows for
+// role collections whose only members were filtered out, or that never had
+// any members, even though those rows never contain the include keyword.
+func TestUsers_UARCSV_IncludeDropsUnmatchedNARows(t *testing.T) {
+	const orgGUID = "org1"
+	users := []map[string]interface{}{
+		xsuaaUserWithGroups("u1", "alice@example.com", "sap.ids", xsuaaGroup("g1", "AFC_FULLACCESS")),
+		xsuaaUserWithGroups("u2", "bob@example.com", "uaa", xsuaaGroup("g2", "Subaccount Viewer")),
+	}
+	// "Cloud Connector Administrator" has zero members at all; "Subaccount
+	// Viewer" has a member (bob) who won't match --include "alice".
+	xsuaaSrv := newXsuaaUsersAndRCServer(t, users, "AFC_FULLACCESS", "Subaccount Viewer", "Cloud Connector Administrator")
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
+
+	// Sanity check: without --include, both empty/unmatched role collections
+	// produce N/A rows.
+	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --format uar.csv failed: %v", err)
+	}
+	if !strings.Contains(stdout, "Cloud Connector Administrator,desc Cloud Connector Administrator,N/A,N/A") {
+		t.Fatalf("expected an N/A row for Cloud Connector Administrator without --include, got: %q", stdout)
+	}
+
+	stdout, _, err = runCmd(t, "users", "--format", "uar.csv", "--include", "alice", "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --format uar.csv --include failed: %v", err)
+	}
+	if !strings.Contains(stdout, "alice@example.com") {
+		t.Errorf("expected alice's row in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "N/A") {
+		t.Errorf("expected no N/A rows when --include doesn't match them, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "Subaccount Viewer") {
+		t.Errorf("Subaccount Viewer should be dropped entirely (its only member doesn't match --include), got: %q", stdout)
 	}
 }
 

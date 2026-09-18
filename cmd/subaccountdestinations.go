@@ -270,8 +270,10 @@ With --full: all destination properties are returned as a flat object exactly as
 the destination service API responds — nothing is redacted, including sensitive
 fields such as Password, ClientSecret, and ProxyPassword.
 
-Use --filter to narrow results by substring or glob pattern matched against
-any destination property (e.g. MDG, API*PP).
+Use --include/--exclude to narrow results: each accepts a comma-separated
+list of keywords, matched against any destination property key or value —
+as a glob pattern (e.g. API*PP) if a keyword contains * ? [, otherwise as a
+case-insensitive substring.
 
 Use --format csv (without --full) to get a flat CSV with columns:
   org_name,destination_name,destination_url,destination_sap_client
@@ -291,7 +293,8 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
 		full, _ := cmd.Flags().GetBool("full")
-		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		outputFile, _ := cmd.Flags().GetString("output")
 
@@ -348,7 +351,10 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 
 			var dests []map[string]string
 			for _, raw := range rawDests {
-				if !sdMatchesFilter(raw, filter) {
+				if includePattern != "" && !sdMatchesAnyKeyword(includePattern, raw) {
+					continue
+				}
+				if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
 					continue
 				}
 				if full {
@@ -666,7 +672,8 @@ func init() {
 	subaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	subaccountDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
 	subaccountDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
-	subaccountDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern matched against any destination property")
+	subaccountDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
+	subaccountDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
 	subaccountDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	subaccountDestinationsCmd.GroupID = "destination"

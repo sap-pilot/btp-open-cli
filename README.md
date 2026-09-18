@@ -198,6 +198,9 @@ highlighted org if nothing was checked.
 **The selection applies only to the current login session.** It's saved to
 `~/.bo/credentials.json`, but running `bo login` or `bo logoff` clears it — you'll
 need to run `bo orgs` again (or pass `--org`/`--orgs` directly) after your next login.
+Running `bo orgs` again within the same session pre-checks whatever is currently
+selected in the picker, so you can tweak the scope instead of starting over —
+only `bo login`/`bo logoff` clear it.
 
 If an org-aware command is run with no `--org`/`--orgs` and no default scope has
 been set yet, it prints an error telling you to run `bo orgs` first.
@@ -299,9 +302,6 @@ bo org-users --format json
 # CSV output
 bo org-users --format csv
 
-# Filter by name, id, origin, or role
-bo org-users --filter manager
-
 # Only include users where id, name, origin, or roles contain any of these
 # comma-separated, case-insensitive keywords
 bo org-users --include manager,auditor
@@ -345,9 +345,6 @@ bo org-space-users --format csv
 # User Access Review CSV: one row per org/space membership
 # (columns: Space/Org ID,Space/Org Name,Group Type,Member,Role)
 bo org-space-users --format uar.csv
-
-# Filter by name, id, origin, or role
-bo org-space-users --filter space_developer
 
 # Only include users where id, name, origin, or roles contain any of these
 # comma-separated, case-insensitive keywords
@@ -515,10 +512,6 @@ bo users --orgs target-orgs.csv
 # Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo users --excludeOrgs prod-orgs.csv
 
-# Filter output — only users matching a substring in any field
-bo users --filter "@example.com"
-bo users --filter "sap.ids"
-
 # Only include users where any user field contains any of these
 # comma-separated, case-insensitive keywords
 bo users --include sap.ids,sap.custom
@@ -533,7 +526,7 @@ bo users --fields user_id,user_name,email,user_origin
 bo users --excludeFields lastLogonTime,groups
 
 # Combine filtering and field selection
-bo users --filter "sap.ids" --excludeFields groups --regions us10,us20
+bo users --include "sap.ids" --excludeFields groups --regions us10,us20
 
 # Write output to a file instead of stdout
 bo users --output users.csv
@@ -569,7 +562,7 @@ bo create-users <users.csv> [-y]
 The CSV must contain at least the columns `region`, `org_id`, `user_origin`, `user_name`, `email`, and `groups`; extra columns are ignored. The `groups` column is semicolon-separated role collection names. The output of `bo users --format csv` can be passed directly:
 
 ```bash
-bo users --org {orgId} --filter sap.default --format csv > default-users.csv
+bo users --org {orgId} --include sap.default --format csv > default-users.csv
 sed -i 's/sap.default/sap.custom/g' default-users.csv
 bo create-users default-users.csv
 ```
@@ -850,14 +843,19 @@ bo space-destinations --space <space-guid> --format csv
 bo space-destinations --space <space-guid> --full
 bo space-destinations --space <space-guid> --full --format json
 
-# Filter by substring (case-insensitive, matched against any property key or value)
-bo space-destinations --space <space-guid> --filter MDG
+# Only include destinations where any property contains any of these
+# comma-separated keywords (substring, case-insensitive)
+bo space-destinations --space <space-guid> --include MDG
 
-# Filter by glob pattern (* matches any sequence of characters)
-bo space-destinations --space <space-guid> --filter "API*PP"
+# --include/--exclude accept a glob pattern per keyword (* matches any
+# sequence of characters) instead of a plain substring
+bo space-destinations --space <space-guid> --include "API*PP"
 
-# Combine: full properties + filter
-bo space-destinations --space <space-guid> --full --filter "API*PP"
+# Exclude destinations where any property contains any of these keywords
+bo space-destinations --space <space-guid> --exclude sandbox,test
+
+# Combine: full properties + include
+bo space-destinations --space <space-guid> --full --include "API*PP"
 
 # Scope region search
 bo space-destinations --space <space-guid> --regions us10,us20,eu10
@@ -975,11 +973,15 @@ bo subaccount-destinations --org <org-guid-or-name> --format csv
 bo subaccount-destinations --org <org-guid-or-name> --full
 bo subaccount-destinations --org <org-guid-or-name> --full --format json
 
-# Filter by substring (case-insensitive, matched against any property key or value)
-bo subaccount-destinations --org <org-guid-or-name> --filter MDG
+# Only include destinations where any property contains any of these
+# comma-separated keywords (substring, case-insensitive)
+bo subaccount-destinations --org <org-guid-or-name> --include MDG
 
-# Filter by glob pattern
-bo subaccount-destinations --org <org-guid-or-name> --filter "API*PP"
+# --include/--exclude accept a glob pattern per keyword
+bo subaccount-destinations --org <org-guid-or-name> --include "API*PP"
+
+# Exclude destinations where any property contains any of these keywords
+bo subaccount-destinations --org <org-guid-or-name> --exclude sandbox,test
 
 # Skip interactive prompts if no destination service instance or key is found
 bo subaccount-destinations --org <org-guid-or-name> --no-prompt
@@ -1141,13 +1143,16 @@ bo apps --orgs target-orgs.csv
 # Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo apps --excludeOrgs prod-orgs.csv
 
-# Filter output — only apps matching a substring in any listed field
-bo apps --filter myapp
-bo apps --filter STARTED
-bo apps --filter "my-mta-id"
+# Only include apps where any listed field contains any of these
+# comma-separated, case-insensitive keywords
+bo apps --include myapp
+bo apps --include STARTED,STOPPED
+
+# Exclude apps where any listed field contains any of these keywords
+bo apps --exclude STOPPED
 
 # Combine flags
-bo apps --regions us10,us20 --orgs my-orgs.csv --format csv --filter STARTED
+bo apps --regions us10,us20 --orgs my-orgs.csv --format csv --include STARTED
 
 # Write output to a file instead of stdout
 bo apps --output apps.csv --format csv
@@ -1177,7 +1182,7 @@ regions:
 
 CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
 
-The `--filter` flag matches case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
 
 ### `reorg-wiki-attachments`
 
@@ -1338,7 +1343,7 @@ Each entry is separated by a header line that includes the timestamp and the exa
 === 2026-05-18 14:30:00 bo org-users --regions us10,us20 ===
 ... command output ...
 
-=== 2026-05-18 14:31:05 bo users --filter sap.ids ===
+=== 2026-05-18 14:31:05 bo users --include sap.ids ===
 ... command output ...
 ```
 
@@ -1456,7 +1461,7 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 ### Tips for vibe-coding new commands
 
 - Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
-- The `--format`, `--filter`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
+- The `--format`, `--include`/`--exclude`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
 - For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
 - Run `go vet ./...` after adding a command to catch any import or signature issues before building.
 
