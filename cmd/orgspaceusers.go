@@ -124,10 +124,14 @@ var orgSpaceUsersCmd = &cobra.Command{
 	Long: `List users at the org and space level across one or more regions.
 
 Output formats (--format):
-  toon  Token-Oriented Object Notation — compact, human-readable (default)
-  json  JSON document
-  csv   CSV rows: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
-        (space_id and space_name are empty for org-level users)
+  toon     Token-Oriented Object Notation — compact, human-readable (default)
+  json     JSON document
+  csv      CSV rows: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+           (space_id and space_name are empty for org-level users)
+  uar.csv  User Access Review CSV, one row per org/space membership.
+           Columns: Space/Org ID,Space/Org Name,Group Type,Member,Role
+           Group Type is "Organization" or "Space"; Role lists all roles the
+           member holds at that scope, comma-separated.
 
 Use --org to scope to a single org by GUID, or --orgs to provide a CSV
 file (columns: region,org_id,org_name) listing the orgs to include.
@@ -269,6 +273,8 @@ If --regions is omitted, the regions from the last login are used.`,
 			return writeOspJSON(results, filter)
 		case "csv":
 			return writeOspCSV(results, filter)
+		case "uar.csv":
+			return writeOspUARCSV(results, filter)
 		default: // "toon"
 			return writeOspToon(results, filter)
 		}
@@ -351,11 +357,50 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 	return nil
 }
 
+// writeOspUARCSV writes the uar.csv format: one row per org/space membership,
+// columns Space/Org ID,Space/Org Name,Group Type,Member,Role.
+func writeOspUARCSV(results []ospRegionData, filter string) error {
+	doc, errs := buildOspOutputDoc(results, filter)
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+	}
+
+	w := csv.NewWriter(os.Stdout)
+	defer w.Flush()
+
+	if err := w.Write([]string{"Space/Org ID", "Space/Org Name", "Group Type", "Member", "Role"}); err != nil {
+		return err
+	}
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, u := range o.Users {
+				if err := w.Write([]string{o.ID, o.Name, "Organization", u.Name, ospUARRoles(u.Roles)}); err != nil {
+					return err
+				}
+			}
+			for _, sp := range o.Spaces {
+				for _, u := range sp.Users {
+					if err := w.Write([]string{sp.ID, sp.Name, "Space", u.Name, ospUARRoles(u.Roles)}); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ospUARRoles converts the ";"-joined role list used elsewhere in this
+// command into the ", "-separated form expected by the uar.csv format.
+func ospUARRoles(roles string) string {
+	return strings.Join(strings.Split(roles, ";"), ", ")
+}
+
 func init() {
 	orgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgSpaceUsersCmd)
 	orgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv")
 	orgSpaceUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
 	orgSpaceUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")
 	orgSpaceUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")

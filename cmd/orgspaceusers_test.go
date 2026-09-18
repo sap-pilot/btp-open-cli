@@ -17,9 +17,9 @@ func TestOrgSpaceUsers_DefaultToon(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations":            singleOrgPage("org1", "my-org"),
 		"/v3/organizations/org1/users": orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
-		"/v3/spaces": spacesPageJSON("sp1", "dev", "org1"),
-		"/v3/spaces/sp1/users": orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
-		"/v3/roles":            emptyPage(),
+		"/v3/spaces":                   spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/spaces/sp1/users":         orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
+		"/v3/roles":                    emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
 
@@ -101,5 +101,60 @@ func TestOrgSpaceUsers_CSV(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "bob@example.com") {
 		t.Errorf("expected bob in space-level row, got: %q", lines[2])
+	}
+}
+
+func TestOrgSpaceUsers_UARCSV(t *testing.T) {
+	rolesPage := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]interface{}{
+			{"guid": "role1", "type": "organization_manager",
+				"relationships": map[string]interface{}{
+					"user":         map[string]interface{}{"data": map[string]string{"guid": "u1"}},
+					"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}},
+					"space":        map[string]interface{}{"data": nil},
+				}},
+			{"guid": "role2", "type": "organization_user",
+				"relationships": map[string]interface{}{
+					"user":         map[string]interface{}{"data": map[string]string{"guid": "u1"}},
+					"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}},
+					"space":        map[string]interface{}{"data": nil},
+				}},
+			{"guid": "role3", "type": "space_developer",
+				"relationships": map[string]interface{}{
+					"user":         map[string]interface{}{"data": map[string]string{"guid": "u2"}},
+					"organization": map[string]interface{}{"data": nil},
+					"space":        map[string]interface{}{"data": map[string]string{"guid": "sp1"}},
+				}},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations":            singleOrgPage("org1", "cvx-afc-prod"),
+		"/v3/organizations/org1/users": orgUsersPage(cfUser("u1", "laura.castro@chevron.com", "sap.ids")),
+		"/v3/spaces":                   spacesPageJSON("sp1", "dcore", "org1"),
+		"/v3/spaces/sp1/users":         orgUsersPage(cfUser("u2", "firc@chevron.com", "sap.ids")),
+		"/v3/roles":                    rolesPage,
+	})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "org-space-users", "--format", "uar.csv")
+	if err != nil {
+		t.Fatalf("org-space-users --format uar.csv failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected header + at least 2 data rows, got %d lines:\n%s", len(lines), stdout)
+	}
+	wantHeader := "Space/Org ID,Space/Org Name,Group Type,Member,Role"
+	if lines[0] != wantHeader {
+		t.Errorf("unexpected CSV header:\n got:  %q\n want: %q", lines[0], wantHeader)
+	}
+	wantOrgRow := `org1,cvx-afc-prod,Organization,laura.castro@chevron.com,"organization_manager, organization_user"`
+	if lines[1] != wantOrgRow {
+		t.Errorf("unexpected org row:\n got:  %q\n want: %q", lines[1], wantOrgRow)
+	}
+	wantSpaceRow := "sp1,dcore,Space,firc@chevron.com,space_developer"
+	if lines[2] != wantSpaceRow {
+		t.Errorf("unexpected space row:\n got:  %q\n want: %q", lines[2], wantSpaceRow)
 	}
 }

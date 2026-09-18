@@ -380,6 +380,8 @@ bo org-users --regions us10,us20,eu10
 
 List users at both the organization and space level.
 
+The `--format uar.csv` option produces a User Access Review export: one row per org/space membership, columns `Space/Org ID,Space/Org Name,Group Type,Member,Role`. `Group Type` is `Organization` or `Space`; `Role` lists all roles the member holds at that scope, comma-separated.
+
 ```bash
 # Default TOON output
 bo org-space-users
@@ -389,6 +391,10 @@ bo org-space-users --format json
 
 # CSV output
 bo org-space-users --format csv
+
+# User Access Review CSV: one row per org/space membership
+# (columns: Space/Org ID,Space/Org Name,Group Type,Member,Role)
+bo org-space-users --format uar.csv
 
 # Filter by name, id, origin, or role
 bo org-space-users --filter space_developer
