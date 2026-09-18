@@ -21,14 +21,26 @@ func xsuaaUsersPage(users ...map[string]interface{}) string {
 // xsuaaUser returns a minimal SCIM user map.
 func xsuaaUser(id, username, origin string) map[string]interface{} {
 	return map[string]interface{}{
-		"id":           id,
-		"externalId":   id + "-ext",
-		"origin":       origin,
-		"userName":     username,
-		"emails":       []map[string]interface{}{{"value": username, "primary": true}},
+		"id":            id,
+		"externalId":    id + "-ext",
+		"origin":        origin,
+		"userName":      username,
+		"emails":        []map[string]interface{}{{"value": username, "primary": true}},
 		"lastLogonTime": 0,
-		"groups":       []interface{}{},
+		"groups":        []interface{}{},
 	}
+}
+
+// xsuaaUserWithGroups returns a minimal SCIM user map with role-collection
+// group memberships (SCIM groups map 1:1 to XSUAA role collections).
+func xsuaaUserWithGroups(id, username, origin string, groups ...map[string]interface{}) map[string]interface{} {
+	u := xsuaaUser(id, username, origin)
+	groupList := make([]interface{}, len(groups))
+	for i, g := range groups {
+		groupList[i] = g
+	}
+	u["groups"] = groupList
+	return u
 }
 
 // newXsuaaServer creates a fake XSUAA SCIM server returning the given users.
@@ -41,6 +53,30 @@ func newXsuaaServer(t *testing.T, users ...map[string]interface{}) *httptest.Ser
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(xsuaaUsersPage(users...))) //nolint:errcheck
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// xsuaaGroup returns a SCIM group reference as embedded in a user's "groups".
+func xsuaaGroup(id, displayName string) map[string]interface{} {
+	return map[string]interface{}{"value": id, "display": displayName}
+}
+
+// newXsuaaUsersAndRCServer creates a fake XSUAA server serving both /Users
+// and the role collections API, for uar.csv tests.
+func newXsuaaUsersAndRCServer(t *testing.T, users []map[string]interface{}, rcNames ...string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/Users":
+			w.Write([]byte(xsuaaUsersPage(users...))) //nolint:errcheck
+		case strings.HasPrefix(r.URL.Path, "/sap/rest/authorization/v2/rolecollections"):
+			w.Write([]byte(xsuaaRoleCollectionsPage(rcNames...))) //nolint:errcheck
+		default:
+			http.Error(w, "unexpected path: "+r.URL.Path, 404)
+		}
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -238,5 +274,72 @@ func TestUsrFieldSet_Exclude(t *testing.T) {
 	}
 	if !fs.active("user_name") {
 		t.Error("user_name should still be active")
+	}
+}
+
+func TestUsers_UARCSV(t *testing.T) {
+	const orgGUID = "org1"
+	users := []map[string]interface{}{
+		xsuaaUserWithGroups("u1", "alice@example.com", "sap.ids",
+			xsuaaGroup("g1", "AFC_FULLACCESS"), xsuaaGroup("g2", "Subaccount Viewer")),
+		xsuaaUserWithGroups("u2", "bob@example.com", "uaa",
+			xsuaaGroup("g1", "AFC_FULLACCESS")),
+	}
+	xsuaaSrv := newXsuaaUsersAndRCServer(t, users, "AFC_FULLACCESS", "Subaccount Viewer", "Cloud Connector Administrator")
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+
+	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --format uar.csv failed: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if lines[0] != "Role Collection,Description,Role Collection Members,Origin,Subaccount ID" {
+		t.Fatalf("unexpected header: %q", lines[0])
+	}
+
+	// Rows sorted by Role Collection name: AFC_FULLACCESS (2 members) comes
+	// before Cloud Connector Administrator (no members), which comes before
+	// Subaccount Viewer (1 member).
+	want := []string{
+		"AFC_FULLACCESS,desc AFC_FULLACCESS,alice@example.com,sap.ids," + orgGUID,
+		"AFC_FULLACCESS,desc AFC_FULLACCESS,bob@example.com,uaa," + orgGUID,
+		"Cloud Connector Administrator,desc Cloud Connector Administrator,N/A,N/A," + orgGUID,
+		"Subaccount Viewer,desc Subaccount Viewer,alice@example.com,sap.ids," + orgGUID,
+	}
+	got := lines[1:]
+	if len(got) != len(want) {
+		t.Fatalf("expected %d data rows, got %d:\n%s", len(want), len(got), stdout)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("row %d: expected %q, got %q", i, w, got[i])
+		}
+	}
+}
+
+func TestUsers_UARCSV_Filter(t *testing.T) {
+	const orgGUID = "org1"
+	users := []map[string]interface{}{
+		xsuaaUserWithGroups("u1", "alice@example.com", "sap.ids", xsuaaGroup("g1", "AFC_FULLACCESS")),
+		xsuaaUserWithGroups("u2", "bob@example.com", "uaa", xsuaaGroup("g1", "AFC_FULLACCESS")),
+	}
+	xsuaaSrv := newXsuaaUsersAndRCServer(t, users, "AFC_FULLACCESS")
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+
+	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--filter", "alice", "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --format uar.csv --filter failed: %v", err)
+	}
+	if !strings.Contains(stdout, "alice@example.com") {
+		t.Errorf("expected alice in filtered output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("bob should be filtered out, got: %q", stdout)
 	}
 }

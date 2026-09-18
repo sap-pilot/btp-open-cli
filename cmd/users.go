@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 
@@ -45,6 +46,17 @@ type usrOutDoc struct {
 	Regions []usrOutRegion `json:"regions" toon:"regions"`
 }
 
+// usrOrgResult holds one org's fetched XSUAA data (users and, for uar.csv,
+// role collections) before it is projected into an output format.
+type usrOrgResult struct {
+	regionName      string
+	orgGUID         string
+	orgName         string
+	users           []xsuaa.User
+	roleCollections []xsuaa.RoleCollection
+	err             error
+}
+
 // ── command ───────────────────────────────────────────────────────────────────
 
 var usersCmd = &cobra.Command{
@@ -54,9 +66,16 @@ var usersCmd = &cobra.Command{
 across one or more regions and organizations.
 
 Output formats (--format):
-  toon  Token-Oriented Object Notation — compact, human-readable (default)
-  json  JSON document
-  csv   CSV rows: region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
+  toon     Token-Oriented Object Notation — compact, human-readable (default)
+  json     JSON document
+  csv      CSV rows: region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
+  uar.csv  User Access Review CSV, one row per role collection membership.
+           Columns: Role Collection,Description,Role Collection Members,Origin,Subaccount ID
+           A user assigned to N role collections produces N rows, with the other
+           fields duplicated across them. Role collections with no members still
+           get one row, with "N/A" in Role Collection Members and Origin. Rows are
+           sorted by Role Collection name. --fields/--excludeFields are ignored
+           for this format since its columns are fixed.
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
@@ -129,15 +148,11 @@ If --regions is omitted the regions from the last login are used.`,
 			return fmt.Errorf("org %q not found in any accessible region", orgGUID)
 		}
 
-		// Phase 2: fetch XSUAA users for each org in parallel.
-		type orgResult struct {
-			regionName string
-			orgGUID    string
-			orgName    string
-			users      []xsuaa.User
-			err        error
-		}
-		results := make([]orgResult, len(clients))
+		isUARFormat := strings.ToLower(format) == "uar.csv"
+
+		// Phase 2: fetch XSUAA users (and, for uar.csv, role collections) for
+		// each org in parallel.
+		results := make([]usrOrgResult, len(clients))
 		var wg sync.WaitGroup
 
 		for i, w := range clients {
@@ -146,12 +161,25 @@ If --regions is omitted the regions from the last login are used.`,
 				defer wg.Done()
 				slog.Debug("fetching XSUAA users", "region", w.RegionName, "org", w.OrgName)
 				users, err := xsuaa.ListUsers(ctx, w.APIURL, w.Token)
-				results[idx] = orgResult{
-					regionName: w.RegionName,
-					orgGUID:    w.OrgGUID,
-					orgName:    w.OrgName,
-					users:      users,
-					err:        err,
+				if err != nil {
+					results[idx] = usrOrgResult{regionName: w.RegionName, orgGUID: w.OrgGUID, orgName: w.OrgName, err: err}
+					return
+				}
+				var rcs []xsuaa.RoleCollection
+				if isUARFormat {
+					rcs, err = xsuaa.ListRoleCollections(ctx, w.APIURL, w.Token)
+					if err != nil {
+						results[idx] = usrOrgResult{regionName: w.RegionName, orgGUID: w.OrgGUID, orgName: w.OrgName,
+							err: fmt.Errorf("listing role collections: %w", err)}
+						return
+					}
+				}
+				results[idx] = usrOrgResult{
+					regionName:      w.RegionName,
+					orgGUID:         w.OrgGUID,
+					orgName:         w.OrgName,
+					users:           users,
+					roleCollections: rcs,
 				}
 			}(i, w)
 		}
@@ -204,10 +232,130 @@ If --regions is omitted the regions from the last login are used.`,
 			return writeUsersJSON(doc)
 		case "csv":
 			return writeUsersCSV(doc)
+		case "uar.csv":
+			return writeUsersUARCSV(buildUARRows(regionOrder, results, filter))
 		default: // "toon"
 			return writeUsersToon(doc)
 		}
 	},
+}
+
+// uarMember is a single role-collection assignment: a user's email and origin.
+type uarMember struct {
+	Email  string
+	Origin string
+}
+
+// uarRow is one output row of the uar.csv format.
+type uarRow struct {
+	RoleCollection string
+	Description    string
+	Member         string
+	Origin         string
+	SubaccountID   string
+}
+
+// buildUARRows pivots per-org users and role collections into one row per
+// role collection membership (or one "N/A" row for role collections with no
+// members), sorted by role collection name within each org.
+func buildUARRows(regionOrder []string, results []usrOrgResult, filter string) []uarRow {
+	regionResults := make(map[string][]usrOrgResult)
+	for _, r := range results {
+		if r.err != nil {
+			continue
+		}
+		regionResults[r.regionName] = append(regionResults[r.regionName], r)
+	}
+
+	var rows []uarRow
+	for _, rid := range regionOrder {
+		for _, r := range regionResults[rid] {
+			members := make(map[string][]uarMember)
+			for _, u := range r.users {
+				email := xsuaa.PrimaryEmail(u.Emails)
+				lastLogon := xsuaa.MSToISO(u.LastLogonTime)
+				groups := xsuaa.GroupValues(u.Groups)
+				if !usrMatchesFilter(u, email, lastLogon, groups, filter) {
+					continue
+				}
+				for _, g := range u.Groups {
+					name := g.Display
+					if name == "" {
+						name = g.Value
+					}
+					members[name] = append(members[name], uarMember{Email: email, Origin: u.Origin})
+				}
+			}
+
+			type rcEntry struct{ name, description string }
+			seen := make(map[string]bool)
+			var rcs []rcEntry
+			for _, rc := range r.roleCollections {
+				rcs = append(rcs, rcEntry{name: rc.Name, description: rc.Description})
+				seen[rc.Name] = true
+			}
+			// Role collections found only via user membership (not returned by
+			// ListRoleCollections) still get a row, with an empty description.
+			for name := range members {
+				if !seen[name] {
+					rcs = append(rcs, rcEntry{name: name})
+					seen[name] = true
+				}
+			}
+			sort.Slice(rcs, func(i, j int) bool { return rcs[i].name < rcs[j].name })
+
+			for _, rc := range rcs {
+				mem := members[rc.name]
+				if len(mem) == 0 {
+					rows = append(rows, uarRow{
+						RoleCollection: rc.name,
+						Description:    rc.description,
+						Member:         "N/A",
+						Origin:         "N/A",
+						SubaccountID:   r.orgGUID,
+					})
+					continue
+				}
+				sort.Slice(mem, func(i, j int) bool {
+					if !strings.EqualFold(mem[i].Email, mem[j].Email) {
+						return strings.ToLower(mem[i].Email) < strings.ToLower(mem[j].Email)
+					}
+					return mem[i].Origin < mem[j].Origin
+				})
+				for _, m := range mem {
+					rows = append(rows, uarRow{
+						RoleCollection: rc.name,
+						Description:    rc.description,
+						Member:         m.Email,
+						Origin:         m.Origin,
+						SubaccountID:   r.orgGUID,
+					})
+				}
+			}
+		}
+	}
+	return rows
+}
+
+// writeUsersUARCSV writes the uar.csv format: one row per role collection
+// membership, columns Role Collection,Description,Role Collection Members,Origin,Subaccount ID.
+func writeUsersUARCSV(rows []uarRow) error {
+	w := csv.NewWriter(os.Stdout)
+	defer w.Flush()
+
+	if err := w.Write([]string{
+		"Role Collection", "Description", "Role Collection Members", "Origin", "Subaccount ID",
+	}); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if err := w.Write([]string{
+			row.RoleCollection, row.Description, row.Member, row.Origin, row.SubaccountID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeUsersToon(doc usrOutDoc) error {
@@ -262,7 +410,7 @@ func init() {
 	usersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(usersCmd)
 	usersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	usersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	usersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv")
 	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")

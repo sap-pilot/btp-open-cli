@@ -510,6 +510,8 @@ For each organization the command searches all spaces for any `xsuaa` service in
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials (clientId, clientSecret) are fetched on demand and never stored locally.
 
+The `--format uar.csv` option produces a User Access Review export: one row per role collection membership, so a user assigned to N role collections produces N rows with the other fields duplicated across them. Role collections with no members still get one row, with `N/A` in Role Collection Members and Origin. Rows are sorted by Role Collection name. This format fetches each org's full role collection inventory (for descriptions) in addition to its users, and ignores `--fields`/`--excludeFields` since its columns are fixed.
+
 ```bash
 # List XSUAA users across all orgs in stored regions
 bo users
@@ -519,6 +521,10 @@ bo users --format json
 
 # CSV output
 bo users --format csv
+
+# User Access Review CSV: one row per role collection membership
+# (columns: Role Collection,Description,Role Collection Members,Origin,Subaccount ID)
+bo users --format uar.csv
 
 # Skip interactive prompts for orgs with no service instance or key
 bo users --no-prompt
