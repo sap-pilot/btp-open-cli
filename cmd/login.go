@@ -56,6 +56,9 @@ Omit region flags to reuse the regions from the previous login.`,
 		if loadErr != nil {
 			creds = &store.Credentials{Tokens: make(map[string]store.RegionToken)}
 		}
+		// A fresh login starts a new session, so any default org scope set via
+		// `bo orgs` in a previous session no longer applies.
+		creds.DefaultOrgScope = nil
 
 		// Fetch CF endpoints for every URL in parallel.
 		type endpointResult struct {

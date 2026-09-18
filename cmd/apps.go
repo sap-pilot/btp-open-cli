@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -81,12 +82,19 @@ Output formats (--format):
   json  JSON document
   csv   Flat CSV rows, one per app
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly.
+
+Use --output/-o to write the result to a file instead of stdout.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgGUID, _ := cmd.Flags().GetString("org")
+		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
 		filter, _ := cmd.Flags().GetString("filter")
 
@@ -124,6 +132,13 @@ If --regions is omitted the regions from the last login are used.`,
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
+
+		if orgGUID == "" && orgsFile == "" {
+			includeOrgs, err = resolveDefaultOrgScope(creds)
+			if err != nil {
+				return err
+			}
+		}
 
 		results := make([]appsRegionResult, len(apiURLs))
 		var wg sync.WaitGroup
@@ -237,13 +252,19 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		wg.Wait()
 
+		out, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
+		}
+		defer closeOut()
+
 		switch strings.ToLower(format) {
 		case "json":
-			return writeAppsJSON(results, filter)
+			return writeAppsJSON(out, results, filter)
 		case "csv":
-			return writeAppsCSV(results, filter)
+			return writeAppsCSV(out, results, filter)
 		default:
-			return writeAppsToon(results, filter)
+			return writeAppsToon(out, results, filter)
 		}
 	},
 }
@@ -310,7 +331,7 @@ func buildAppsDoc(results []appsRegionResult, filter string) (appsOutDoc, []erro
 	return doc, errs
 }
 
-func writeAppsToon(results []appsRegionResult, filter string) error {
+func writeAppsToon(w io.Writer, results []appsRegionResult, filter string) error {
 	doc, errs := buildAppsDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
@@ -319,14 +340,14 @@ func writeAppsToon(results []appsRegionResult, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
-	if _, err = os.Stdout.Write(out); err != nil {
+	if _, err = w.Write(out); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout)
+	_, err = fmt.Fprintln(w)
 	return err
 }
 
-func writeAppsJSON(results []appsRegionResult, filter string) error {
+func writeAppsJSON(w io.Writer, results []appsRegionResult, filter string) error {
 	doc, errs := buildAppsDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
@@ -335,20 +356,20 @@ func writeAppsJSON(results []appsRegionResult, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, string(out))
+	fmt.Fprintln(w, string(out))
 	return nil
 }
 
-func writeAppsCSV(results []appsRegionResult, filter string) error {
+func writeAppsCSV(w io.Writer, results []appsRegionResult, filter string) error {
 	doc, errs := buildAppsDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
 
-	if err := w.Write([]string{
+	if err := csvW.Write([]string{
 		"region_id", "org_id", "org_name",
 		"space_id", "space_name",
 		"app_mta_id", "app_id", "app_name", "app_state",
@@ -362,7 +383,7 @@ func writeAppsCSV(results []appsRegionResult, filter string) error {
 		for _, o := range r.Orgs {
 			for _, sp := range o.Spaces {
 				for _, a := range sp.Apps {
-					if err := w.Write([]string{
+					if err := csvW.Write([]string{
 						r.ID, o.ID, o.Name,
 						sp.ID, sp.Name,
 						a.MtaID, a.ID, a.Name, a.State,
@@ -405,6 +426,7 @@ func init() {
 	appsCmd.Flags().String("org", "", "Org GUID to target; only apps from this org will be fetched")
 	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
+	appsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
 	appsCmd.Flags().String("filter", "", "Case-insensitive substring filter on mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, process_memory_in_mb")
 }

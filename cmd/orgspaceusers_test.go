@@ -22,6 +22,7 @@ func TestOrgSpaceUsers_DefaultToon(t *testing.T) {
 		"/v3/roles":                    emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "org-space-users")
 	if err != nil {
@@ -44,6 +45,7 @@ func TestOrgSpaceUsers_Filter(t *testing.T) {
 		"/v3/roles": emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "org-space-users", "--filter", "alice")
 	if err != nil {
@@ -66,6 +68,7 @@ func TestOrgSpaceUsers_CSV(t *testing.T) {
 		"/v3/roles":                    emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "org-space-users", "--format", "csv")
 	if err != nil {
@@ -136,6 +139,7 @@ func TestOrgSpaceUsers_UARCSV(t *testing.T) {
 		"/v3/roles":                    rolesPage,
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "cvx-afc-prod")
 
 	stdout, _, err := runCmd(t, "org-space-users", "--format", "uar.csv")
 	if err != nil {

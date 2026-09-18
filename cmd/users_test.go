@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -99,6 +101,7 @@ func TestUsers_DefaultToon(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--no-prompt")
 	if err != nil {
@@ -118,6 +121,7 @@ func TestUsers_JSON(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--format", "json", "--no-prompt")
 	if err != nil {
@@ -141,6 +145,7 @@ func TestUsers_CSV(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--format", "csv", "--no-prompt")
 	if err != nil {
@@ -161,6 +166,7 @@ func TestUsers_Filter(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--filter", "alice", "--no-prompt")
 	if err != nil {
@@ -183,6 +189,7 @@ func TestUsers_Fields(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--format", "csv", "--fields", "user_name,user_origin", "--no-prompt")
 	if err != nil {
@@ -217,6 +224,7 @@ func TestUsers_ExcludeFields(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	// Exclude user_id and user_externalId — both have non-empty values so the
 	// absence is unambiguous (unlike lastLogonTime which is "" when zero anyway).
@@ -290,6 +298,7 @@ func TestUsers_UARCSV(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--no-prompt")
 	if err != nil {
@@ -331,6 +340,7 @@ func TestUsers_UARCSV_Filter(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "users", "--format", "uar.csv", "--filter", "alice", "--no-prompt")
 	if err != nil {
@@ -341,5 +351,33 @@ func TestUsers_UARCSV_Filter(t *testing.T) {
 	}
 	if strings.Contains(stdout, "bob@example.com") {
 		t.Errorf("bob should be filtered out, got: %q", stdout)
+	}
+}
+
+func TestUsers_OutputFlag(t *testing.T) {
+	const orgGUID = "org1"
+	xsuaaSrv := newXsuaaServer(t,
+		xsuaaUser("u1", "alice@example.com", "sap.ids"),
+	)
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
+
+	outPath := filepath.Join(t.TempDir(), "users.csv")
+	stdout, _, err := runCmd(t, "users", "--format", "csv", "--output", outPath, "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --output failed: %v", err)
+	}
+	if stdout != "" {
+		t.Errorf("expected no result on stdout when --output is set, got: %q", stdout)
+	}
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("reading output file: %v", readErr)
+	}
+	if !strings.Contains(string(data), "alice@example.com") {
+		t.Errorf("expected alice in output file, got: %q", string(data))
 	}
 }

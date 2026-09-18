@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -136,6 +137,12 @@ Output formats (--format):
 Use --org to scope to a single org by GUID, or --orgs to provide a CSV
 file (columns: region,org_id,org_name) listing the orgs to include.
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly.
+
+Use --output/-o to write the result to a file instead of stdout.
+
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -143,6 +150,7 @@ If --regions is omitted, the regions from the last login are used.`,
 		filter, _ := cmd.Flags().GetString("filter")
 		orgGUID, _ := cmd.Flags().GetString("org")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
+		outputFile, _ := cmd.Flags().GetString("output")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -172,6 +180,13 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
+
+		if orgGUID == "" && orgsFile == "" {
+			includeOrgs, err = resolveDefaultOrgScope(creds)
+			if err != nil {
+				return err
+			}
+		}
 
 		results := make([]ospRegionData, len(apiURLs))
 		var wg sync.WaitGroup
@@ -268,20 +283,26 @@ If --regions is omitted, the regions from the last login are used.`,
 		}
 		wg.Wait()
 
+		out, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
+		}
+		defer closeOut()
+
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOspJSON(results, filter)
+			return writeOspJSON(out, results, filter)
 		case "csv":
-			return writeOspCSV(results, filter)
+			return writeOspCSV(out, results, filter)
 		case "uar.csv":
-			return writeOspUARCSV(results, filter)
+			return writeOspUARCSV(out, results, filter)
 		default: // "toon"
-			return writeOspToon(results, filter)
+			return writeOspToon(out, results, filter)
 		}
 	},
 }
 
-func writeOspToon(results []ospRegionData, filter string) error {
+func writeOspToon(w io.Writer, results []ospRegionData, filter string) error {
 	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
@@ -290,14 +311,14 @@ func writeOspToon(results []ospRegionData, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
-	if _, err = os.Stdout.Write(out); err != nil {
+	if _, err = w.Write(out); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout)
+	_, err = fmt.Fprintln(w)
 	return err
 }
 
-func writeOspJSON(results []ospRegionData, filter string) error {
+func writeOspJSON(w io.Writer, results []ospRegionData, filter string) error {
 	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
@@ -306,23 +327,23 @@ func writeOspJSON(results []ospRegionData, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, string(out))
+	fmt.Fprintln(w, string(out))
 	return nil
 }
 
 // writeOspCSV writes one row per user with columns:
 // region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 // space_id and space_name are empty for org-level users.
-func writeOspCSV(results []ospRegionData, filter string) error {
+func writeOspCSV(w io.Writer, results []ospRegionData, filter string) error {
 	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
 
-	if err := w.Write([]string{
+	if err := csvW.Write([]string{
 		"region", "org_id", "org_name",
 		"space_id", "space_name",
 		"cfuser_id", "cfuser_name", "cfuser_origin", "cfuser_roles",
@@ -333,7 +354,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 		for _, o := range r.Orgs {
 			for _, u := range o.Users {
 				// Org-level users: space_id and space_name are empty.
-				if err := w.Write([]string{
+				if err := csvW.Write([]string{
 					r.ID, o.ID, o.Name,
 					"", "",
 					u.ID, u.Name, u.Origin, u.Roles,
@@ -343,7 +364,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 			}
 			for _, sp := range o.Spaces {
 				for _, u := range sp.Users {
-					if err := w.Write([]string{
+					if err := csvW.Write([]string{
 						r.ID, o.ID, o.Name,
 						sp.ID, sp.Name,
 						u.ID, u.Name, u.Origin, u.Roles,
@@ -359,28 +380,28 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 
 // writeOspUARCSV writes the uar.csv format: one row per org/space membership,
 // columns Space/Org ID,Space/Org Name,Group Type,Member,Role.
-func writeOspUARCSV(results []ospRegionData, filter string) error {
+func writeOspUARCSV(w io.Writer, results []ospRegionData, filter string) error {
 	doc, errs := buildOspOutputDoc(results, filter)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
 
-	if err := w.Write([]string{"Space/Org ID", "Space/Org Name", "Group Type", "Member", "Role"}); err != nil {
+	if err := csvW.Write([]string{"Space/Org ID", "Space/Org Name", "Group Type", "Member", "Role"}); err != nil {
 		return err
 	}
 	for _, r := range doc.Regions {
 		for _, o := range r.Orgs {
 			for _, u := range o.Users {
-				if err := w.Write([]string{o.ID, o.Name, "Organization", u.Name, ospUARRoles(u.Roles)}); err != nil {
+				if err := csvW.Write([]string{o.ID, o.Name, "Organization", u.Name, ospUARRoles(u.Roles)}); err != nil {
 					return err
 				}
 			}
 			for _, sp := range o.Spaces {
 				for _, u := range sp.Users {
-					if err := w.Write([]string{sp.ID, sp.Name, "Space", u.Name, ospUARRoles(u.Roles)}); err != nil {
+					if err := csvW.Write([]string{sp.ID, sp.Name, "Space", u.Name, ospUARRoles(u.Roles)}); err != nil {
 						return err
 					}
 				}
@@ -404,4 +425,5 @@ func init() {
 	orgSpaceUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
 	orgSpaceUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")
 	orgSpaceUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
+	orgSpaceUsersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 }

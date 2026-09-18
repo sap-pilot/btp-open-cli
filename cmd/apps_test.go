@@ -51,6 +51,21 @@ func TestApps_NotLoggedIn(t *testing.T) {
 	}
 }
 
+func TestApps_NoScopeNoFlags(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+	})
+	setupTestEnv(t, srv.URL)
+
+	_, _, err := runCmd(t, "apps")
+	if err == nil {
+		t.Fatal("expected error when no --org/--orgs and no default org scope is set")
+	}
+	if !strings.Contains(err.Error(), "bo orgs") {
+		t.Errorf("expected error to mention 'bo orgs', got: %v", err)
+	}
+}
+
 func TestApps_DefaultToon(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": singleOrgPage("org1", "my-org"),
@@ -59,6 +74,7 @@ func TestApps_DefaultToon(t *testing.T) {
 		"/v3/processes":     processesPageJSON("app1"),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "apps")
 	if err != nil {
@@ -93,6 +109,7 @@ func TestApps_Filter(t *testing.T) {
 		"/v3/processes": processesPageJSON("app1"),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "apps", "--filter", "my-app")
 	if err != nil {
@@ -114,6 +131,7 @@ func TestApps_CSV(t *testing.T) {
 		"/v3/processes":     processesPageJSON("app1"),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "apps", "--format", "csv")
 	if err != nil {

@@ -40,6 +40,23 @@ func setupTestEnv(t *testing.T, apiURLs ...string) {
 	}
 }
 
+// setDefaultOrgScope saves a default org scope (as `bo orgs` would) so that
+// org-aware commands under test succeed without --org/--orgs. Must be called
+// after a setupTestEnv* helper has already saved initial credentials.
+func setDefaultOrgScope(t *testing.T, apiURL, orgGUID, orgName string) {
+	t.Helper()
+	creds, err := store.Load()
+	if err != nil {
+		t.Fatalf("loading creds for default org scope: %v", err)
+	}
+	creds.DefaultOrgScope = []store.OrgScopeRef{
+		{Region: store.APIURLToRegion(apiURL), ID: orgGUID, Name: orgName, APIURL: apiURL},
+	}
+	if err := store.Save(creds); err != nil {
+		t.Fatalf("saving default org scope: %v", err)
+	}
+}
+
 // setupTestEnvWithFullXsuaa is like setupTestEnvWithXsuaa but also stores
 // OrgName and RegionName in the XSUAA cache entry so that resolveXsuaaClients
 // can take the fast path and bypass all CF API calls. Use this when the command

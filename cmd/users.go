@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -85,6 +86,12 @@ or key exists, a prompt offers instructions to create them manually (suppress wi
 Only the access token is cached in ~/.bo/credentials.json — service key credentials
 are fetched from CF on demand and never stored locally.
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly.
+
+Use --output/-o to write the result to a file instead of stdout.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -92,6 +99,7 @@ If --regions is omitted the regions from the last login are used.`,
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgGUID, _ := cmd.Flags().GetString("org")
+		outputFile, _ := cmd.Flags().GetString("output")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		filter, _ := cmd.Flags().GetString("filter")
 		fieldsCSV, _ := cmd.Flags().GetString("fields")
@@ -138,6 +146,13 @@ If --regions is omitted the regions from the last login are used.`,
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
+
+		if orgGUID == "" && orgsFile == "" {
+			includeOrgs, err = resolveDefaultOrgScope(creds)
+			if err != nil {
+				return err
+			}
+		}
 
 		// Phase 1: resolve XSUAA tokens for all accessible orgs.
 		clients, _, err := resolveXsuaaClients(ctx, apiURLs, creds, includeOrgs, excludeOrgs, noPrompt)
@@ -227,15 +242,21 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		doc := usrOutDoc{Regions: outRegions}
 
+		out, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
+		}
+		defer closeOut()
+
 		switch strings.ToLower(format) {
 		case "json":
-			return writeUsersJSON(doc)
+			return writeUsersJSON(out, doc)
 		case "csv":
-			return writeUsersCSV(doc)
+			return writeUsersCSV(out, doc)
 		case "uar.csv":
-			return writeUsersUARCSV(buildUARRows(regionOrder, results, filter))
+			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, filter))
 		default: // "toon"
-			return writeUsersToon(doc)
+			return writeUsersToon(out, doc)
 		}
 	},
 }
@@ -339,17 +360,17 @@ func buildUARRows(regionOrder []string, results []usrOrgResult, filter string) [
 
 // writeUsersUARCSV writes the uar.csv format: one row per role collection
 // membership, columns Role Collection,Description,Role Collection Members,Origin,Subaccount ID.
-func writeUsersUARCSV(rows []uarRow) error {
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
+func writeUsersUARCSV(w io.Writer, rows []uarRow) error {
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
 
-	if err := w.Write([]string{
+	if err := csvW.Write([]string{
 		"Role Collection", "Description", "Role Collection Members", "Origin", "Subaccount ID",
 	}); err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if err := w.Write([]string{
+		if err := csvW.Write([]string{
 			row.RoleCollection, row.Description, row.Member, row.Origin, row.SubaccountID,
 		}); err != nil {
 			return err
@@ -358,34 +379,34 @@ func writeUsersUARCSV(rows []uarRow) error {
 	return nil
 }
 
-func writeUsersToon(doc usrOutDoc) error {
+func writeUsersToon(w io.Writer, doc usrOutDoc) error {
 	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding output: %w", err)
 	}
-	if _, err = os.Stdout.Write(out); err != nil {
+	if _, err = w.Write(out); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout)
+	_, err = fmt.Fprintln(w)
 	return err
 }
 
-func writeUsersJSON(doc usrOutDoc) error {
+func writeUsersJSON(w io.Writer, doc usrOutDoc) error {
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, string(out))
+	fmt.Fprintln(w, string(out))
 	return nil
 }
 
 // writeUsersCSV writes one row per user with columns:
 // region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
-func writeUsersCSV(doc usrOutDoc) error {
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
+func writeUsersCSV(w io.Writer, doc usrOutDoc) error {
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
 
-	if err := w.Write([]string{
+	if err := csvW.Write([]string{
 		"region", "org_id", "org_name",
 		"user_id", "user_externalId", "user_origin", "user_name", "email", "lastLogonTime", "groups",
 	}); err != nil {
@@ -394,7 +415,7 @@ func writeUsersCSV(doc usrOutDoc) error {
 	for _, r := range doc.Regions {
 		for _, o := range r.Orgs {
 			for _, u := range o.Users {
-				if err := w.Write([]string{
+				if err := csvW.Write([]string{
 					r.ID, o.ID, o.Name,
 					u.ID, u.ExternalID, u.Origin, u.UserName, u.Email, u.LastLogonTime, u.Groups,
 				}); err != nil {
@@ -414,6 +435,7 @@ func init() {
 	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
+	usersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	usersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, user_name, lastLogonTime, groups)")
 	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups)")
