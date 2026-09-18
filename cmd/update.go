@@ -16,13 +16,18 @@ import (
 )
 
 const (
-	updateRepoAPI  = "https://api.github.com/repos/sap-pilot/btp-open-cli/releases/latest"
-	updateRepoBase = "https://github.com/sap-pilot/btp-open-cli/releases/download"
+	updateRepoAPI         = "https://api.github.com/repos/sap-pilot/btp-open-cli/releases/latest"
+	updateRepoAllAPI      = "https://api.github.com/repos/sap-pilot/btp-open-cli/releases?per_page=100"
+	updateRepoBase        = "https://github.com/sap-pilot/btp-open-cli/releases/download"
+	updateRepoReleasesURL = "https://github.com/sap-pilot/btp-open-cli/releases"
 )
 
 type ghRelease struct {
-	TagName string    `json:"tag_name"`
-	Assets  []ghAsset `json:"assets"`
+	TagName     string    `json:"tag_name"`
+	PublishedAt string    `json:"published_at"`
+	Prerelease  bool      `json:"prerelease"`
+	Draft       bool      `json:"draft"`
+	Assets      []ghAsset `json:"assets"`
 }
 
 type ghAsset struct {
@@ -41,10 +46,24 @@ command exits without downloading anything.
 
 If [release] is specified (e.g. "v0.9"), the binary is downloaded directly
 from https://github.com/sap-pilot/btp-open-cli/releases/download/{release}/
-without calling the GitHub API or checking the current version.`,
+without calling the GitHub API or checking the current version. This also
+works to downgrade to an older release.
+
+Use --list/-l to see every available release (including pre-releases) before
+picking one:
+  bo update --list
+  bo update v0.14.0`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		listFlag, _ := cmd.Flags().GetBool("list")
+
+		if listFlag {
+			if len(args) > 0 {
+				return fmt.Errorf("--list cannot be combined with a specific release argument")
+			}
+			return listReleases()
+		}
 
 		exePath, err := os.Executable()
 		if err != nil {
@@ -148,6 +167,96 @@ func fetchLatestRelease() (*ghRelease, error) {
 	return &release, nil
 }
 
+// fetchAllReleases returns every published release (newest first, matching
+// the GitHub API's default order), for `bo update --list`. Drafts are
+// excluded since they aren't installable; pre-releases are kept but flagged.
+func fetchAllReleases() ([]ghRelease, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest("GET", updateRepoAllAPI, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var releases []ghRelease
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return nil, fmt.Errorf("parsing releases response: %w", err)
+	}
+
+	published := releases[:0]
+	for _, r := range releases {
+		if !r.Draft {
+			published = append(published, r)
+		}
+	}
+	return published, nil
+}
+
+// listReleases prints every available release so the user can pick a version
+// to update or downgrade to via `bo update <release>`.
+func listReleases() error {
+	releases, err := fetchAllReleases()
+	if err != nil {
+		return fmt.Errorf("listing releases: %w", err)
+	}
+	if len(releases) == 0 {
+		return fmt.Errorf("no releases found at %s", updateRepoReleasesURL)
+	}
+
+	// GitHub's own "latest release" is the newest non-prerelease, non-draft
+	// release — draft is already filtered out by fetchAllReleases, and
+	// releases come back newest-first, so the first non-prerelease entry
+	// here is exactly what /releases/latest (used by `bo update` with no
+	// args) would report, without a second API call to confirm it.
+	var latestTag string
+	for _, r := range releases {
+		if !r.Prerelease {
+			latestTag = r.TagName
+			break
+		}
+	}
+
+	localVersion := strings.TrimPrefix(Version, "v")
+	fmt.Fprintf(os.Stdout, "Running version: %s\n\n", localVersion)
+	fmt.Fprintln(os.Stdout, "TAG          PUBLISHED    NOTES")
+	for _, r := range releases {
+		tagVersion := strings.TrimPrefix(r.TagName, "v")
+		published := r.PublishedAt
+		if t, perr := time.Parse(time.RFC3339, r.PublishedAt); perr == nil {
+			published = t.Format("2006-01-02")
+		}
+		var notes []string
+		if r.TagName == latestTag {
+			notes = append(notes, "latest")
+		}
+		if r.Prerelease {
+			notes = append(notes, "prerelease")
+		}
+		if tagVersion == localVersion {
+			notes = append(notes, "current")
+		}
+		fmt.Fprintf(os.Stdout, "%-12s %-12s %s\n", r.TagName, published, strings.Join(notes, ", "))
+	}
+	exampleTag := latestTag
+	if exampleTag == "" {
+		exampleTag = releases[0].TagName
+	}
+	fmt.Fprintf(os.Stdout, "\nRun 'bo update <tag>' to update or downgrade to a specific release, "+
+		"e.g. 'bo update %s'.\nFull list: %s\n", exampleTag, updateRepoReleasesURL)
+	return nil
+}
+
 // updateAssetName returns the expected GitHub release asset filename for the
 // current OS and architecture, e.g. "bo-linux-amd64" or "bo-windows-amd64.exe".
 func updateAssetName() string {
@@ -223,4 +332,5 @@ func init() {
 	updateCmd.GroupID = "common"
 	rootCmd.AddCommand(updateCmd)
 	updateCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
+	updateCmd.Flags().BoolP("list", "l", false, "List all available releases (including pre-releases) instead of updating")
 }

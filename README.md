@@ -1273,14 +1273,34 @@ bo update
 # Skip confirmation prompt
 bo update -y
 
-# Download a specific release (skips the GitHub API version check)
+# List every available release (including pre-releases) to choose from
+bo update --list
+
+# Download a specific release (skips the GitHub API version check) — also
+# how to downgrade to an older version
 bo update v0.9
 
 # Specific release, no prompt
 bo update v0.9 -y
 ```
 
-When no release is specified, the command fetches the latest release from GitHub, compares it to the running version, and exits cleanly if already up to date. When a release tag is given (e.g. `v0.9`), the binary is downloaded directly from `releases/download/{release}/` without calling the GitHub API or comparing versions.
+When no release is specified, the command fetches the latest release from GitHub, compares it to the running version, and exits cleanly if already up to date. When a release tag is given (e.g. `v0.9`), the binary is downloaded directly from `releases/download/{release}/` without calling the GitHub API or comparing versions — the same mechanism works to downgrade to an older release, not just upgrade.
+
+`--list`/`-l` prints every published release (tag, publish date, and whether it's a pre-release or your currently running version) so you can pick a version before running `bo update <tag>`:
+
+```
+$ bo update --list
+Running version: 0.15.0
+
+TAG          PUBLISHED    NOTES
+v0.15.0      2026-09-18   current
+v0.14.0      2026-09-09
+v0.13.0      2026-07-09
+...
+
+Run 'bo update <tag>' to update or downgrade to a specific release, e.g. 'bo update v0.15.0'.
+Full list: https://github.com/sap-pilot/btp-open-cli/releases
+```
 
 The platform-matching binary (`bo-{os}-{arch}`) is always used. Replacement strategy:
 
@@ -1464,6 +1484,89 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 - The `--format`, `--include`/`--exclude`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
 - For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
 - Run `go vet ./...` after adding a command to catch any import or signature issues before building.
+
+## Using `bo` as an agent skill
+
+This repo ships [`skills/btp-open-cli/SKILL.md`](skills/btp-open-cli/SKILL.md),
+a packaged skill that teaches an AI coding agent (Claude Code, Codex, Grok, or
+similar) how to drive `bo` for bulk BTP administration — inventory/audit
+tasks freely, plus guardrails for write commands (`create-users`,
+`delete-users`, `create-org-space-users`, `delete-org-space-users`,
+`create-/update-/delete-subaccount-destinations`) so an agent previews
+changes, scopes orgs explicitly, and never adds `-y`/skips a confirmation
+prompt on its own initiative.
+
+The skill also knows how to fetch the `bo` binary itself if it's missing —
+once installed, the agent detects your OS/arch and downloads the matching
+pre-built binary from the [latest
+release](https://github.com/sap-pilot/btp-open-cli/releases/latest) on its
+own, rather than asking you to clone and compile the repo (or download it by
+hand). Prefer to do it yourself instead? See [Installation](#installation)
+above.
+
+### Install
+
+**Option A — `agent-skills-cli` (recommended, no repo checkout needed)**
+
+```bash
+npx agent-skills-cli add sap-pilot/btp-open-cli
+```
+
+Fetches `skills/btp-open-cli/SKILL.md` straight from this repo on GitHub and
+installs it into your agent's skills folder — no need to clone
+`btp-open-cli` just to pick up the skill.
+
+**Option B — Claude Code, manual copy from a local clone**
+
+Copy (or symlink, to track updates) the skill directory into your skills
+folder. User-level makes it available in any project:
+
+```bash
+mkdir -p ~/.claude/skills
+cp -r skills/btp-open-cli ~/.claude/skills/btp-open-cli
+```
+
+Or project-scoped, into a specific repo's `.claude/skills/`:
+
+```bash
+mkdir -p .claude/skills
+cp -r /path/to/btp-open-cli/skills/btp-open-cli .claude/skills/btp-open-cli
+```
+
+**Codex, Grok, or other agents without a confirmed native skill format** —
+the file's content (guardrails, commands, examples) is plain markdown with no
+Claude Code–specific syntax, so any agent that can read a file and run shell
+commands can follow it; there's just no auto-discovery to rely on. Point the
+agent at the file directly, or fold its contents into whatever
+instructions/system-prompt file it reads (e.g. `AGENTS.md`):
+
+```bash
+cat skills/btp-open-cli/SKILL.md >> AGENTS.md
+```
+
+### Use
+
+Once installed, just describe the task — the agent loads the skill based on
+its `description` (org/user/role-collection/destination administration via
+`bo`) and follows the guardrails automatically:
+
+```
+> Export a User Access Review CSV for every prod org and summarize who has
+  the "Subaccount Viewer" role.
+
+> Bulk-create the users in new-hires.csv, but show me the preview first and
+  wait for my go-ahead before actually creating anything.
+
+> Compare destinations between our staging and prod subaccounts and tell me
+  what's different — don't change anything.
+```
+
+Because the write-command guardrails are explicit in the skill (preview
+first, never self-approve `-y`, treat the destination write commands as
+irreversible since they have no confirmation step), an agent following it
+will show you a plan and a preview before it runs anything that changes BTP
+state, and will scope every command to the orgs you actually mean rather than
+relying on a stale `bo orgs` session default.
 
 ## More help
 

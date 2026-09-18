@@ -31,6 +31,33 @@ func TestUpdate_AssetName(t *testing.T) {
 	}
 }
 
+// TestUpdate_List_ConflictsWithReleaseArg verifies --list rejects a specific
+// release argument up front, before making any network call.
+func TestUpdate_List_ConflictsWithReleaseArg(t *testing.T) {
+	_, _, err := runCmd(t, "update", "--list", "v0.14.0")
+	if err == nil {
+		t.Fatal("expected an error when --list is combined with a release argument")
+	}
+	if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// TestUpdate_List_NoNetwork tests that "update --list" fails gracefully when
+// the GitHub API is unreachable (which it is in unit tests), same as
+// TestUpdate_NoArgs_NoNetwork above — the hardcoded API URL can't be
+// redirected without source changes, so this just checks for a clean error
+// instead of a panic or a hang.
+func TestUpdate_List_NoNetwork(t *testing.T) {
+	_, _, err := runCmd(t, "update", "--list")
+	if err != nil && !strings.Contains(err.Error(), "listing releases") &&
+		!strings.Contains(err.Error(), "connection refused") &&
+		!strings.Contains(err.Error(), "no such host") &&
+		!strings.Contains(err.Error(), "dial") {
+		t.Errorf("unexpected error type: %v", err)
+	}
+}
+
 // TestUpdate_VersionString tests that the versionString function works correctly.
 func TestUpdate_VersionString(t *testing.T) {
 	// Save and restore the Version variable.

@@ -33,6 +33,12 @@ SSO (one-time passcode):
   bo login --sso --region us10
   bo login --sso --regions us10,eu10
 
+SSO, non-interactive (e.g. scripts, or an agent that can't answer an
+interactive passcode prompt): pass the code(s) via --passcode instead, in the
+same order as --regions — this skips the prompt entirely, so get a code from
+each region's passcode URL first (visit it in a browser while logged in):
+  bo login --sso --regions us10,eu10 --passcode <code-for-us10>,<code-for-eu10>
+
 Omit region flags to reuse the regions from the previous login.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sso, _ := cmd.Flags().GetBool("sso")
@@ -41,6 +47,7 @@ Omit region flags to reuse the regions from the previous login.`,
 		apiURL, _ := cmd.Flags().GetString("api")
 		usernameFlag, _ := cmd.Flags().GetString("username")
 		passwordFlag, _ := cmd.Flags().GetString("password")
+		passcodeFlag, _ := cmd.Flags().GetString("passcode")
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
@@ -142,28 +149,48 @@ Omit region flags to reuse the regions from the previous login.`,
 				fmt.Fprintf(os.Stdout, "  %s → %s/passcode\n", regionName, r.endpoints.Authorization)
 			}
 			fmt.Fprintln(os.Stdout)
-			for _, r := range epResults {
-				regionName := store.APIURLToRegion(r.apiURL)
-				fmt.Fprintf(os.Stdout, "%s Passcode> ", regionName)
-				codeBytes, err := readPasswordCtx(ctx)
-				fmt.Fprintln(os.Stdout)
-				if err != nil {
-					if errors.Is(err, context.Canceled) {
-						fmt.Fprintln(os.Stdout, "Aborted.")
-						return nil
+
+			if passcodeFlag != "" {
+				// Non-interactive: codes were supplied up front, positionally
+				// matching --regions/epResults order — skips the prompt (and
+				// its terminal requirement) entirely.
+				codes := splitCSV(passcodeFlag)
+				if len(codes) != len(epResults) {
+					return fmt.Errorf("--passcode has %d code(s) but %d region(s) are being logged into — provide one per region, comma-separated, in the same order as --regions", len(codes), len(epResults))
+				}
+				for i, r := range epResults {
+					regionName := store.APIURLToRegion(r.apiURL)
+					ssoCodes = append(ssoCodes, ssoPasscode{
+						apiURL:   r.apiURL,
+						region:   regionName,
+						authEP:   r.endpoints.Authorization,
+						passcode: codes[i],
+					})
+				}
+			} else {
+				for _, r := range epResults {
+					regionName := store.APIURLToRegion(r.apiURL)
+					fmt.Fprintf(os.Stdout, "%s Passcode> ", regionName)
+					codeBytes, err := readPasswordCtx(ctx)
+					fmt.Fprintln(os.Stdout)
+					if err != nil {
+						if errors.Is(err, context.Canceled) {
+							fmt.Fprintln(os.Stdout, "Aborted.")
+							return nil
+						}
+						return fmt.Errorf("reading passcode for %s: %w", regionName, err)
 					}
-					return fmt.Errorf("reading passcode for %s: %w", regionName, err)
+					code := strings.TrimSpace(string(codeBytes))
+					if code == "" {
+						return fmt.Errorf("passcode for %s cannot be empty", regionName)
+					}
+					ssoCodes = append(ssoCodes, ssoPasscode{
+						apiURL:   r.apiURL,
+						region:   regionName,
+						authEP:   r.endpoints.Authorization,
+						passcode: code,
+					})
 				}
-				code := strings.TrimSpace(string(codeBytes))
-				if code == "" {
-					return fmt.Errorf("passcode for %s cannot be empty", regionName)
-				}
-				ssoCodes = append(ssoCodes, ssoPasscode{
-					apiURL:   r.apiURL,
-					region:   regionName,
-					authEP:   r.endpoints.Authorization,
-					passcode: code,
-				})
 			}
 		}
 
@@ -307,4 +334,5 @@ func init() {
 	loginCmd.Flags().String("api", "", "Full CF API endpoint URL (overrides --region)")
 	loginCmd.Flags().StringP("username", "u", "", "Username (email); skips the interactive email prompt")
 	loginCmd.Flags().StringP("password", "p", "", "Password; skips the interactive password prompt")
+	loginCmd.Flags().String("passcode", "", "One-time SSO passcode(s), comma-separated in the same order as --regions/--region; skips the interactive passcode prompt(s) (only used with --sso)")
 }
