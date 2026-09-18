@@ -4,6 +4,14 @@
 
 ### Added
 
+- **`bo orgs` — interactive default org scope for session commands**
+
+  `bo orgs` now shows a numbered checkbox picker (arrow keys or digit-jump to move, space to toggle, `a` to select all, `c` to clear, enter to confirm) and saves the selection as a session-scoped default scope, cleared on `login`/`logoff`. `org-users`, `org-space-users`, `apps`, `users`, `role-collections`, `subaccount-destinations` (including its `create`/`update`/`delete` variants), and `describe-subaccount` use this default scope whenever `--org`/`--orgs` is omitted, and point you at `bo orgs` if none has been set yet — they no longer prompt interactively themselves. The destination write commands also gained `--orgs` support and now apply to multiple target orgs like the read commands. All of the above gained an `--output`/`-o` flag, since the interactive picker owns stdout and shell `>` redirection doesn't work for them. `bo orgs`'s own output columns are now ordered `region,org_name,org_id` to match the picker; `--orgs`/`--excludeOrgs` CSV parsing accepts either column order.
+
+- **`--format uar.csv` for `users` and `org-space-users` — User Access Review exports**
+
+  `users --format uar.csv` produces one row per role-collection membership (columns: `Role Collection,Description,Role Collection Members,Origin,Subaccount ID`); `org-space-users --format uar.csv` produces one row per org/space membership (columns: `Space/Org ID,Space/Org Name,Group Type,Member,Role`).
+
 - **`count-lines [<folder>]` — count total lines of source code**
 
   Walks `<folder>` (default: current folder) and reports the number of lines in
