@@ -1273,14 +1273,34 @@ bo update
 # Skip confirmation prompt
 bo update -y
 
-# Download a specific release (skips the GitHub API version check)
+# List every available release (including pre-releases) to choose from
+bo update --list
+
+# Download a specific release (skips the GitHub API version check) — also
+# how to downgrade to an older version
 bo update v0.9
 
 # Specific release, no prompt
 bo update v0.9 -y
 ```
 
-When no release is specified, the command fetches the latest release from GitHub, compares it to the running version, and exits cleanly if already up to date. When a release tag is given (e.g. `v0.9`), the binary is downloaded directly from `releases/download/{release}/` without calling the GitHub API or comparing versions.
+When no release is specified, the command fetches the latest release from GitHub, compares it to the running version, and exits cleanly if already up to date. When a release tag is given (e.g. `v0.9`), the binary is downloaded directly from `releases/download/{release}/` without calling the GitHub API or comparing versions — the same mechanism works to downgrade to an older release, not just upgrade.
+
+`--list`/`-l` prints every published release (tag, publish date, and whether it's a pre-release or your currently running version) so you can pick a version before running `bo update <tag>`:
+
+```
+$ bo update --list
+Running version: 0.15.0
+
+TAG          PUBLISHED    NOTES
+v0.15.0      2026-09-18   current
+v0.14.0      2026-09-09
+v0.13.0      2026-07-09
+...
+
+Run 'bo update <tag>' to update or downgrade to a specific release, e.g. 'bo update v0.15.0'.
+Full list: https://github.com/sap-pilot/btp-open-cli/releases
+```
 
 The platform-matching binary (`bo-{os}-{arch}`) is always used. Replacement strategy:
 

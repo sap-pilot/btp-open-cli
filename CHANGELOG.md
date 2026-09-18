@@ -24,7 +24,16 @@
   bo login --sso --regions us10,eu10 --passcode <code-for-us10>,<code-for-eu10>
   ```
 
-## v0.14.0 — 2026-09-09
+- **`bo update --list`/`-l` — list all available releases**
+
+  Prints every published release from GitHub (tag, publish date, and whether it's a pre-release or the currently running version) so you can pick one before running `bo update <tag>` — the same mechanism `bo update <tag>` already used to install a specific release also works to downgrade to an older one.
+
+  ```bash
+  bo update --list
+  bo update v0.14.0   # update or downgrade to a specific release
+  ```
+
+## v0.14.0 — 2026-09-17
 
 ### Added
 
