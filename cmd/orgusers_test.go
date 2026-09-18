@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"btp-open-cli/internal/store"
 )
 
 // orgUsersPage returns a CF v3 /v3/organizations/{id}/users response.
@@ -28,13 +30,30 @@ func TestOrgUsers_NotLoggedIn(t *testing.T) {
 	}
 }
 
-func TestOrgUsers_DefaultToon(t *testing.T) {
+func TestOrgUsers_NoScopeNoFlags(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
-		"/v3/organizations":              singleOrgPage("org1", "my-org"),
-		"/v3/organizations/org1/users":   orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
-		"/v3/roles":                      emptyPage(),
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/roles":         emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
+
+	_, _, err := runCmd(t, "org-users")
+	if err == nil {
+		t.Fatal("expected error when no --org/--orgs and no default org scope is set")
+	}
+	if !strings.Contains(err.Error(), "bo orgs") {
+		t.Errorf("expected error to mention 'bo orgs', got: %v", err)
+	}
+}
+
+func TestOrgUsers_DefaultToon(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations":            singleOrgPage("org1", "my-org"),
+		"/v3/organizations/org1/users": orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
+		"/v3/roles":                    emptyPage(),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "org-users")
 	if err != nil {
@@ -45,9 +64,9 @@ func TestOrgUsers_DefaultToon(t *testing.T) {
 	}
 }
 
-func TestOrgUsers_Filter(t *testing.T) {
+func TestOrgUsers_Include(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
-		"/v3/organizations":            singleOrgPage("org1", "my-org"),
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
 		"/v3/organizations/org1/users": orgUsersPage(
 			cfUser("u1", "alice@example.com", "sap.ids"),
 			cfUser("u2", "bob@example.com", "uaa"),
@@ -55,16 +74,53 @@ func TestOrgUsers_Filter(t *testing.T) {
 		"/v3/roles": emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
-	stdout, _, err := runCmd(t, "org-users", "--filter", "alice")
+	stdout, _, err := runCmd(t, "org-users", "--include", "alice")
 	if err != nil {
-		t.Fatalf("org-users --filter failed: %v", err)
+		t.Fatalf("org-users --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "alice@example.com") {
 		t.Errorf("expected alice in filtered output, got: %q", stdout)
 	}
 	if strings.Contains(stdout, "bob@example.com") {
 		t.Errorf("bob should be filtered out, got: %q", stdout)
+	}
+}
+
+func TestOrgUsers_IncludeExcludeCSVKeywords(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/organizations/org1/users": orgUsersPage(
+			cfUser("u1", "alice@example.com", "sap.ids"),
+			cfUser("u2", "bob@example.com", "uaa"),
+			cfUser("u3", "carol@example.com", "sap.default"),
+		),
+		"/v3/roles": emptyPage(),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "org-users", "--include", "alice,carol")
+	if err != nil {
+		t.Fatalf("org-users --include failed: %v", err)
+	}
+	if !strings.Contains(stdout, "alice@example.com") || !strings.Contains(stdout, "carol@example.com") {
+		t.Errorf("expected alice and carol in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("bob should be excluded by --include, got: %q", stdout)
+	}
+
+	stdout, _, err = runCmd(t, "org-users", "--exclude", "alice,bob")
+	if err != nil {
+		t.Fatalf("org-users --exclude failed: %v", err)
+	}
+	if strings.Contains(stdout, "alice@example.com") || strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("alice and bob should be excluded, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "carol@example.com") {
+		t.Errorf("expected carol in output, got: %q", stdout)
 	}
 }
 
@@ -75,6 +131,7 @@ func TestOrgUsers_CSV(t *testing.T) {
 		"/v3/roles":                    emptyPage(),
 	})
 	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
 	stdout, _, err := runCmd(t, "org-users", "--format", "csv")
 	if err != nil {
@@ -117,5 +174,40 @@ func TestOrgUsers_OrgFilter(t *testing.T) {
 	// org-two should not appear
 	if strings.Contains(stdout, "org-two") {
 		t.Errorf("org-two should be filtered out, got: %q", stdout)
+	}
+}
+
+func TestOrgUsers_DefaultScope_MultipleOrgs(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": mustJSONStr(map[string]interface{}{
+			"pagination": map[string]interface{}{"total_pages": 1},
+			"resources": []map[string]string{
+				{"guid": "org1", "name": "org-one"},
+				{"guid": "org2", "name": "org-two"},
+			},
+		}),
+		"/v3/organizations/org1/users": orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
+		"/v3/organizations/org2/users": orgUsersPage(cfUser("u2", "bob@example.com", "sap.ids")),
+		"/v3/roles":                    emptyPage(),
+	})
+	setupTestEnv(t, srv.URL)
+	creds, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	creds.DefaultOrgScope = []store.OrgScopeRef{
+		{Region: store.APIURLToRegion(srv.URL), ID: "org1", Name: "org-one", APIURL: srv.URL},
+		{Region: store.APIURLToRegion(srv.URL), ID: "org2", Name: "org-two", APIURL: srv.URL},
+	}
+	if err := store.Save(creds); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, err := runCmd(t, "org-users")
+	if err != nil {
+		t.Fatalf("org-users with multi-org default scope failed: %v", err)
+	}
+	if !strings.Contains(stdout, "org-one") || !strings.Contains(stdout, "org-two") {
+		t.Errorf("expected both orgs from default scope, got: %q", stdout)
 	}
 }

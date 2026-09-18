@@ -80,91 +80,6 @@ go build -o bo
 mv bo ~/.local/bin/   # optional
 ```
 
-## Custom Command Development
-
-`btp-open-cli` is designed to be forked and extended. The `cmd/custom/` package is the dedicated home for commands that belong to your fork — they live alongside the built-in commands, build into the same binary, and are completely invisible to upstream merges.
-
-### How it works
-
-All commands — built-in and custom — are registered with Cobra's root command via `cmd.RegisterCommand`. Custom commands go in `cmd/custom/`, which is a plain Go package imported by `main.go` via a blank import:
-
-```go
-import (
-    "btp-open-cli/cmd"
-    _ "btp-open-cli/cmd/custom" // loads any custom commands
-)
-```
-
-### Adding a custom command
-
-1. **Copy the template** that ships with the repo:
-
-```bash
-cp cmd/custom/example_custom_command.go.template cmd/custom/hello.go
-```
-
-2. **Edit the new file.** The only rule: call `cmd.RegisterCommand(...)` inside `init()`.
-
-```go
-package custom
-
-import (
-    "fmt"
-
-    "btp-open-cli/cmd"
-
-    "github.com/spf13/cobra"
-)
-
-func init() {
-    cmd.RegisterCommand(&cobra.Command{
-        Use:   "hello",
-        Short: "Say hello (example custom command)",
-        RunE: func(c *cobra.Command, args []string) error {
-            fmt.Fprintln(c.OutOrStdout(), "Hello from a custom command!")
-            return nil
-        },
-    })
-}
-```
-
-3. **Build and run:**
-
-```bash
-go build -o bo .
-./bo hello
-# Hello from a custom command!
-```
-
-Your new command appears alongside all built-in commands in `./bo --help`.
-
-### Pulling upstream changes
-
-Because your custom files live in `cmd/custom/` and upstream only ever touches `cmd/*.go` (never `cmd/custom/`), a `git pull upstream main` will never conflict with your custom commands. Add new features, bump versions, pick up bug fixes — your commands are untouched.
-
-### Running tests
-
-After adding custom code, run the full test suite to confirm nothing is broken:
-
-```bash
-go test ./...
-```
-
-To run only the command-layer tests:
-
-```bash
-go test ./cmd/...
-```
-
-All tests use mocked REST API servers — no real BTP credentials or network access required.
-
-### Tips for vibe-coding new commands
-
-- Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
-- The `--format`, `--filter`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
-- For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
-- Run `go vet ./...` after adding a command to catch any import or signature issues before building.
-
 ## Built-in Commands
 
 ### Common
@@ -173,6 +88,7 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 |---|---|
 | [`login`](#login) | Authenticate against one or more SAP BTP Cloud Foundry regions |
 | [`logoff`](#logoff) | Clear all stored OAuth tokens and cached credentials |
+| [`orgs`](#orgs) | Interactively select the default org scope for this session |
 | [`update`](#update) | Update the `bo` binary in place from a specific or the latest GitHub release |
 | [`version`](#version) | Print the current version |
 
@@ -180,7 +96,6 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 
 | Command | Description |
 |---|---|
-| [`orgs`](#orgs) | List all accessible CF organizations as CSV |
 | [`org-spaces`](#org-spaces) | List all accessible CF organizations and their spaces |
 | [`org-users`](#org-users) | List users across all accessible CF organizations |
 | [`org-space-users`](#org-space-users) | List users at both organization and space level |
@@ -222,6 +137,7 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 |---|---|
 | [`clear-logs`](#clear-logs) | Delete all local log files under `~/.bo/log/` |
 | [`completion`](#completion) | Generate shell autocompletion script (bash, zsh, fish, PowerShell) |
+| [`count-lines`](#count-lines) | Count total lines of source code files within a folder |
 | [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
 
 ### `login`
@@ -268,45 +184,64 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 ### `orgs`
 
-List all accessible CF organizations across one or more regions.
+Interactively select which accessible CF orgs should be the **default scope** for
+org-aware commands (`org-users`, `org-space-users`, `apps`, `users`,
+`role-collections`, `subaccount-destinations` and its create/update/delete
+variants, and `describe-subaccount`) when they're run without `--org` or `--orgs`.
+
+Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
+Controls: up/down to move the highlight, space to toggle the highlighted org,
+type an org's number to jump to and toggle it directly, `a` to select every
+org, `c` to clear the selection, and enter to confirm — or just confirm the
+highlighted org if nothing was checked.
+
+**The selection applies only to the current login session.** It's saved to
+`~/.bo/credentials.json`, but running `bo login` or `bo logoff` clears it — you'll
+need to run `bo orgs` again (or pass `--org`/`--orgs` directly) after your next login.
+Running `bo orgs` again within the same session pre-checks whatever is currently
+selected in the picker, so you can tweak the scope instead of starting over —
+only `bo login`/`bo logoff` clear it.
+
+If an org-aware command is run with no `--org`/`--orgs` and no default scope has
+been set yet, it prints an error telling you to run `bo orgs` first.
 
 ```bash
-# TOON output (default)
+# Interactively pick the default org scope for this session
 bo orgs
 
-# JSON output
-bo orgs --format json
+# Select every accessible org without prompting
+bo orgs --all
 
-# CSV output (region,org_id,org_name)
-bo orgs --format csv
+# Narrow the picker (or --all selection) to orgs whose name contains any of
+# these comma-separated, case-insensitive keywords
+bo orgs --include prod,staging
+bo orgs --exclude sandbox,test
 
 # Specific regions
 bo orgs --regions us10,us20,eu10
 
-# Only show orgs whose org_name contains a pattern
-bo orgs --include prod
+# JSON output of the orgs just selected
+bo orgs --all --format json
 
-# Exclude orgs whose org_name contains a pattern
-bo orgs --exclude sandbox
+# Write the selection to a file instead of stdout — shell '>' doesn't work
+# here since the interactive picker also writes to stdout
+bo orgs --format csv --output my-orgs.csv
 
-# Save as CSV for use with --orgs / --excludeOrgs flags
-bo orgs --format csv --regions us10,us20 > my-orgs.csv
-
-# Exclude production orgs when creating users
-bo orgs --format csv --regions us10,us20 | grep prod > prod-orgs.csv
-bo create-org-space-users users.csv --excludeOrgs prod-orgs.csv
+# Non-interactive: select every prod org and save as a reusable --orgs CSV
+bo orgs --all --include prod --format csv -o prod-orgs.csv
+bo create-org-space-users users.csv --orgs prod-orgs.csv
 ```
 
-Default TOON output:
+Default TOON output (showing the orgs just selected, fields ordered to match the picker):
 ```
 regions:
   - region: us10
     orgs:
-      - org_id: <org-guid>
-        org_name: my-org
+      - org_name: my-org
+        org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_id,org_name`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, and `role-collections`.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -325,11 +260,12 @@ bo org-spaces --format csv
 # Specific regions
 bo org-spaces --regions us10,us20,eu10
 
-# Only show spaces where org_name or space_name contains a pattern
-bo org-spaces --include prod
+# Only show spaces where org_name or space_name contains any of these
+# comma-separated, case-insensitive keywords
+bo org-spaces --include prod,staging
 
-# Exclude spaces where org_name or space_name contains a pattern
-bo org-spaces --exclude sandbox
+# Exclude spaces where org_name or space_name contains any of these keywords
+bo org-spaces --exclude sandbox,test
 ```
 
 TOON output format:
@@ -352,8 +288,12 @@ CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space;
 
 List all users across every accessible CF organization.
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
 ```bash
-# Default TOON output
+# Default TOON output (uses the default scope from `bo orgs`)
 bo org-users
 
 # JSON output
@@ -362,8 +302,12 @@ bo org-users --format json
 # CSV output
 bo org-users --format csv
 
-# Filter by name, id, origin, or role
-bo org-users --filter manager
+# Only include users where id, name, origin, or roles contain any of these
+# comma-separated, case-insensitive keywords
+bo org-users --include manager,auditor
+
+# Exclude users where id, name, origin, or roles contain any of these keywords
+bo org-users --exclude sap.default,sap.ids
 
 # Restrict to a single org by GUID
 bo org-users --org <org-guid>
@@ -373,14 +317,23 @@ bo org-users --orgs target-orgs.csv
 
 # Specific regions
 bo org-users --regions us10,us20,eu10
+
+# Write output to a file instead of stdout
+bo org-users --output org-users.csv
 ```
 
 ### `org-space-users`
 
 List users at both the organization and space level.
 
+The `--format uar.csv` option produces a User Access Review export: one row per org/space membership, columns `Space/Org ID,Space/Org Name,Group Type,Member,Role`. `Group Type` is `Organization` or `Space`; `Role` lists all roles the member holds at that scope, comma-separated.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
 ```bash
-# Default TOON output
+# Default TOON output (uses the default scope from `bo orgs`)
 bo org-space-users
 
 # JSON output
@@ -389,8 +342,16 @@ bo org-space-users --format json
 # CSV output
 bo org-space-users --format csv
 
-# Filter by name, id, origin, or role
-bo org-space-users --filter space_developer
+# User Access Review CSV: one row per org/space membership
+# (columns: Space/Org ID,Space/Org Name,Group Type,Member,Role)
+bo org-space-users --format uar.csv
+
+# Only include users where id, name, origin, or roles contain any of these
+# comma-separated, case-insensitive keywords
+bo org-space-users --include manager,auditor
+
+# Exclude users where id, name, origin, or roles contain any of these keywords
+bo org-space-users --exclude sap.default,sap.ids
 
 # Restrict to a single org by GUID
 bo org-space-users --org <org-guid>
@@ -400,6 +361,9 @@ bo org-space-users --orgs target-orgs.csv
 
 # Specific regions
 bo org-space-users --regions us10,us20,eu10
+
+# Write output to a file instead of stdout
+bo org-space-users --output org-space-users.csv
 ```
 
 ### `create-org-space-users`
@@ -448,11 +412,13 @@ bo create-org-space-users org-space-users.csv --excludeOrgs prod-orgs.csv
 # Only process rows for specific regions (also restricts broadcast rows)
 bo create-org-space-users org-space-users.csv --regions eu20,us10
 
-# Skip users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo create-org-space-users org-space-users.csv --exclude sap.ids -y
+# Skip users where cfuser_name, cfuser_origin, or cfuser_roles contain any of
+# these comma-separated, case-insensitive keywords
+bo create-org-space-users org-space-users.csv --exclude sap.ids,sap.default -y
 
-# Only include users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo create-org-space-users org-space-users.csv --include sap.custom -y
+# Only include users where cfuser_name, cfuser_origin, or cfuser_roles contain
+# any of these keywords
+bo create-org-space-users org-space-users.csv --include sap.custom,sap.ids -y
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -492,11 +458,13 @@ bo delete-org-space-users org-space-users.csv -y
 # Only process rows for specific regions (also restricts broadcast rows)
 bo delete-org-space-users org-space-users.csv --regions eu20,us10
 
-# Skip users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo delete-org-space-users org-space-users.csv --exclude sap.ids -y
+# Skip users where cfuser_name, cfuser_origin, or cfuser_roles contain any of
+# these comma-separated, case-insensitive keywords
+bo delete-org-space-users org-space-users.csv --exclude sap.ids,sap.default -y
 
-# Only include users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo delete-org-space-users org-space-users.csv --include sap.custom -y
+# Only include users where cfuser_name, cfuser_origin, or cfuser_roles contain
+# any of these keywords
+bo delete-org-space-users org-space-users.csv --include sap.custom,sap.ids -y
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -505,12 +473,18 @@ Without `-y`, a TOON preview of all targeted users and scopes is shown before an
 
 List users from the XSUAA (Authorization and Trust Management) `apiaccess` service across all accessible CF organizations.
 
-For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials (clientId, clientSecret) are fetched on demand and never stored locally.
 
+The `--format uar.csv` option produces a User Access Review export: one row per role collection membership, so a user assigned to N role collections produces N rows with the other fields duplicated across them. Role collections with no members still get one row, with `N/A` in Role Collection Members and Origin. Rows are sorted by Role Collection name. This format fetches each org's full role collection inventory (for descriptions) in addition to its users, and ignores `--fields`/`--excludeFields` since its columns are fixed.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
 ```bash
-# List XSUAA users across all orgs in stored regions
+# List XSUAA users across all orgs in the default scope from `bo orgs`
 bo users
 
 # JSON output
@@ -518,6 +492,10 @@ bo users --format json
 
 # CSV output
 bo users --format csv
+
+# User Access Review CSV: one row per role collection membership
+# (columns: Role Collection,Description,Role Collection Members,Origin,Subaccount ID)
+bo users --format uar.csv
 
 # Skip interactive prompts for orgs with no service instance or key
 bo users --no-prompt
@@ -534,9 +512,12 @@ bo users --orgs target-orgs.csv
 # Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo users --excludeOrgs prod-orgs.csv
 
-# Filter output — only users matching a substring in any field
-bo users --filter "@example.com"
-bo users --filter "sap.ids"
+# Only include users where any user field contains any of these
+# comma-separated, case-insensitive keywords
+bo users --include sap.ids,sap.custom
+
+# Exclude users where any user field contains any of these keywords
+bo users --exclude sap.default,uaa
 
 # Include only specific fields in output
 bo users --fields user_id,user_name,email,user_origin
@@ -545,7 +526,10 @@ bo users --fields user_id,user_name,email,user_origin
 bo users --excludeFields lastLogonTime,groups
 
 # Combine filtering and field selection
-bo users --filter "sap.ids" --excludeFields groups --regions us10,us20
+bo users --include "sap.ids" --excludeFields groups --regions us10,us20
+
+# Write output to a file instead of stdout
+bo users --output users.csv
 ```
 
 Default TOON output:
@@ -578,7 +562,7 @@ bo create-users <users.csv> [-y]
 The CSV must contain at least the columns `region`, `org_id`, `user_origin`, `user_name`, `email`, and `groups`; extra columns are ignored. The `groups` column is semicolon-separated role collection names. The output of `bo users --format csv` can be passed directly:
 
 ```bash
-bo users --org {orgId} --filter sap.default --format csv > default-users.csv
+bo users --org {orgId} --include sap.default --format csv > default-users.csv
 sed -i 's/sap.default/sap.custom/g' default-users.csv
 bo create-users default-users.csv
 ```
@@ -598,11 +582,12 @@ bo create-users users.csv
 # Skip confirmation prompt
 bo create-users users.csv -y
 
-# Skip users whose user_name, email, or groups match a pattern
-bo create-users users.csv --exclude sap.ids -y
+# Skip users where user_name, email, or groups contain any of these
+# comma-separated, case-insensitive keywords
+bo create-users users.csv --exclude sap.ids,sap.default -y
 
-# Only include users whose user_name, email, or groups match a pattern
-bo create-users users.csv --include sap.custom -y
+# Only include users where user_name, email, or groups contain any of these keywords
+bo create-users users.csv --include sap.custom,sap.ids -y
 ```
 
 Preview output format (TOON):
@@ -662,11 +647,12 @@ bo delete-users users.csv
 # Skip confirmation prompt
 bo delete-users users.csv -y
 
-# Skip users whose user_id, user_name, email, or groups match a pattern
-bo delete-users users.csv --exclude alice@example.com -y
+# Skip users where user_id, user_name, email, or groups contain any of these
+# comma-separated, case-insensitive keywords
+bo delete-users users.csv --exclude alice@example.com,bob@example.com -y
 
-# Only include users whose user_id, user_name, email, or groups match a pattern
-bo delete-users users.csv --include sap.custom -y
+# Only include users where user_id, user_name, email, or groups contain any of these keywords
+bo delete-users users.csv --include sap.custom,sap.ids -y
 ```
 
 Preview output format (TOON):
@@ -687,12 +673,16 @@ Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is pr
 
 List XSUAA roles and role collections (with their role references) across all accessible CF organizations.
 
-For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry or Ctrl-C to skip the org. Use `--no-prompt` to skip silently instead.
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
 ```bash
-# List roles and role collections across all orgs in stored regions
+# List roles and role collections across all orgs in the default scope from `bo orgs`
 bo role-collections
 
 # Skip interactive prompts for orgs with no service instance or key
@@ -712,6 +702,9 @@ bo role-collections --excludeOrgs prod-orgs.csv
 
 # JSON output
 bo role-collections --format json
+
+# Write output to a file instead of stdout
+bo role-collections --output role-collections.json --format json
 ```
 
 Output format (TOON):
@@ -745,7 +738,12 @@ Describe a single BTP subaccount in detail: CIS account metadata, subaccount-lev
 
 The `--org` value is matched by exact GUID or case-insensitive substring on the org name. The CIS `central-viewer` service key is auto-discovered once from any accessible org/space and cached; subsequent runs reuse the cached credentials.
 
-By default the CF org GUID is used as the BTP subaccount ID in the CIS API call. Use `--subaccount` to specify a different subaccount GUID when the CF org GUID and BTP subaccount GUID differ.
+By default the CF org GUID is used as the BTP subaccount ID in the CIS API call. Use `--subaccount` to specify a different subaccount GUID when the CF org GUID and BTP subaccount GUID differ — this only works with a single target org.
+
+If `--org` is not given, the default org scope selected via [`bo orgs`](#orgs) is
+used; if no default scope has been set either, run `bo orgs` first or pass
+`--org`/`--orgs` directly. With more than one target org, `--format json`/`toon`
+returns a list of per-org results instead of a single object.
 
 **Prerequisites:**
 - A `cis` service instance with plan `central-viewer` and at least one service key must exist in any accessible org/space. If not found, the command prints instructions and exits.
@@ -769,6 +767,12 @@ bo describe-subaccount --org my-org-name --no-prompt
 
 # Scope region search
 bo describe-subaccount --org my-org-name --regions us10,us20,eu10
+
+# Describe every org in the default scope selected via `bo orgs`
+bo describe-subaccount
+
+# Write output to a file instead of stdout
+bo describe-subaccount --org my-org-name --output subaccount.json --format json
 ```
 
 Output format (TOON):
@@ -823,7 +827,7 @@ rolecollections:
 
 List all instance-level destinations across every destination service instance found in a given CF space.
 
-The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt allows you to create one and press Enter to retry.
+The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry, type 's' to skip that instance, or Ctrl-C to abort.
 
 ```bash
 # List destinations — default output: Name, URL, sap-client (TOON)
@@ -839,14 +843,19 @@ bo space-destinations --space <space-guid> --format csv
 bo space-destinations --space <space-guid> --full
 bo space-destinations --space <space-guid> --full --format json
 
-# Filter by substring (case-insensitive, matched against any property key or value)
-bo space-destinations --space <space-guid> --filter MDG
+# Only include destinations where any property contains any of these
+# comma-separated keywords (substring, case-insensitive)
+bo space-destinations --space <space-guid> --include MDG
 
-# Filter by glob pattern (* matches any sequence of characters)
-bo space-destinations --space <space-guid> --filter "API*PP"
+# --include/--exclude accept a glob pattern per keyword (* matches any
+# sequence of characters) instead of a plain substring
+bo space-destinations --space <space-guid> --include "API*PP"
 
-# Combine: full properties + filter
-bo space-destinations --space <space-guid> --full --filter "API*PP"
+# Exclude destinations where any property contains any of these keywords
+bo space-destinations --space <space-guid> --exclude sandbox,test
+
+# Combine: full properties + include
+bo space-destinations --space <space-guid> --full --include "API*PP"
 
 # Scope region search
 bo space-destinations --space <space-guid> --regions us10,us20,eu10
@@ -942,9 +951,17 @@ Unlike `space-destinations` (which queries instance-level destinations scoped to
 
 Service key credentials (clientId, clientSecret) are fetched from CF on demand and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused until it expires or `bo logoff` is run. If no destination service instance or service key is found, a prompt prints CF CLI instructions to create them; use `--no-prompt` to skip.
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly. With more than one target org,
+`--format json`/`toon` returns a list of per-org results instead of a single object.
+
 ```bash
 # List subaccount destinations (default: Name, URL, sap-client) — TOON output
 bo subaccount-destinations --org <org-guid-or-name>
+
+# Every org in the default scope selected via `bo orgs`
+bo subaccount-destinations
 
 # JSON output
 bo subaccount-destinations --org <org-guid-or-name> --format json
@@ -956,17 +973,27 @@ bo subaccount-destinations --org <org-guid-or-name> --format csv
 bo subaccount-destinations --org <org-guid-or-name> --full
 bo subaccount-destinations --org <org-guid-or-name> --full --format json
 
-# Filter by substring (case-insensitive, matched against any property key or value)
-bo subaccount-destinations --org <org-guid-or-name> --filter MDG
+# Only include destinations where any property contains any of these
+# comma-separated keywords (substring, case-insensitive)
+bo subaccount-destinations --org <org-guid-or-name> --include MDG
 
-# Filter by glob pattern
-bo subaccount-destinations --org <org-guid-or-name> --filter "API*PP"
+# --include/--exclude accept a glob pattern per keyword
+bo subaccount-destinations --org <org-guid-or-name> --include "API*PP"
+
+# Exclude destinations where any property contains any of these keywords
+bo subaccount-destinations --org <org-guid-or-name> --exclude sandbox,test
 
 # Skip interactive prompts if no destination service instance or key is found
 bo subaccount-destinations --org <org-guid-or-name> --no-prompt
 
 # Scope region search
 bo subaccount-destinations --org <org-guid-or-name> --regions us10,us20,eu10
+
+# Include specific orgs (CSV: region,org_id,org_name)
+bo subaccount-destinations --orgs target-orgs.csv
+
+# Write output to a file instead of stdout
+bo subaccount-destinations --org <org-guid-or-name> --output dests.json --format json
 ```
 
 Default TOON output (without `--full`):
@@ -997,6 +1024,12 @@ Create subaccount-level destinations using any destination service instance foun
 
 Reads a JSON array of destination objects from `--destinations` and POSTs them (`POST /v1/subaccountDestinations`) via a destination service instance found in any space of the target org. Credential handling (fetch key on demand, cache only the token) and the no-key interactive prompt work the same way as `subaccount-destinations`.
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly. **The same destinations file is applied to
+every target org** — with more than one org in scope, double-check the scope
+(`bo orgs` or `--org`) before running.
+
 ```bash
 bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json
 
@@ -1005,6 +1038,9 @@ bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./dest
 
 # Scope region search
 bo create-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,us20,eu10
+
+# Apply to specific orgs (CSV: region,org_id,org_name)
+bo create-subaccount-destinations --orgs target-orgs.csv --destinations ./destinations.json
 ```
 
 The JSON file format (`--destinations`):
@@ -1027,6 +1063,12 @@ Update (overwrite) subaccount-level destinations using any destination service i
 
 Reads a JSON array from `--destinations` and PUTs them (`PUT /v1/subaccountDestinations`) via a destination service instance in the org. Existing destinations with matching names are overwritten; others are left unchanged.
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly. **The same destinations file is applied to
+every target org** — with more than one org in scope, double-check the scope
+(`bo orgs` or `--org`) before running.
+
 ```bash
 bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json
 
@@ -1035,6 +1077,9 @@ bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./dest
 
 # Scope region search
 bo update-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,us20,eu10
+
+# Apply to specific orgs (CSV: region,org_id,org_name)
+bo update-subaccount-destinations --orgs target-orgs.csv --destinations ./destinations.json
 ```
 
 The `--destinations` JSON format is the same as `create-subaccount-destinations`.
@@ -1045,6 +1090,12 @@ Delete named subaccount-level destinations using any destination service instanc
 
 Reads the `Name` field from each entry in the `--destinations` JSON array and issues `DELETE /v1/subaccountDestinations/{name}` for each. Non-existent destinations are silently ignored (idempotent).
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly. **The same destination names are deleted
+from every target org** — with more than one org in scope, double-check the scope
+(`bo orgs` or `--org`) before running.
+
 ```bash
 bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json
 
@@ -1053,6 +1104,9 @@ bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./dest
 
 # Scope region search
 bo delete-subaccount-destinations --org <org-guid-or-name> --destinations ./destinations.json --regions us10,us20,eu10
+
+# Apply to specific orgs (CSV: region,org_id,org_name)
+bo delete-subaccount-destinations --orgs target-orgs.csv --destinations ./destinations.json
 ```
 
 Only the `Name` field is read from the JSON file; all other properties are ignored.
@@ -1063,8 +1117,12 @@ List Cloud Foundry applications across all accessible organizations and spaces.
 
 For each region the command fetches organizations, spaces, apps, and web process metrics in parallel, then assembles the result.
 
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
 ```bash
-# List all apps across stored regions (TOON output)
+# List all apps in the default scope from `bo orgs` (TOON output)
 bo apps
 
 # JSON output
@@ -1085,13 +1143,19 @@ bo apps --orgs target-orgs.csv
 # Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo apps --excludeOrgs prod-orgs.csv
 
-# Filter output — only apps matching a substring in any listed field
-bo apps --filter myapp
-bo apps --filter STARTED
-bo apps --filter "my-mta-id"
+# Only include apps where any listed field contains any of these
+# comma-separated, case-insensitive keywords
+bo apps --include myapp
+bo apps --include STARTED,STOPPED
+
+# Exclude apps where any listed field contains any of these keywords
+bo apps --exclude STOPPED
 
 # Combine flags
-bo apps --regions us10,us20 --orgs my-orgs.csv --format csv --filter STARTED
+bo apps --regions us10,us20 --orgs my-orgs.csv --format csv --include STARTED
+
+# Write output to a file instead of stdout
+bo apps --output apps.csv --format csv
 ```
 
 Output format (TOON):
@@ -1118,7 +1182,7 @@ regions:
 
 CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
 
-The `--filter` flag matches case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
 
 ### `reorg-wiki-attachments`
 
@@ -1156,6 +1220,35 @@ old_path,new_path
 ```
 
 Cross-page references (a page referencing an attachment owned by another page) are updated to the correct relative path (e.g. `../design/architecture-diagram.pdf`). Collision-safe: if the target filename already exists, `-2`, `-3`, … is appended before the extension.
+
+### `count-lines`
+
+Count the total number of lines in source code files within a folder, broken down by file extension.
+
+```bash
+# Count the current folder
+bo count-lines
+
+# Count a specific folder
+bo count-lines internal
+```
+
+```
+EXTENSION  FILES  LINES
+---------  -----  -----
+.go           66  13866
+.md            3   1931
+.yml           1     81
+.sh            1     17
+---------  -----  -----
+TOTAL         71  15895
+```
+
+- The `.git` directory is always skipped.
+- If a `.gitignore` file is present at the root of the folder, its rules are honoured and matching files and directories are excluded. A common subset of the gitignore syntax is supported: comments, negation with `!`, directory-only patterns, anchored patterns, and the `*`, `?` and `**` wildcards.
+- Only files with a recognised source code extension (`.go`, `.py`, `.ts`, `.java`, `.rs`, `.md`, `.yaml`, …) or a well-known name (`Makefile`, `Dockerfile`, …) are counted; everything else is ignored.
+- Machine-generated lock files (`package-lock.json`) are always ignored, even though `.json` is otherwise a counted extension.
+- A trailing line without a newline is counted; a completely empty file counts as zero lines.
 
 ### `clear-logs`
 
@@ -1250,7 +1343,7 @@ Each entry is separated by a header line that includes the timestamp and the exa
 === 2026-05-18 14:30:00 bo org-users --regions us10,us20 ===
 ... command output ...
 
-=== 2026-05-18 14:31:05 bo users --filter sap.ids ===
+=== 2026-05-18 14:31:05 bo users --include sap.ids ===
 ... command output ...
 ```
 
@@ -1287,6 +1380,91 @@ Open `http://127.0.0.1:8081` in a browser to browse captured requests interactiv
 
 > **Note:** `HTTPS_PROXY_INSECURE=true` disables TLS certificate verification so mitmproxy's intercepted certificate is accepted. Do not use this in production.
 
+## Custom Command Development
+
+`btp-open-cli` is designed to be forked and extended. The `cmd/custom/` package is the dedicated home for commands that belong to your fork — they live alongside the built-in commands, build into the same binary, and are completely invisible to upstream merges.
+
+### How it works
+
+All commands — built-in and custom — are registered with Cobra's root command via `cmd.RegisterCommand`. Custom commands go in `cmd/custom/`, which is a plain Go package imported by `main.go` via a blank import:
+
+```go
+import (
+    "btp-open-cli/cmd"
+    _ "btp-open-cli/cmd/custom" // loads any custom commands
+)
+```
+
+### Adding a custom command
+
+1. **Copy the template** that ships with the repo:
+
+```bash
+cp cmd/custom/example_custom_command.go.template cmd/custom/hello.go
+```
+
+2. **Edit the new file.** The only rule: call `cmd.RegisterCommand(...)` inside `init()`.
+
+```go
+package custom
+
+import (
+    "fmt"
+
+    "btp-open-cli/cmd"
+
+    "github.com/spf13/cobra"
+)
+
+func init() {
+    cmd.RegisterCommand(&cobra.Command{
+        Use:   "hello",
+        Short: "Say hello (example custom command)",
+        RunE: func(c *cobra.Command, args []string) error {
+            fmt.Fprintln(c.OutOrStdout(), "Hello from a custom command!")
+            return nil
+        },
+    })
+}
+```
+
+3. **Build and run:**
+
+```bash
+go build -o bo .
+./bo hello
+# Hello from a custom command!
+```
+
+Your new command appears alongside all built-in commands in `./bo --help`.
+
+### Pulling upstream changes
+
+Because your custom files live in `cmd/custom/` and upstream only ever touches `cmd/*.go` (never `cmd/custom/`), a `git pull upstream main` will never conflict with your custom commands. Add new features, bump versions, pick up bug fixes — your commands are untouched.
+
+### Running tests
+
+After adding custom code, run the full test suite to confirm nothing is broken:
+
+```bash
+go test ./...
+```
+
+To run only the command-layer tests:
+
+```bash
+go test ./cmd/...
+```
+
+All tests use mocked REST API servers — no real BTP credentials or network access required.
+
+### Tips for vibe-coding new commands
+
+- Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
+- The `--format`, `--include`/`--exclude`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
+- For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
+- Run `go vet ./...` after adding a command to catch any import or signature issues before building.
+
 ## More help
 
 Run `bo <command> --help` for full flag descriptions and usage examples for any command:
@@ -1295,11 +1473,11 @@ Run `bo <command> --help` for full flag descriptions and usage examples for any 
 # Common
 bo login --help
 bo logoff --help
+bo orgs --help
 bo update --help
 bo version --help
 
 # CF Org
-bo orgs --help
 bo org-spaces --help
 bo org-users --help
 bo org-space-users --help
@@ -1328,5 +1506,6 @@ bo describe-subaccount --help
 # Utilities
 bo clear-logs --help
 bo completion --help
+bo count-lines --help
 bo reorg-wiki-attachments --help
 ```

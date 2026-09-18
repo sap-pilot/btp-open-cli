@@ -1,5 +1,62 @@
 # Changelog
 
+## v0.14.0 — 2026-09-09
+
+### Added
+
+- **`bo orgs` — interactive default org scope for session commands**
+
+  `bo orgs` now shows a numbered checkbox picker (arrow keys or digit-jump to move, space to toggle, `a` to select all, `c` to clear, enter to confirm) and saves the selection as a session-scoped default scope, cleared on `login`/`logoff`. `org-users`, `org-space-users`, `apps`, `users`, `role-collections`, `subaccount-destinations` (including its `create`/`update`/`delete` variants), and `describe-subaccount` use this default scope whenever `--org`/`--orgs` is omitted, and point you at `bo orgs` if none has been set yet — they no longer prompt interactively themselves. The destination write commands also gained `--orgs` support and now apply to multiple target orgs like the read commands. All of the above gained an `--output`/`-o` flag, since the interactive picker owns stdout and shell `>` redirection doesn't work for them. `bo orgs`'s own output columns are now ordered `region,org_name,org_id` to match the picker; `--orgs`/`--excludeOrgs` CSV parsing accepts either column order. Re-running `bo orgs` within the same session now pre-checks whatever is currently selected in the picker, so you can tweak the scope instead of starting from scratch — only `login`/`logoff` clear it.
+
+- **`--format uar.csv` for `users` and `org-space-users` — User Access Review exports**
+
+  `users --format uar.csv` produces one row per role-collection membership (columns: `Role Collection,Description,Role Collection Members,Origin,Subaccount ID`); `org-space-users --format uar.csv` produces one row per org/space membership (columns: `Space/Org ID,Space/Org Name,Group Type,Member,Role`).
+
+- **`count-lines [<folder>]` — count total lines of source code**
+
+  Walks `<folder>` (default: current folder) and reports the number of lines in
+  every source code file, broken down by file extension, with a `TOTAL` row.
+
+  ```bash
+  bo count-lines
+  bo count-lines internal
+  ```
+
+  - The `.git` directory is always skipped.
+  - If a `.gitignore` file is present at the root of `<folder>`, its rules are
+    honoured and matching files and directories are excluded from the count. A
+    common subset of the gitignore syntax is supported: comments, negation with
+    `!`, directory-only patterns, anchored patterns, and the `*`, `?` and `**`
+    wildcards.
+  - Only files with a recognised source code extension (or a well-known name such
+    as `Makefile` or `Dockerfile`) are counted; everything else is ignored.
+  - Machine-generated lock files (`package-lock.json`) are always ignored, even
+    though `.json` is otherwise a counted extension.
+  - A trailing line without a newline is counted; a completely empty file counts
+    as zero lines.
+
+### Changed
+
+- **`--filter` removed — replaced everywhere by `--include`/`--exclude`**
+
+  The `--filter` flag (a single-pattern filter) has been removed from `users`, `org-users`, `org-space-users`, `apps`, `space-destinations`, and `subaccount-destinations`; it was strictly subsumed by `--include`/`--exclude` (a single `--include` keyword behaves identically to the old `--filter`). `apps`, `space-destinations`, and `subaccount-destinations` gain `--include`/`--exclude` for the first time as part of this change — the destination commands keep `--filter`'s glob-pattern support (`API*PP`) per keyword, in addition to plain substrings.
+
+  ```bash
+  bo apps --include STARTED,STOPPED
+  bo space-destinations --space <space-guid> --include "API*PP"
+  bo subaccount-destinations --org <org-guid> --exclude sandbox,test
+  ```
+
+- **`--include`/`--exclude` now accept a comma-separated list of keywords**
+
+  `orgs`, `users`, `create-users`, `delete-users`, `org-users`, `org-space-users`, `create-org-space-users`, and `delete-org-space-users` all now support `--include=keyword1,keyword2,...` and `--exclude=keyword1,keyword2,...`. A row/user/org is included or excluded if **any** of its matched fields contains **any** of the given keywords (case-insensitive substring match). `org-users` and `org-space-users` previously had no `--include`/`--exclude` at all (only `--filter`); the other commands already had single-pattern `--include`/`--exclude`, which still work unchanged since a single keyword with no comma behaves exactly as before. `org-spaces` shares the same underlying matching and picks up the multi-keyword support too.
+
+  ```bash
+  bo users --include sap.ids,sap.custom
+  bo org-users --exclude sap.default,uaa
+  bo orgs --all --include prod,staging --format csv -o target-orgs.csv
+  ```
+
 ## v0.13 — 2026-07-09
 
 ### Added

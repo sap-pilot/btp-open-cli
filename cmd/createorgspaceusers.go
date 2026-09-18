@@ -17,11 +17,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// cosOrgRef is one row from the --orgs / --excludeOrgs CSV (region,id,name).
+// cosOrgRef is one row from the --orgs / --excludeOrgs CSV (region,id,name),
+// or one entry of the default org scope selected via `bo orgs`. APIURL is
+// only populated for the latter (the exact CF API base URL the org was
+// listed from); CSV-parsed entries leave it empty and callers that need it
+// fall back to store.RegionToAPIURL(Region).
 type cosOrgRef struct {
 	Region string
 	ID     string
 	Name   string
+	APIURL string
 }
 
 // cosOrgSet is a list of org references used for include / exclude filtering.
@@ -49,6 +54,10 @@ func (s cosOrgSet) matches(region, orgGUID, orgName string) bool {
 	return false
 }
 
+// parseCosOrgCSV reads a CSV of org references. The header must contain the
+// columns "region", "org_id", and "org_name" — in any order, so files
+// produced by different versions of `bo orgs` (which may order columns
+// region,org_id,org_name or region,org_name,org_id) both parse correctly.
 func parseCosOrgCSV(path string) (cosOrgSet, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -61,9 +70,23 @@ func parseCosOrgCSV(path string) (cosOrgSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading header: %w", err)
 	}
-	if len(header) < 3 || header[0] != "region" || header[1] != "org_id" || header[2] != "org_name" {
-		return nil, fmt.Errorf("invalid header — expected: region,org_id,org_name")
+	col := make(map[string]int, len(header))
+	for i, h := range header {
+		col[strings.TrimSpace(h)] = i
 	}
+	regionIdx, hasRegion := col["region"]
+	idIdx, hasID := col["org_id"]
+	nameIdx, hasName := col["org_name"]
+	if !hasRegion || !hasID || !hasName {
+		return nil, fmt.Errorf("invalid header — must include columns: region, org_id, org_name (any order)")
+	}
+	minCols := regionIdx
+	for _, i := range []int{idIdx, nameIdx} {
+		if i > minCols {
+			minCols = i
+		}
+	}
+	minCols++
 
 	var refs cosOrgSet
 	for line := 2; ; line++ {
@@ -74,13 +97,13 @@ func parseCosOrgCSV(path string) (cosOrgSet, error) {
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", line, err)
 		}
-		if len(row) < 3 {
-			return nil, fmt.Errorf("line %d: expected 3 columns, got %d", line, len(row))
+		if len(row) < minCols {
+			return nil, fmt.Errorf("line %d: expected at least %d columns, got %d", line, minCols, len(row))
 		}
 		refs = append(refs, cosOrgRef{
-			Region: strings.TrimSpace(row[0]),
-			ID:     strings.TrimSpace(row[1]),
-			Name:   strings.TrimSpace(row[2]),
+			Region: strings.TrimSpace(row[regionIdx]),
+			ID:     strings.TrimSpace(row[idIdx]),
+			Name:   strings.TrimSpace(row[nameIdx]),
 		})
 	}
 	return refs, nil
@@ -277,7 +300,10 @@ Roles are split by prefix: organization_* roles are applied at the org level;
 space_* roles are applied at the space level.
 
 Without -y, a TOON preview of all targeted users and scopes is shown and
-confirmation is required before any changes are made.`,
+confirmation is required before any changes are made.
+
+--include/--exclude each accept a comma-separated list of keywords; a user
+matches if any of the matched fields contains any of them (case-insensitive).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -544,6 +570,6 @@ func init() {
 	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to include (columns: region,org_id,org_name); filters rows by org_id or org_name")
 	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
 	createOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
-	createOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
-	createOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
+	createOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain any of these comma-separated, case-insensitive keywords")
+	createOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain any of these comma-separated, case-insensitive keywords")
 }

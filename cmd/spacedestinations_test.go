@@ -109,7 +109,7 @@ func TestSpaceDests_Default(t *testing.T) {
 	}
 }
 
-func TestSpaceDests_Filter(t *testing.T) {
+func TestSpaceDests_Include(t *testing.T) {
 	const spaceGUID = "sp1"
 	const instanceGUID = "inst1"
 
@@ -149,15 +149,92 @@ func TestSpaceDests_Filter(t *testing.T) {
 
 	setupTestEnvWithDestCache(t, cfSrv.URL, spaceGUID, instanceGUID, destSrv.URL)
 
-	stdout, _, err := runCmd(t, "space-destinations", "--space", spaceGUID, "--filter", "alpha")
+	stdout, _, err := runCmd(t, "space-destinations", "--space", spaceGUID, "--include", "alpha")
 	if err != nil {
-		t.Fatalf("space-destinations --filter failed: %v", err)
+		t.Fatalf("space-destinations --include failed: %v", err)
 	}
 	if !strings.Contains(stdout, "dest-alpha") {
 		t.Errorf("expected dest-alpha in filtered output, got: %q", stdout)
 	}
 	if strings.Contains(stdout, "dest-beta") {
 		t.Errorf("dest-beta should be filtered out, got: %q", stdout)
+	}
+}
+
+func TestSdMatchesAnyKeyword(t *testing.T) {
+	dest := map[string]string{"Name": "API_S4_HTTP_PP", "URL": "https://example.com", "sap-client": "100"}
+
+	cases := []struct {
+		name    string
+		pattern string
+		want    bool
+	}{
+		{"empty pattern never matches", "", false},
+		{"plain substring", "s4", true},
+		{"plain substring, no match", "nope", false},
+		{"glob pattern", "API*PP", true},
+		{"glob pattern, no match", "XYZ*PP", false},
+		{"multi-keyword, second is a glob match", "nope,API*PP", true},
+		{"multi-keyword, none match", "nope,also-nope", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sdMatchesAnyKeyword(c.pattern, dest); got != c.want {
+				t.Errorf("sdMatchesAnyKeyword(%q, dest) = %v, want %v", c.pattern, got, c.want)
+			}
+		})
+	}
+}
+
+func TestSpaceDests_Exclude(t *testing.T) {
+	const spaceGUID = "sp1"
+	const instanceGUID = "inst1"
+
+	destSrv := newDestServer(t,
+		destinationsJSON("dest-alpha", "dest-beta"),
+		destinationsJSON(),
+	)
+
+	cfSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v3/spaces":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources": []map[string]interface{}{
+					{"guid": spaceGUID, "name": "dev",
+						"relationships": map[string]interface{}{
+							"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}},
+						}},
+				},
+			})))
+		case r.URL.Path == "/v3/service_plans":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources":  []map[string]string{{"guid": "plan1", "name": "lite"}},
+			})))
+		case r.URL.Path == "/v3/service_instances":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources":  []map[string]string{{"guid": instanceGUID, "name": "dest-instance"}},
+			})))
+		default:
+			http.Error(w, "no route: "+r.URL.Path, 404)
+		}
+	}))
+	defer cfSrv.Close()
+
+	setupTestEnvWithDestCache(t, cfSrv.URL, spaceGUID, instanceGUID, destSrv.URL)
+
+	stdout, _, err := runCmd(t, "space-destinations", "--space", spaceGUID, "--exclude", "beta")
+	if err != nil {
+		t.Fatalf("space-destinations --exclude failed: %v", err)
+	}
+	if !strings.Contains(stdout, "dest-alpha") {
+		t.Errorf("expected dest-alpha in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dest-beta") {
+		t.Errorf("dest-beta should be excluded, got: %q", stdout)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -108,11 +109,11 @@ func resolveOrgDestClient(
 		creds.SpaceDestServices = make(map[string]map[string]*store.DestInstanceCache)
 	}
 
-	tryFindClient := func() (sdDestClient, bool) {
+	tryFindClient := func() (sdDestClient, bool, error) {
 		spaces, spacesErr := cfClient.ListOrganizationSpaces(ctx, found.guid)
 		if spacesErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: listing spaces in org %q: %v\n", found.name, spacesErr)
-			return sdDestClient{}, false
+			return sdDestClient{}, false, nil
 		}
 
 		for _, space := range spaces {
@@ -145,20 +146,25 @@ func resolveOrgDestClient(
 								"warning: no service key for destination instance %q in space %q — skipping\n",
 								inst.Name, space.Name)
 						} else {
-							fmt.Fprintf(cmd.ErrOrStderr(),
-								"\nWARNING: No service key found for destination instance %q (space: %s)\n"+
-									"  Create one manually, e.g. via CF CLI:\n"+
-									"    cf create-service-key %s bo-dest-key\n"+
-									"  Then press Enter to retry, or Ctrl-C to skip.\n",
-								inst.Name, space.Name, inst.Name)
-							if _, ok := readLine(ctx); ok {
+							for key == nil {
+								fmt.Fprintf(cmd.ErrOrStderr(),
+									"\nWARNING: No service key found for destination instance %q (space: %s)\n"+
+										"  Create one manually, e.g. via CF CLI:\n"+
+										"    cf create-service-key %s bo-dest-key\n"+
+										"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
+									inst.Name, space.Name, inst.Name)
+								retry, skip := promptRetryOrSkip(ctx)
+								if !retry && !skip {
+									return sdDestClient{}, false, errAborted
+								}
+								if skip {
+									break
+								}
 								key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
 								if keyErr != nil || key == nil {
-									fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q — skipping\n", inst.Name)
-									continue
+									fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
+									key = nil
 								}
-							} else {
-								continue
 							}
 						}
 						if key == nil {
@@ -205,13 +211,15 @@ func resolveOrgDestClient(
 					InstanceName: cached.InstanceName,
 					URI:          cached.URI,
 					Token:        cached.AccessToken,
-				}, true
+				}, true, nil
 			}
 		}
-		return sdDestClient{}, false
+		return sdDestClient{}, false, nil
 	}
 
-	if c, ok := tryFindClient(); ok {
+	if c, ok, tryErr := tryFindClient(); tryErr != nil {
+		return "", "", sdDestClient{}, tryErr
+	} else if ok {
 		saveDestCache(cmd, creds)
 		return found.guid, found.name, c, nil
 	}
@@ -221,26 +229,32 @@ func resolveOrgDestClient(
 		return "", "", sdDestClient{},
 			fmt.Errorf("no destination service instance found in org %q — create one and run again", found.name)
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(),
-		"\nWARNING: No destination service instance found in org %q\n"+
-			"  Create one in any space, e.g.:\n"+
-			"    cf create-service destination lite <instance-name>\n"+
-			"    cf create-service-key <instance-name> bo-dest-key\n"+
-			"  Then press Enter to retry, or Ctrl-C to abort.\n",
-		found.name)
-	if _, ok := readLine(ctx); !ok {
-		return "", "", sdDestClient{}, fmt.Errorf("no destination service instance available in org %q", found.name)
-	}
+	for {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"\nWARNING: No destination service instance found in org %q\n"+
+				"  Create one in any space, e.g.:\n"+
+				"    cf create-service destination lite <instance-name>\n"+
+				"    cf create-service-key <instance-name> bo-dest-key\n"+
+				"  Then press Enter to retry, type 's' to skip this org, or Ctrl-C to abort.\n",
+			found.name)
+		retry, skip := promptRetryOrSkip(ctx)
+		if !retry && !skip {
+			return "", "", sdDestClient{}, errAborted
+		}
+		if skip {
+			return "", "", sdDestClient{}, fmt.Errorf("no destination service instance available in org %q", found.name)
+		}
 
-	// Retry once.
-	if c, ok := tryFindClient(); ok {
-		saveDestCache(cmd, creds)
-		return found.guid, found.name, c, nil
+		c, ok, tryErr := tryFindClient()
+		if tryErr != nil {
+			return "", "", sdDestClient{}, tryErr
+		}
+		if ok {
+			saveDestCache(cmd, creds)
+			return found.guid, found.name, c, nil
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no destination service instance found in org %q\n", found.name)
 	}
-
-	saveDestCache(cmd, creds)
-	return "", "", sdDestClient{},
-		fmt.Errorf("no destination service instance found in org %q after retry — aborting", found.name)
 }
 
 // ── subaccount-destinations ───────────────────────────────────────────────────
@@ -249,27 +263,40 @@ var subaccountDestinationsCmd = &cobra.Command{
 	Use:   "subaccount-destinations",
 	Short: "List subaccount-level destinations via the destination service",
 	Long: `Retrieves all subaccount-level destinations from the destination service using
-any destination service instance found in the target org (--org GUID or name).
+any destination service instance found in the target org(s) (--org GUID or name).
 
 Without --full: only Name, URL, and sap-client are included per destination.
 With --full: all destination properties are returned as a flat object exactly as
 the destination service API responds — nothing is redacted, including sensitive
 fields such as Password, ClientSecret, and ProxyPassword.
 
-Use --filter to narrow results by substring or glob pattern matched against
-any destination property (e.g. MDG, API*PP).
+Use --include/--exclude to narrow results: each accepts a comma-separated
+list of keywords, matched against any destination property key or value —
+as a glob pattern (e.g. API*PP) if a keyword contains * ? [, otherwise as a
+case-insensitive substring.
 
 Use --format csv (without --full) to get a flat CSV with columns:
   org_name,destination_name,destination_url,destination_sap_client
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly. With more than one
+target org, --format json/toon returns a list of per-org results instead of
+a single object.
+
+Use --output/-o to write the result to a file instead of stdout.
+
 The access token is cached locally and reused until it expires or 'bo logoff' is run.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		orgFlag, _ := cmd.Flags().GetString("org")
+		orgsFile, _ := cmd.Flags().GetString("orgs")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
 		full, _ := cmd.Flags().GetBool("full")
-		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
+		outputFile, _ := cmd.Flags().GetString("output")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -280,47 +307,82 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			return fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
 		}
 
+		// All of this command's output goes through cmd.OutOrStdout(), so
+		// redirecting it here also covers the final JSON/toon/CSV result.
+		out, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
+		}
+		defer closeOut()
+		cmd.SetOut(out)
+
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		orgGUID, orgName, destClient, err := resolveOrgDestClient(ctx, cmd, orgFlag, creds, apiURLs, noPrompt)
+		// Determine which orgs to target: --org (single, matched by GUID or
+		// name substring), --orgs (a CSV of exact org refs), or the default
+		// org scope selected via 'bo orgs'.
+		orgTargets, err := resolveOrgTargets(creds, orgFlag, orgsFile)
 		if err != nil {
 			return err
 		}
 
-		// Fetch subaccount destinations.
 		fetchFn := destination.ListSubaccountDestinations
 		if full {
 			fetchFn = destination.ListSubaccountDestinationsFull
 		}
 
-		rawDests, fetchErr := fetchFn(ctx, destClient.URI, destClient.Token)
-		if fetchErr != nil {
-			return fmt.Errorf("listing subaccount destinations: %w", fetchErr)
-		}
-
-		var dests []map[string]string
-		for _, raw := range rawDests {
-			if !sdMatchesFilter(raw, filter) {
+		var docs []sadOrgDoc
+		for _, target := range orgTargets {
+			orgGUID, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 				continue
 			}
-			if full {
-				dests = append(dests, raw)
-			} else {
-				dests = append(dests, sdMinimalDest(raw))
-			}
-		}
-		sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
 
-		doc := sadOrgDoc{
-			OrgID:        orgGUID,
-			OrgName:      orgName,
-			Destinations: dests,
+			rawDests, fetchErr := fetchFn(ctx, destClient.URI, destClient.Token)
+			if fetchErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
+				continue
+			}
+
+			var dests []map[string]string
+			for _, raw := range rawDests {
+				if includePattern != "" && !sdMatchesAnyKeyword(includePattern, raw) {
+					continue
+				}
+				if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
+					continue
+				}
+				if full {
+					dests = append(dests, raw)
+				} else {
+					dests = append(dests, sdMinimalDest(raw))
+				}
+			}
+			sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
+
+			docs = append(docs, sadOrgDoc{
+				OrgID:        orgGUID,
+				OrgName:      orgName,
+				Destinations: dests,
+			})
+		}
+		if len(docs) == 0 {
+			return fmt.Errorf("no destinations retrieved — no target org resolved to a usable destination service instance")
 		}
 
 		switch strings.ToLower(format) {
 		case "json":
-			out, err := json.MarshalIndent(doc, "", "  ")
+			var out []byte
+			if len(docs) == 1 {
+				out, err = json.MarshalIndent(docs[0], "", "  ")
+			} else {
+				out, err = json.MarshalIndent(docs, "", "  ")
+			}
 			if err != nil {
 				return fmt.Errorf("encoding JSON: %w", err)
 			}
@@ -337,16 +399,25 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			}); err != nil {
 				return err
 			}
-			for _, d := range doc.Destinations {
-				if err := w.Write([]string{
-					doc.OrgName, d["Name"], d["URL"], d["sap-client"],
-				}); err != nil {
-					return err
+			for _, doc := range docs {
+				for _, d := range doc.Destinations {
+					if err := w.Write([]string{
+						doc.OrgName, d["Name"], d["URL"], d["sap-client"],
+					}); err != nil {
+						return err
+					}
 				}
 			}
 
 		default: // toon
-			out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+			var out []byte
+			if len(docs) == 1 {
+				out, err = toonenc.Marshal(docs[0], toonenc.WithIndent(2))
+			} else {
+				out, err = toonenc.Marshal(struct {
+					Orgs []sadOrgDoc `json:"orgs" toon:"orgs"`
+				}{docs}, toonenc.WithIndent(2))
+			}
 			if err != nil {
 				return fmt.Errorf("encoding TOON: %w", err)
 			}
@@ -363,14 +434,21 @@ var createSubaccountDestinationsCmd = &cobra.Command{
 	Short: "Create subaccount-level destinations via the destination service",
 	Long: `Reads destinations from a JSON file (--destinations) and POSTs them to the
 subaccount-level destination endpoint using a destination service instance found
-in the target org (--org GUID or name).
+in each target org (--org GUID or name).
 
 The JSON file must be an array of destination objects, e.g.:
   [{"Name":"my-dest","Type":"HTTP","URL":"https://...","Authentication":"NoAuthentication"}]
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly. The same destinations
+file is applied to every target org — with more than one target org in
+scope, double-check the scope (e.g. 'bo orgs' or --org) before running.
+
 The access token is cached locally and reused until it expires or 'bo logoff' is run.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		orgFlag, _ := cmd.Flags().GetString("org")
+		orgsFile, _ := cmd.Flags().GetString("orgs")
 		destFile, _ := cmd.Flags().GetString("destinations")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
@@ -389,21 +467,38 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			return fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
 		}
 
-		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
-		defer cancel()
-
-		_, orgName, destClient, err := resolveOrgDestClient(ctx, cmd, orgFlag, creds, apiURLs, noPrompt)
+		orgTargets, err := resolveOrgTargets(creds, orgFlag, orgsFile)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Creating subaccount destinations in org %s (via instance: %s)...\n",
-			orgName, destClient.InstanceName)
-		items, postErr := destination.CreateSubaccountDestinations(ctx, destClient.URI, destClient.Token, rawBody)
-		if postErr != nil {
-			return fmt.Errorf("creating subaccount destinations: %w", postErr)
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
+		defer cancel()
+
+		var anyOK bool
+		for _, target := range orgTargets {
+			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
+				continue
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Creating subaccount destinations in org %s (via instance: %s)...\n",
+				orgName, destClient.InstanceName)
+			items, postErr := destination.CreateSubaccountDestinations(ctx, destClient.URI, destClient.Token, rawBody)
+			if postErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: [%s] creating subaccount destinations: %v\n", orgName, postErr)
+				continue
+			}
+			printActionResults(cmd, "created", names, items)
+			anyOK = true
 		}
-		printActionResults(cmd, "created", names, items)
+		if !anyOK {
+			return fmt.Errorf("no target org completed successfully")
+		}
 		return nil
 	},
 }
@@ -415,15 +510,22 @@ var updateSubaccountDestinationsCmd = &cobra.Command{
 	Short: "Update subaccount-level destinations via the destination service",
 	Long: `Reads destinations from a JSON file (--destinations) and PUTs them to the
 subaccount-level destination endpoint using a destination service instance found
-in the target org (--org GUID or name).
+in each target org (--org GUID or name).
 
 Existing destinations with the same Name are overwritten; others are left unchanged.
 
 The JSON file must be an array of destination objects.
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly. The same destinations
+file is applied to every target org — with more than one target org in
+scope, double-check the scope (e.g. 'bo orgs' or --org) before running.
+
 The access token is cached locally and reused until it expires or 'bo logoff' is run.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		orgFlag, _ := cmd.Flags().GetString("org")
+		orgsFile, _ := cmd.Flags().GetString("orgs")
 		destFile, _ := cmd.Flags().GetString("destinations")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
@@ -442,21 +544,38 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			return fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
 		}
 
-		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
-		defer cancel()
-
-		_, orgName, destClient, err := resolveOrgDestClient(ctx, cmd, orgFlag, creds, apiURLs, noPrompt)
+		orgTargets, err := resolveOrgTargets(creds, orgFlag, orgsFile)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Updating subaccount destinations in org %s (via instance: %s)...\n",
-			orgName, destClient.InstanceName)
-		items, putErr := destination.UpdateSubaccountDestinations(ctx, destClient.URI, destClient.Token, rawBody)
-		if putErr != nil {
-			return fmt.Errorf("updating subaccount destinations: %w", putErr)
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
+		defer cancel()
+
+		var anyOK bool
+		for _, target := range orgTargets {
+			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
+				continue
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Updating subaccount destinations in org %s (via instance: %s)...\n",
+				orgName, destClient.InstanceName)
+			items, putErr := destination.UpdateSubaccountDestinations(ctx, destClient.URI, destClient.Token, rawBody)
+			if putErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: [%s] updating subaccount destinations: %v\n", orgName, putErr)
+				continue
+			}
+			printActionResults(cmd, "updated", names, items)
+			anyOK = true
 		}
-		printActionResults(cmd, "updated", names, items)
+		if !anyOK {
+			return fmt.Errorf("no target org completed successfully")
+		}
 		return nil
 	},
 }
@@ -468,14 +587,21 @@ var deleteSubaccountDestinationsCmd = &cobra.Command{
 	Short: "Delete subaccount-level destinations via the destination service",
 	Long: `Reads destination names from a JSON file (--destinations) and deletes each
 matching destination from the subaccount-level endpoint using a destination
-service instance found in the target org (--org GUID or name).
+service instance found in each target org (--org GUID or name).
 
 The JSON file must be an array of destination objects; only the "Name" field is
 used. Non-existent destinations are silently ignored (idempotent).
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly. The same destination
+names are deleted from every target org — with more than one target org in
+scope, double-check the scope (e.g. 'bo orgs' or --org) before running.
+
 The access token is cached locally and reused until it expires or 'bo logoff' is run.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		orgFlag, _ := cmd.Flags().GetString("org")
+		orgsFile, _ := cmd.Flags().GetString("orgs")
 		destFile, _ := cmd.Flags().GetString("destinations")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
@@ -497,25 +623,41 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			return fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
 		}
 
-		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
-		defer cancel()
-
-		_, orgName, destClient, err := resolveOrgDestClient(ctx, cmd, orgFlag, creds, apiURLs, noPrompt)
+		orgTargets, err := resolveOrgTargets(creds, orgFlag, orgsFile)
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Deleting %d subaccount destination(s) in org %s (via instance: %s)...\n",
-			len(names), orgName, destClient.InstanceName)
-		for _, name := range names {
-			deleted, delErr := destination.DeleteSubaccountDestination(ctx, destClient.URI, destClient.Token, name)
-			if delErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %s — %v\n", name, delErr)
-			} else if deleted {
-				fmt.Fprintf(cmd.OutOrStdout(), "    deleted: %s\n", name)
-			} else {
-				fmt.Fprintf(cmd.OutOrStdout(), "    not found: %s\n", name)
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
+		defer cancel()
+
+		var anyOK bool
+		for _, target := range orgTargets {
+			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					return errAborted
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
+				continue
 			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Deleting %d subaccount destination(s) in org %s (via instance: %s)...\n",
+				len(names), orgName, destClient.InstanceName)
+			for _, name := range names {
+				deleted, delErr := destination.DeleteSubaccountDestination(ctx, destClient.URI, destClient.Token, name)
+				if delErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: %s — %v\n", name, delErr)
+				} else if deleted {
+					fmt.Fprintf(cmd.OutOrStdout(), "    deleted: %s\n", name)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "    not found: %s\n", name)
+				}
+			}
+			anyOK = true
+		}
+		if !anyOK {
+			return fmt.Errorf("no target org completed successfully")
 		}
 		return nil
 	},
@@ -525,42 +667,44 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 
 func init() {
 	// subaccount-destinations
-	subaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target (required)")
+	subaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target")
+	subaccountDestinationsCmd.Flags().String("orgs", "", "Path to CSV of orgs to target (columns: region,org_id,org_name)")
 	subaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	subaccountDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
 	subaccountDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
-	subaccountDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern matched against any destination property")
+	subaccountDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
+	subaccountDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
-	_ = subaccountDestinationsCmd.MarkFlagRequired("org")
+	subaccountDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	subaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(subaccountDestinationsCmd)
 
 	// create-subaccount-destinations
-	createSubaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target (required)")
+	createSubaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target")
+	createSubaccountDestinationsCmd.Flags().String("orgs", "", "Path to CSV of orgs to target (columns: region,org_id,org_name)")
 	createSubaccountDestinationsCmd.Flags().String("destinations", "", "Path to JSON file containing destinations array (required)")
 	createSubaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	createSubaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — fail if no service instance or key found")
-	_ = createSubaccountDestinationsCmd.MarkFlagRequired("org")
 	_ = createSubaccountDestinationsCmd.MarkFlagRequired("destinations")
 	createSubaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(createSubaccountDestinationsCmd)
 
 	// update-subaccount-destinations
-	updateSubaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target (required)")
+	updateSubaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target")
+	updateSubaccountDestinationsCmd.Flags().String("orgs", "", "Path to CSV of orgs to target (columns: region,org_id,org_name)")
 	updateSubaccountDestinationsCmd.Flags().String("destinations", "", "Path to JSON file containing destinations array (required)")
 	updateSubaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	updateSubaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — fail if no service instance or key found")
-	_ = updateSubaccountDestinationsCmd.MarkFlagRequired("org")
 	_ = updateSubaccountDestinationsCmd.MarkFlagRequired("destinations")
 	updateSubaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(updateSubaccountDestinationsCmd)
 
 	// delete-subaccount-destinations
-	deleteSubaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target (required)")
+	deleteSubaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target")
+	deleteSubaccountDestinationsCmd.Flags().String("orgs", "", "Path to CSV of orgs to target (columns: region,org_id,org_name)")
 	deleteSubaccountDestinationsCmd.Flags().String("destinations", "", "Path to JSON file — only \"Name\" field is used (required)")
 	deleteSubaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	deleteSubaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — fail if no service instance or key found")
-	_ = deleteSubaccountDestinationsCmd.MarkFlagRequired("org")
 	_ = deleteSubaccountDestinationsCmd.MarkFlagRequired("destinations")
 	deleteSubaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(deleteSubaccountDestinationsCmd)

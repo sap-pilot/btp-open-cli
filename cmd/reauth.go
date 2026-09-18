@@ -45,6 +45,41 @@ func readLine(ctx context.Context) (string, bool) {
 	}
 }
 
+// errAborted is returned up the call stack when the user cancels an
+// interactive retry/skip prompt with Ctrl-C, so callers can stop processing
+// entirely instead of continuing with a context that is now permanently
+// cancelled (which would otherwise make every subsequent operation on other
+// items fail immediately and look like the whole command hung or died).
+var errAborted = errors.New("aborted")
+
+// promptRetryOrSkip waits for one line of input after a "press Enter to
+// retry, type 's' to skip, or Ctrl-C to abort" style prompt. It returns:
+//   - retry=true: the user pressed Enter (blank input) — check again.
+//   - skip=true: the user typed "s" or "skip" — move on to the next item.
+//   - otherwise: the context was cancelled (Ctrl-C) — the caller must stop
+//     entirely and propagate errAborted rather than continue the loop.
+func promptRetryOrSkip(ctx context.Context) (retry, skip bool) {
+	text, ok := readLine(ctx)
+	if !ok {
+		return false, false
+	}
+	if isSkipInput(text) {
+		return false, true
+	}
+	return true, false
+}
+
+// isSkipInput reports whether a line of prompt input means "skip this item"
+// (case-insensitive, ignoring surrounding whitespace).
+func isSkipInput(text string) bool {
+	switch strings.ToLower(strings.TrimSpace(text)) {
+	case "s", "skip":
+		return true
+	default:
+		return false
+	}
+}
+
 // readPasswordCtx reads a password or passcode from stdin without echoing,
 // honouring context cancellation (Ctrl-C) immediately.
 //

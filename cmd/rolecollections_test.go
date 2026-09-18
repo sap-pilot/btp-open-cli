@@ -54,6 +54,7 @@ func TestRoleCollections_Default(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, rcSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "role-collections", "--no-prompt")
 	if err != nil {
@@ -71,6 +72,7 @@ func TestRoleCollections_CSV(t *testing.T) {
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
 	})
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, rcSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
 	stdout, _, err := runCmd(t, "role-collections", "--format", "csv", "--no-prompt")
 	if err != nil {

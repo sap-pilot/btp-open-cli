@@ -26,9 +26,9 @@ type RegionToken struct {
 // NOT stored here — they are fetched from CF on demand and discarded after
 // obtaining a token, so they never touch the local disk.
 type XsuaaData struct {
-	APIURL      string    `json:"apiurl,omitempty"`       // XSUAA admin API base URL (from service key "apiurl")
-	OrgName     string    `json:"org_name,omitempty"`     // CF org name — enables cache-only resolution
-	RegionName  string    `json:"region_name,omitempty"`  // CF region shorthand (e.g. "eu20")
+	APIURL      string    `json:"apiurl,omitempty"`      // XSUAA admin API base URL (from service key "apiurl")
+	OrgName     string    `json:"org_name,omitempty"`    // CF org name — enables cache-only resolution
+	RegionName  string    `json:"region_name,omitempty"` // CF region shorthand (e.g. "eu20")
 	AccessToken string    `json:"access_token,omitempty"`
 	TokenExpiry time.Time `json:"token_expiry,omitempty"`
 }
@@ -53,10 +53,20 @@ type CISViewerData struct {
 // and discarded immediately after, so they never touch the local disk.
 type DestInstanceCache struct {
 	InstanceName string    `json:"instance_name"`
-	TokenURL     string    `json:"token_url"`            // uaa token endpoint (from service key "url")
-	URI          string    `json:"uri"`                  // destination service base URI
+	TokenURL     string    `json:"token_url"` // uaa token endpoint (from service key "url")
+	URI          string    `json:"uri"`       // destination service base URI
 	AccessToken  string    `json:"access_token,omitempty"`
 	TokenExpiry  time.Time `json:"token_expiry,omitempty"`
+}
+
+// OrgScopeRef identifies one org in the default org scope selected via
+// `bo orgs`. APIURL is the exact CF API base URL the org was listed from, so
+// commands can use it directly without re-searching regions.
+type OrgScopeRef struct {
+	Region string `json:"region"`
+	ID     string `json:"org_id"`
+	Name   string `json:"org_name"`
+	APIURL string `json:"api_url"`
 }
 
 // Credentials holds tokens for one or more CF API endpoints.
@@ -64,11 +74,12 @@ type DestInstanceCache struct {
 // when no --regions flag is provided. Old tokens for other endpoints are kept
 // so the user can switch between region groups without re-logging in.
 type Credentials struct {
-	ActiveAPIURLs    []string                            `json:"active_api_urls"`
-	Tokens           map[string]RegionToken              `json:"tokens"`
-	OrgXsuaa         map[string]XsuaaData                `json:"org_xsuaa,omitempty"`         // orgGUID → xsuaa data
-	CISViewer        *CISViewerData                      `json:"cis_viewer,omitempty"`        // CIS central-viewer service key
+	ActiveAPIURLs     []string                                 `json:"active_api_urls"`
+	Tokens            map[string]RegionToken                   `json:"tokens"`
+	OrgXsuaa          map[string]XsuaaData                     `json:"org_xsuaa,omitempty"`           // orgGUID → xsuaa data
+	CISViewer         *CISViewerData                           `json:"cis_viewer,omitempty"`          // CIS central-viewer service key
 	SpaceDestServices map[string]map[string]*DestInstanceCache `json:"space_dest_services,omitempty"` // spaceGUID → instanceGUID → cache
+	DefaultOrgScope   []OrgScopeRef                            `json:"default_org_scope,omitempty"`   // set via `bo orgs`; cleared on login/logoff
 }
 
 // RegionToAPIURL converts a region shorthand (e.g. "us10") to the standard
@@ -148,6 +159,7 @@ func ClearTokens() error {
 	creds.Tokens = make(map[string]RegionToken)
 	creds.OrgXsuaa = nil
 	creds.SpaceDestServices = nil
+	creds.DefaultOrgScope = nil
 	return Save(creds)
 }
 

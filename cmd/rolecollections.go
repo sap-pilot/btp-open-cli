@@ -76,12 +76,19 @@ or key exists, a prompt offers instructions to create them manually (suppress wi
 Only the access token is cached in ~/.bo/credentials.json — service key credentials
 are fetched from CF on demand and never stored locally.
 
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly.
+
+Use --output/-o to write the result to a file instead of stdout.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgFilter, _ := cmd.Flags().GetString("org")
+		outputFile, _ := cmd.Flags().GetString("output")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		format, _ := cmd.Flags().GetString("format")
 
@@ -148,6 +155,11 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 			if len(includeOrgs) == 0 {
 				return fmt.Errorf("org %q not found in any accessible region", orgFilter)
+			}
+		} else if orgsFile == "" {
+			includeOrgs, err = resolveDefaultOrgScope(creds)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -279,22 +291,28 @@ If --regions is omitted the regions from the last login are used.`,
 
 		doc := rcOutDoc{Regions: outRegions}
 
+		w, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
+		}
+		defer closeOut()
+
 		switch strings.ToLower(format) {
 		case "json":
 			out, err := json.MarshalIndent(doc, "", "  ")
 			if err != nil {
 				return fmt.Errorf("encoding JSON: %w", err)
 			}
-			fmt.Fprintln(os.Stdout, string(out))
+			fmt.Fprintln(w, string(out))
 		default: // toon
 			out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 			if err != nil {
 				return fmt.Errorf("encoding TOON: %w", err)
 			}
-			if _, err = os.Stdout.Write(out); err != nil {
+			if _, err = w.Write(out); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintln(os.Stdout)
+			_, err = fmt.Fprintln(w)
 			return err
 		}
 		return nil
@@ -308,6 +326,7 @@ func init() {
 	roleCollectionsCmd.Flags().String("org", "", "Org name or GUID to target (case-insensitive substring match on name, exact on GUID)")
 	roleCollectionsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	roleCollectionsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
+	roleCollectionsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	roleCollectionsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
 }

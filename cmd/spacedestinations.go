@@ -75,6 +75,21 @@ func sdMatchesFilter(dest map[string]string, filter string) bool {
 	return false
 }
 
+// sdMatchesAnyKeyword reports whether any comma-separated keyword in pattern
+// matches dest, per sdMatchesFilter's rules (substring, or glob when the
+// keyword contains * ? [). Returns false when pattern is empty.
+func sdMatchesAnyKeyword(pattern string, dest map[string]string) bool {
+	if pattern == "" {
+		return false
+	}
+	for _, kw := range splitCSV(pattern) {
+		if sdMatchesFilter(dest, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // ── shared setup ──────────────────────────────────────────────────────────────
 
 // sdDestClient is a ready-to-use destination service client (token refreshed).
@@ -170,19 +185,27 @@ func resolveSpaceDestClients(
 			}
 			if key == nil {
 				// No key — warn and offer an interactive prompt to create one.
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"\nWARNING: No service key found for destination service instance %q (%s)\n"+
-						"  Create one manually, e.g. via CF CLI:\n"+
-						"    cf create-service-key %s bo-dest-key\n"+
-						"  Then press Enter to retry, or Ctrl-C to skip this instance.\n",
-					inst.Name, inst.GUID, inst.Name)
-				_, ok := readLine(ctx)
-				if !ok {
-					continue
+				for key == nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"\nWARNING: No service key found for destination service instance %q (%s)\n"+
+							"  Create one manually, e.g. via CF CLI:\n"+
+							"    cf create-service-key %s bo-dest-key\n"+
+							"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
+						inst.Name, inst.GUID, inst.Name)
+					retry, skip := promptRetryOrSkip(ctx)
+					if !retry && !skip {
+						return spaceName, nil, errAborted
+					}
+					if skip {
+						break
+					}
+					key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
+					if keyErr != nil || key == nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
+						key = nil
+					}
 				}
-				key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-				if keyErr != nil || key == nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q — skipping\n", inst.Name)
+				if key == nil {
 					continue
 				}
 			}
@@ -322,8 +345,10 @@ With --full: all destination properties are returned as a flat object exactly as
 the destination service API responds — nothing is redacted, including sensitive
 fields such as Password, ClientSecret, and ProxyPassword.
 
-Use --filter to narrow results by substring or glob pattern matched against
-any destination property (e.g. MDG, API*PP).
+Use --include/--exclude to narrow results: each accepts a comma-separated
+list of keywords, matched against any destination property key or value —
+as a glob pattern (e.g. API*PP) if a keyword contains * ? [, otherwise as a
+case-insensitive substring.
 
 Use --format csv (without --full) to get a flat CSV with columns:
   space_name,destination_service_name,destination_name,destination_url,destination_sap_client`,
@@ -332,7 +357,8 @@ Use --format csv (without --full) to get a flat CSV with columns:
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
 		full, _ := cmd.Flags().GetBool("full")
-		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -368,8 +394,11 @@ Use --format csv (without --full) to get a flat CSV with columns:
 			}
 			var dests []map[string]string
 			for _, raw := range rawDests {
-				// Apply --filter against the full property set (before any trimming).
-				if !sdMatchesFilter(raw, filter) {
+				// Apply --include/--exclude against the full property set (before any trimming).
+				if includePattern != "" && !sdMatchesAnyKeyword(includePattern, raw) {
+					continue
+				}
+				if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
 					continue
 				}
 				if full {
@@ -625,7 +654,8 @@ func init() {
 	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
 	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
 	spaceDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
-	spaceDestinationsCmd.Flags().String("filter", "", "Case-insensitive substring or glob pattern (e.g. MDG or API*PP) matched against any destination property")
+	spaceDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
+	spaceDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	_ = spaceDestinationsCmd.MarkFlagRequired("space")
 	spaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(spaceDestinationsCmd)

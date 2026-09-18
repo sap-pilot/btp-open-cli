@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"btp-open-cli/internal/store"
 )
 
 func TestLogoff_ClearsTokens(t *testing.T) {
@@ -30,6 +32,23 @@ func TestLogoff_ClearsTokens(t *testing.T) {
 	// but tokens should be cleared.
 	if _, err := os.Stat(credFile); os.IsNotExist(err) {
 		t.Error("credentials file removed entirely; regions should have been preserved")
+	}
+}
+
+func TestLogoff_ClearsDefaultOrgScope(t *testing.T) {
+	setupTestEnv(t, "http://fake-cf.example.com")
+	setDefaultOrgScope(t, "http://fake-cf.example.com", "org1", "my-org")
+
+	if _, _, err := runCmd(t, "logoff"); err != nil {
+		t.Fatalf("logoff command failed: %v", err)
+	}
+
+	creds, err := store.Load()
+	if err != nil {
+		t.Fatalf("loading creds after logoff: %v", err)
+	}
+	if len(creds.DefaultOrgScope) != 0 {
+		t.Errorf("expected default org scope cleared after logoff, got: %+v", creds.DefaultOrgScope)
 	}
 }
 

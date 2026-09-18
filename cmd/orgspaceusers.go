@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -64,9 +65,10 @@ type ospOutDoc struct {
 }
 
 // buildOspOutputDoc converts raw fetch results into the shared output model.
-// filter is an optional substring matched case-insensitively against user
-// id/name/origin/roles; spaces and orgs with no matching users are omitted.
-func buildOspOutputDoc(results []ospRegionData, filter string) (ospOutDoc, []error) {
+// includePattern/excludePattern are optional comma-separated keyword lists
+// matched case-insensitively against user id/name/origin/roles; spaces and
+// orgs with no matching users are omitted.
+func buildOspOutputDoc(results []ospRegionData, includePattern, excludePattern string) (ospOutDoc, []error) {
 	var doc ospOutDoc
 	var errs []error
 	for _, r := range results {
@@ -84,7 +86,7 @@ func buildOspOutputDoc(results []ospRegionData, filter string) (ospOutDoc, []err
 					Origin: u.Origin,
 					Roles:  strings.Join(od.Roles[u.GUID], ";"),
 				}
-				if userMatchesFilter(ou, filter) {
+				if userMatchesIncludeExclude(ou, includePattern, excludePattern) {
 					oo.Users = append(oo.Users, ou)
 				}
 			}
@@ -97,7 +99,7 @@ func buildOspOutputDoc(results []ospRegionData, filter string) (ospOutDoc, []err
 						Origin: u.Origin,
 						Roles:  strings.Join(sd.Roles[u.GUID], ";"),
 					}
-					if userMatchesFilter(ou, filter) {
+					if userMatchesIncludeExclude(ou, includePattern, excludePattern) {
 						sp.Users = append(sp.Users, ou)
 					}
 				}
@@ -124,21 +126,37 @@ var orgSpaceUsersCmd = &cobra.Command{
 	Long: `List users at the org and space level across one or more regions.
 
 Output formats (--format):
-  toon  Token-Oriented Object Notation — compact, human-readable (default)
-  json  JSON document
-  csv   CSV rows: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
-        (space_id and space_name are empty for org-level users)
+  toon     Token-Oriented Object Notation — compact, human-readable (default)
+  json     JSON document
+  csv      CSV rows: region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
+           (space_id and space_name are empty for org-level users)
+  uar.csv  User Access Review CSV, one row per org/space membership.
+           Columns: Space/Org ID,Space/Org Name,Group Type,Member,Role
+           Group Type is "Organization" or "Space"; Role lists all roles the
+           member holds at that scope, comma-separated.
 
 Use --org to scope to a single org by GUID, or --orgs to provide a CSV
 file (columns: region,org_id,org_name) listing the orgs to include.
+
+If neither --org nor --orgs is given, the default org scope selected via
+'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
+pick one interactively, or pass --org/--orgs directly.
+
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a user matches if id, name, origin, or
+roles contains any of them (case-insensitive).
+
+Use --output/-o to write the result to a file instead of stdout.
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
-		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		orgGUID, _ := cmd.Flags().GetString("org")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
+		outputFile, _ := cmd.Flags().GetString("output")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -168,6 +186,13 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
+
+		if orgGUID == "" && orgsFile == "" {
+			includeOrgs, err = resolveDefaultOrgScope(creds)
+			if err != nil {
+				return err
+			}
+		}
 
 		results := make([]ospRegionData, len(apiURLs))
 		var wg sync.WaitGroup
@@ -264,19 +289,27 @@ If --regions is omitted, the regions from the last login are used.`,
 		}
 		wg.Wait()
 
+		out, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
+		}
+		defer closeOut()
+
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOspJSON(results, filter)
+			return writeOspJSON(out, results, includePattern, excludePattern)
 		case "csv":
-			return writeOspCSV(results, filter)
+			return writeOspCSV(out, results, includePattern, excludePattern)
+		case "uar.csv":
+			return writeOspUARCSV(out, results, includePattern, excludePattern)
 		default: // "toon"
-			return writeOspToon(results, filter)
+			return writeOspToon(out, results, includePattern, excludePattern)
 		}
 	},
 }
 
-func writeOspToon(results []ospRegionData, filter string) error {
-	doc, errs := buildOspOutputDoc(results, filter)
+func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -284,15 +317,15 @@ func writeOspToon(results []ospRegionData, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
-	if _, err = os.Stdout.Write(out); err != nil {
+	if _, err = w.Write(out); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(os.Stdout)
+	_, err = fmt.Fprintln(w)
 	return err
 }
 
-func writeOspJSON(results []ospRegionData, filter string) error {
-	doc, errs := buildOspOutputDoc(results, filter)
+func writeOspJSON(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -300,23 +333,23 @@ func writeOspJSON(results []ospRegionData, filter string) error {
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
-	fmt.Fprintln(os.Stdout, string(out))
+	fmt.Fprintln(w, string(out))
 	return nil
 }
 
 // writeOspCSV writes one row per user with columns:
 // region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 // space_id and space_name are empty for org-level users.
-func writeOspCSV(results []ospRegionData, filter string) error {
-	doc, errs := buildOspOutputDoc(results, filter)
+func writeOspCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	w := csv.NewWriter(os.Stdout)
-	defer w.Flush()
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
 
-	if err := w.Write([]string{
+	if err := csvW.Write([]string{
 		"region", "org_id", "org_name",
 		"space_id", "space_name",
 		"cfuser_id", "cfuser_name", "cfuser_origin", "cfuser_roles",
@@ -327,7 +360,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 		for _, o := range r.Orgs {
 			for _, u := range o.Users {
 				// Org-level users: space_id and space_name are empty.
-				if err := w.Write([]string{
+				if err := csvW.Write([]string{
 					r.ID, o.ID, o.Name,
 					"", "",
 					u.ID, u.Name, u.Origin, u.Roles,
@@ -337,7 +370,7 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 			}
 			for _, sp := range o.Spaces {
 				for _, u := range sp.Users {
-					if err := w.Write([]string{
+					if err := csvW.Write([]string{
 						r.ID, o.ID, o.Name,
 						sp.ID, sp.Name,
 						u.ID, u.Name, u.Origin, u.Roles,
@@ -351,12 +384,53 @@ func writeOspCSV(results []ospRegionData, filter string) error {
 	return nil
 }
 
+// writeOspUARCSV writes the uar.csv format: one row per org/space membership,
+// columns Space/Org ID,Space/Org Name,Group Type,Member,Role.
+func writeOspUARCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
+	for _, e := range errs {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+	}
+
+	csvW := csv.NewWriter(w)
+	defer csvW.Flush()
+
+	if err := csvW.Write([]string{"Space/Org ID", "Space/Org Name", "Group Type", "Member", "Role"}); err != nil {
+		return err
+	}
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, u := range o.Users {
+				if err := csvW.Write([]string{o.ID, o.Name, "Organization", u.Name, ospUARRoles(u.Roles)}); err != nil {
+					return err
+				}
+			}
+			for _, sp := range o.Spaces {
+				for _, u := range sp.Users {
+					if err := csvW.Write([]string{sp.ID, sp.Name, "Space", u.Name, ospUARRoles(u.Roles)}); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ospUARRoles converts the ";"-joined role list used elsewhere in this
+// command into the ", "-separated form expected by the uar.csv format.
+func ospUARRoles(roles string) string {
+	return strings.Join(strings.Split(roles, ";"), ", ")
+}
+
 func init() {
 	orgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgSpaceUsersCmd)
 	orgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
-	orgSpaceUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
+	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv")
+	orgSpaceUsersCmd.Flags().String("include", "", "Only include users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
+	orgSpaceUsersCmd.Flags().String("exclude", "", "Exclude users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgSpaceUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")
 	orgSpaceUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
+	orgSpaceUsersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 }
