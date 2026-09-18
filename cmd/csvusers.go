@@ -138,16 +138,20 @@ func csvHeaderMatches(header, want []string) bool {
 	return true
 }
 
-// skipMatches reports whether pattern is a case-insensitive substring of any
-// of the given values. Returns false when pattern is empty.
+// skipMatches reports whether any comma-separated, case-insensitive keyword
+// in pattern is a substring of any of the given values (a single keyword —
+// no comma — behaves as a plain substring match). Returns false when pattern
+// is empty.
 func skipMatches(pattern string, values ...string) bool {
 	if pattern == "" {
 		return false
 	}
-	pl := strings.ToLower(pattern)
-	for _, v := range values {
-		if strings.Contains(strings.ToLower(v), pl) {
-			return true
+	for _, kw := range splitCSV(pattern) {
+		kw = strings.ToLower(kw)
+		for _, v := range values {
+			if strings.Contains(strings.ToLower(v), kw) {
+				return true
+			}
 		}
 	}
 	return false

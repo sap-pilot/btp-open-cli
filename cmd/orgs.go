@@ -71,7 +71,8 @@ highlighted org if nothing was checked. Pass --all to select every matching
 org (after --include/--exclude filtering) without prompting.
 
 Use --include/--exclude to narrow which orgs appear in the picker (or get
-auto-selected with --all): case-insensitive substring match on org_name.
+auto-selected with --all): each accepts a comma-separated list of keywords,
+and an org matches if org_name contains any of them (case-insensitive).
 
 The selection is saved to ~/.bo/credentials.json and applies only to the
 current login session: running 'bo login' or 'bo logoff' clears it, and you
@@ -227,8 +228,8 @@ func init() {
 	rootCmd.AddCommand(orgsCmd)
 	orgsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
-	orgsCmd.Flags().String("include", "", "Only show/select orgs whose org_name contains this pattern (case-insensitive substring match)")
-	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains this pattern (case-insensitive substring match)")
+	orgsCmd.Flags().String("include", "", "Only show/select orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
+	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().Bool("all", false, "Select every matching org without prompting for interactive selection")
 	orgsCmd.Flags().StringP("output", "o", "", "Write the selected orgs listing to this file instead of stdout")
 }

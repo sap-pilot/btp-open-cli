@@ -47,7 +47,10 @@ Use --regions to restrict processing to rows whose region column matches one of
 the given shorthands (e.g. us10,eu20). When omitted, all rows are processed.
 
 Without -y, a TOON preview of the targeted users and scopes is shown and
-confirmation is required before any changes are made.`,
+confirmation is required before any changes are made.
+
+--include/--exclude each accept a comma-separated list of keywords; a user
+matches if any of the matched fields contains any of them (case-insensitive).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -341,6 +344,6 @@ func init() {
 	rootCmd.AddCommand(deleteOrgSpaceUsersCmd)
 	deleteOrgSpaceUsersCmd.Flags().String("regions", "", "Only process rows whose region column matches one of these shorthands (e.g. us10,eu10); for broadcast rows (empty region), restricts which active regions are targeted")
 	deleteOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
-	deleteOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
-	deleteOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
+	deleteOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain any of these comma-separated, case-insensitive keywords")
+	deleteOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain any of these comma-separated, case-insensitive keywords")
 }

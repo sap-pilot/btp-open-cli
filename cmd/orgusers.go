@@ -70,10 +70,24 @@ func userMatchesFilter(u outUser, filter string) bool {
 		strings.Contains(strings.ToLower(u.Roles), f)
 }
 
+// userMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) against a user's id, name, origin, and roles.
+func userMatchesIncludeExclude(u outUser, includePattern, excludePattern string) bool {
+	fields := []string{u.ID, u.Name, u.Origin, u.Roles}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
+}
+
 // buildOutputDoc converts raw fetch results into the shared output model.
 // filter is an optional substring applied to user id/name/origin; orgs and
 // regions with no matching users are omitted from the result.
-func buildOutputDoc(results []regionData, filter string) (outDoc, []error) {
+func buildOutputDoc(results []regionData, filter, includePattern, excludePattern string) (outDoc, []error) {
 	var doc outDoc
 	var errs []error
 	for _, r := range results {
@@ -91,7 +105,7 @@ func buildOutputDoc(results []regionData, filter string) (outDoc, []error) {
 					Origin: u.Origin,
 					Roles:  strings.Join(od.Roles[u.GUID], ";"),
 				}
-				if userMatchesFilter(ou, filter) {
+				if userMatchesFilter(ou, filter) && userMatchesIncludeExclude(ou, includePattern, excludePattern) {
 					oo.Users = append(oo.Users, ou)
 				}
 			}
@@ -125,6 +139,10 @@ If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
 pick one interactively, or pass --org/--orgs directly.
 
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a user matches if id, name, origin, or
+roles contains any of them (case-insensitive).
+
 Use --output/-o to write the result to a file instead of stdout.
 
 If --regions is omitted, the regions from the last login are used.`,
@@ -132,6 +150,8 @@ If --regions is omitted, the regions from the last login are used.`,
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
 		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		orgGUID, _ := cmd.Flags().GetString("org")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		outputFile, _ := cmd.Flags().GetString("output")
@@ -241,11 +261,11 @@ If --regions is omitted, the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeOrgUsersJSON(out, results, filter)
+			return writeOrgUsersJSON(out, results, filter, includePattern, excludePattern)
 		case "csv":
-			return writeOrgUsersCSV(out, results, filter)
+			return writeOrgUsersCSV(out, results, filter, includePattern, excludePattern)
 		default: // "toon"
-			return writeOrgUsersToon(out, results, filter)
+			return writeOrgUsersToon(out, results, filter, includePattern, excludePattern)
 		}
 	},
 }
@@ -262,8 +282,8 @@ If --regions is omitted, the regions from the last login are used.`,
 //	        users[2]{id,name,origin}:
 //	          xyz-789,user@example.com,sap.ids
 //	          xyz-111,admin@example.com,uaa
-func writeOrgUsersToon(w io.Writer, results []regionData, filter string) error {
-	doc, errs := buildOutputDoc(results, filter)
+func writeOrgUsersToon(w io.Writer, results []regionData, filter, includePattern, excludePattern string) error {
+	doc, errs := buildOutputDoc(results, filter, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -279,8 +299,8 @@ func writeOrgUsersToon(w io.Writer, results []regionData, filter string) error {
 }
 
 // writeOrgUsersJSON serializes the output document as indented JSON.
-func writeOrgUsersJSON(w io.Writer, results []regionData, filter string) error {
-	doc, errs := buildOutputDoc(results, filter)
+func writeOrgUsersJSON(w io.Writer, results []regionData, filter, includePattern, excludePattern string) error {
+	doc, errs := buildOutputDoc(results, filter, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -293,8 +313,8 @@ func writeOrgUsersJSON(w io.Writer, results []regionData, filter string) error {
 }
 
 // writeOrgUsersCSV writes region,org_id,org_name,user_id,user_name,user_origin rows.
-func writeOrgUsersCSV(w io.Writer, results []regionData, filter string) error {
-	doc, errs := buildOutputDoc(results, filter)
+func writeOrgUsersCSV(w io.Writer, results []regionData, filter, includePattern, excludePattern string) error {
+	doc, errs := buildOutputDoc(results, filter, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
@@ -325,6 +345,8 @@ func init() {
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
 	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
 	orgUsersCmd.Flags().String("filter", "", "Case-insensitive substring filter applied to user id, name, origin, and roles")
+	orgUsersCmd.Flags().String("include", "", "Only include users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
+	orgUsersCmd.Flags().String("exclude", "", "Exclude users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")
 	orgUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	orgUsersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")

@@ -80,91 +80,6 @@ go build -o bo
 mv bo ~/.local/bin/   # optional
 ```
 
-## Custom Command Development
-
-`btp-open-cli` is designed to be forked and extended. The `cmd/custom/` package is the dedicated home for commands that belong to your fork — they live alongside the built-in commands, build into the same binary, and are completely invisible to upstream merges.
-
-### How it works
-
-All commands — built-in and custom — are registered with Cobra's root command via `cmd.RegisterCommand`. Custom commands go in `cmd/custom/`, which is a plain Go package imported by `main.go` via a blank import:
-
-```go
-import (
-    "btp-open-cli/cmd"
-    _ "btp-open-cli/cmd/custom" // loads any custom commands
-)
-```
-
-### Adding a custom command
-
-1. **Copy the template** that ships with the repo:
-
-```bash
-cp cmd/custom/example_custom_command.go.template cmd/custom/hello.go
-```
-
-2. **Edit the new file.** The only rule: call `cmd.RegisterCommand(...)` inside `init()`.
-
-```go
-package custom
-
-import (
-    "fmt"
-
-    "btp-open-cli/cmd"
-
-    "github.com/spf13/cobra"
-)
-
-func init() {
-    cmd.RegisterCommand(&cobra.Command{
-        Use:   "hello",
-        Short: "Say hello (example custom command)",
-        RunE: func(c *cobra.Command, args []string) error {
-            fmt.Fprintln(c.OutOrStdout(), "Hello from a custom command!")
-            return nil
-        },
-    })
-}
-```
-
-3. **Build and run:**
-
-```bash
-go build -o bo .
-./bo hello
-# Hello from a custom command!
-```
-
-Your new command appears alongside all built-in commands in `./bo --help`.
-
-### Pulling upstream changes
-
-Because your custom files live in `cmd/custom/` and upstream only ever touches `cmd/*.go` (never `cmd/custom/`), a `git pull upstream main` will never conflict with your custom commands. Add new features, bump versions, pick up bug fixes — your commands are untouched.
-
-### Running tests
-
-After adding custom code, run the full test suite to confirm nothing is broken:
-
-```bash
-go test ./...
-```
-
-To run only the command-layer tests:
-
-```bash
-go test ./cmd/...
-```
-
-All tests use mocked REST API servers — no real BTP credentials or network access required.
-
-### Tips for vibe-coding new commands
-
-- Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
-- The `--format`, `--filter`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
-- For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
-- Run `go vet ./...` after adding a command to catch any import or signature issues before building.
-
 ## Built-in Commands
 
 ### Common
@@ -294,9 +209,10 @@ bo orgs
 # Select every accessible org without prompting
 bo orgs --all
 
-# Narrow the picker (or --all selection) to orgs whose name contains a pattern
-bo orgs --include prod
-bo orgs --exclude sandbox
+# Narrow the picker (or --all selection) to orgs whose name contains any of
+# these comma-separated, case-insensitive keywords
+bo orgs --include prod,staging
+bo orgs --exclude sandbox,test
 
 # Specific regions
 bo orgs --regions us10,us20,eu10
@@ -341,11 +257,12 @@ bo org-spaces --format csv
 # Specific regions
 bo org-spaces --regions us10,us20,eu10
 
-# Only show spaces where org_name or space_name contains a pattern
-bo org-spaces --include prod
+# Only show spaces where org_name or space_name contains any of these
+# comma-separated, case-insensitive keywords
+bo org-spaces --include prod,staging
 
-# Exclude spaces where org_name or space_name contains a pattern
-bo org-spaces --exclude sandbox
+# Exclude spaces where org_name or space_name contains any of these keywords
+bo org-spaces --exclude sandbox,test
 ```
 
 TOON output format:
@@ -384,6 +301,13 @@ bo org-users --format csv
 
 # Filter by name, id, origin, or role
 bo org-users --filter manager
+
+# Only include users where id, name, origin, or roles contain any of these
+# comma-separated, case-insensitive keywords
+bo org-users --include manager,auditor
+
+# Exclude users where id, name, origin, or roles contain any of these keywords
+bo org-users --exclude sap.default,sap.ids
 
 # Restrict to a single org by GUID
 bo org-users --org <org-guid>
@@ -424,6 +348,13 @@ bo org-space-users --format uar.csv
 
 # Filter by name, id, origin, or role
 bo org-space-users --filter space_developer
+
+# Only include users where id, name, origin, or roles contain any of these
+# comma-separated, case-insensitive keywords
+bo org-space-users --include manager,auditor
+
+# Exclude users where id, name, origin, or roles contain any of these keywords
+bo org-space-users --exclude sap.default,sap.ids
 
 # Restrict to a single org by GUID
 bo org-space-users --org <org-guid>
@@ -484,11 +415,13 @@ bo create-org-space-users org-space-users.csv --excludeOrgs prod-orgs.csv
 # Only process rows for specific regions (also restricts broadcast rows)
 bo create-org-space-users org-space-users.csv --regions eu20,us10
 
-# Skip users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo create-org-space-users org-space-users.csv --exclude sap.ids -y
+# Skip users where cfuser_name, cfuser_origin, or cfuser_roles contain any of
+# these comma-separated, case-insensitive keywords
+bo create-org-space-users org-space-users.csv --exclude sap.ids,sap.default -y
 
-# Only include users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo create-org-space-users org-space-users.csv --include sap.custom -y
+# Only include users where cfuser_name, cfuser_origin, or cfuser_roles contain
+# any of these keywords
+bo create-org-space-users org-space-users.csv --include sap.custom,sap.ids -y
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -528,11 +461,13 @@ bo delete-org-space-users org-space-users.csv -y
 # Only process rows for specific regions (also restricts broadcast rows)
 bo delete-org-space-users org-space-users.csv --regions eu20,us10
 
-# Skip users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo delete-org-space-users org-space-users.csv --exclude sap.ids -y
+# Skip users where cfuser_name, cfuser_origin, or cfuser_roles contain any of
+# these comma-separated, case-insensitive keywords
+bo delete-org-space-users org-space-users.csv --exclude sap.ids,sap.default -y
 
-# Only include users whose cfuser_name, cfuser_origin, or cfuser_roles match a pattern
-bo delete-org-space-users org-space-users.csv --include sap.custom -y
+# Only include users where cfuser_name, cfuser_origin, or cfuser_roles contain
+# any of these keywords
+bo delete-org-space-users org-space-users.csv --include sap.custom,sap.ids -y
 ```
 
 Without `-y`, a TOON preview of all targeted users and scopes is shown before any changes are made.
@@ -583,6 +518,13 @@ bo users --excludeOrgs prod-orgs.csv
 # Filter output — only users matching a substring in any field
 bo users --filter "@example.com"
 bo users --filter "sap.ids"
+
+# Only include users where any user field contains any of these
+# comma-separated, case-insensitive keywords
+bo users --include sap.ids,sap.custom
+
+# Exclude users where any user field contains any of these keywords
+bo users --exclude sap.default,uaa
 
 # Include only specific fields in output
 bo users --fields user_id,user_name,email,user_origin
@@ -647,11 +589,12 @@ bo create-users users.csv
 # Skip confirmation prompt
 bo create-users users.csv -y
 
-# Skip users whose user_name, email, or groups match a pattern
-bo create-users users.csv --exclude sap.ids -y
+# Skip users where user_name, email, or groups contain any of these
+# comma-separated, case-insensitive keywords
+bo create-users users.csv --exclude sap.ids,sap.default -y
 
-# Only include users whose user_name, email, or groups match a pattern
-bo create-users users.csv --include sap.custom -y
+# Only include users where user_name, email, or groups contain any of these keywords
+bo create-users users.csv --include sap.custom,sap.ids -y
 ```
 
 Preview output format (TOON):
@@ -711,11 +654,12 @@ bo delete-users users.csv
 # Skip confirmation prompt
 bo delete-users users.csv -y
 
-# Skip users whose user_id, user_name, email, or groups match a pattern
-bo delete-users users.csv --exclude alice@example.com -y
+# Skip users where user_id, user_name, email, or groups contain any of these
+# comma-separated, case-insensitive keywords
+bo delete-users users.csv --exclude alice@example.com,bob@example.com -y
 
-# Only include users whose user_id, user_name, email, or groups match a pattern
-bo delete-users users.csv --include sap.custom -y
+# Only include users where user_id, user_name, email, or groups contain any of these keywords
+bo delete-users users.csv --include sap.custom,sap.ids -y
 ```
 
 Preview output format (TOON):
@@ -1430,6 +1374,91 @@ HTTPS_PROXY=http://127.0.0.1:8080 HTTPS_PROXY_INSECURE=true bo login --regions u
 Open `http://127.0.0.1:8081` in a browser to browse captured requests interactively.
 
 > **Note:** `HTTPS_PROXY_INSECURE=true` disables TLS certificate verification so mitmproxy's intercepted certificate is accepted. Do not use this in production.
+
+## Custom Command Development
+
+`btp-open-cli` is designed to be forked and extended. The `cmd/custom/` package is the dedicated home for commands that belong to your fork — they live alongside the built-in commands, build into the same binary, and are completely invisible to upstream merges.
+
+### How it works
+
+All commands — built-in and custom — are registered with Cobra's root command via `cmd.RegisterCommand`. Custom commands go in `cmd/custom/`, which is a plain Go package imported by `main.go` via a blank import:
+
+```go
+import (
+    "btp-open-cli/cmd"
+    _ "btp-open-cli/cmd/custom" // loads any custom commands
+)
+```
+
+### Adding a custom command
+
+1. **Copy the template** that ships with the repo:
+
+```bash
+cp cmd/custom/example_custom_command.go.template cmd/custom/hello.go
+```
+
+2. **Edit the new file.** The only rule: call `cmd.RegisterCommand(...)` inside `init()`.
+
+```go
+package custom
+
+import (
+    "fmt"
+
+    "btp-open-cli/cmd"
+
+    "github.com/spf13/cobra"
+)
+
+func init() {
+    cmd.RegisterCommand(&cobra.Command{
+        Use:   "hello",
+        Short: "Say hello (example custom command)",
+        RunE: func(c *cobra.Command, args []string) error {
+            fmt.Fprintln(c.OutOrStdout(), "Hello from a custom command!")
+            return nil
+        },
+    })
+}
+```
+
+3. **Build and run:**
+
+```bash
+go build -o bo .
+./bo hello
+# Hello from a custom command!
+```
+
+Your new command appears alongside all built-in commands in `./bo --help`.
+
+### Pulling upstream changes
+
+Because your custom files live in `cmd/custom/` and upstream only ever touches `cmd/*.go` (never `cmd/custom/`), a `git pull upstream main` will never conflict with your custom commands. Add new features, bump versions, pick up bug fixes — your commands are untouched.
+
+### Running tests
+
+After adding custom code, run the full test suite to confirm nothing is broken:
+
+```bash
+go test ./...
+```
+
+To run only the command-layer tests:
+
+```bash
+go test ./cmd/...
+```
+
+All tests use mocked REST API servers — no real BTP credentials or network access required.
+
+### Tips for vibe-coding new commands
+
+- Look at any existing command file in `cmd/` as a reference — they all follow the same pattern: one `*Cmd` variable, one `init()` that calls `rootCmd.AddCommand` (or here, `cmd.RegisterCommand`), flags declared in `init()`.
+- The `--format`, `--filter`, `--regions`, and `--org` flags are implemented consistently across commands — copy the pattern from the closest existing command.
+- For commands that need to access CF orgs, spaces, or service instances, the helpers in `cmd/` (e.g. `resolveOrgDestClient`, `makeTokenRefresher`) are available since your file is in the same module.
+- Run `go vet ./...` after adding a command to catch any import or signature issues before building.
 
 ## More help
 

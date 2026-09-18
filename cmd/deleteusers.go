@@ -106,7 +106,10 @@ Only the access token is cached in ~/.bo/credentials.json — service key creden
 are fetched from CF on demand and never stored locally.
 
 Without -y, a TOON preview of all users that will be deleted is shown before
-execution and confirmation is required.`,
+execution and confirmation is required.
+
+--include/--exclude each accept a comma-separated list of keywords; a user
+matches if any of the matched fields contains any of them (case-insensitive).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
@@ -308,6 +311,6 @@ func init() {
 	deleteUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(deleteUsersCmd)
 	deleteUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt for user deletion")
-	deleteUsersCmd.Flags().String("exclude", "", "Skip users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
-	deleteUsersCmd.Flags().String("include", "", "Only include users whose user_id, user_name, email, or groups contain this pattern (case-insensitive substring match)")
+	deleteUsersCmd.Flags().String("exclude", "", "Skip users whose user_id, user_name, email, or groups contain any of these comma-separated, case-insensitive keywords")
+	deleteUsersCmd.Flags().String("include", "", "Only include users whose user_id, user_name, email, or groups contain any of these comma-separated, case-insensitive keywords")
 }

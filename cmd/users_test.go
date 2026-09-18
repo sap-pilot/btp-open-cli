@@ -180,6 +180,44 @@ func TestUsers_Filter(t *testing.T) {
 	}
 }
 
+func TestUsers_IncludeExcludeCSVKeywords(t *testing.T) {
+	const orgGUID = "org1"
+	xsuaaSrv := newXsuaaServer(t,
+		xsuaaUser("u1", "alice@example.com", "sap.ids"),
+		xsuaaUser("u2", "bob@example.com", "uaa"),
+		xsuaaUser("u3", "carol@example.com", "sap.default"),
+	)
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
+
+	// --include with two keywords: matches alice OR carol.
+	stdout, _, err := runCmd(t, "users", "--include", "alice,carol", "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --include failed: %v", err)
+	}
+	if !strings.Contains(stdout, "alice@example.com") || !strings.Contains(stdout, "carol@example.com") {
+		t.Errorf("expected alice and carol in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("bob should be excluded by --include, got: %q", stdout)
+	}
+
+	// --exclude with two keywords: drops alice and bob.
+	stdout, _, err = runCmd(t, "users", "--exclude", "alice,bob", "--no-prompt")
+	if err != nil {
+		t.Fatalf("users --exclude failed: %v", err)
+	}
+	if strings.Contains(stdout, "alice@example.com") || strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("alice and bob should be excluded, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "carol@example.com") {
+		t.Errorf("expected carol in output, got: %q", stdout)
+	}
+}
+
 func TestUsers_Fields(t *testing.T) {
 	const orgGUID = "org1"
 	xsuaaSrv := newXsuaaServer(t,

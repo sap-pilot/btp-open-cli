@@ -146,6 +146,30 @@ func TestOrgs_Include(t *testing.T) {
 	}
 }
 
+func TestOrgs_IncludeCSVKeywords(t *testing.T) {
+	threeOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "staging-org"},
+			{"guid": "g3", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": threeOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--all", "--include", "prod,staging")
+	if err != nil {
+		t.Fatalf("orgs --include with keyword list failed: %v", err)
+	}
+	if !strings.Contains(stdout, "prod-org") || !strings.Contains(stdout, "staging-org") {
+		t.Errorf("expected prod-org and staging-org in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev-org") {
+		t.Errorf("dev-org should have been excluded, got: %q", stdout)
+	}
+}
+
 func TestOrgs_Exclude(t *testing.T) {
 	twoOrgs := mustJSONStr(map[string]interface{}{
 		"pagination": map[string]interface{}{"total_pages": 1},

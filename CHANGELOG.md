@@ -35,6 +35,18 @@
   - A trailing line without a newline is counted; a completely empty file counts
     as zero lines.
 
+### Changed
+
+- **`--include`/`--exclude` now accept a comma-separated list of keywords**
+
+  `orgs`, `users`, `create-users`, `delete-users`, `org-users`, `org-space-users`, `create-org-space-users`, and `delete-org-space-users` all now support `--include=keyword1,keyword2,...` and `--exclude=keyword1,keyword2,...`. A row/user/org is included or excluded if **any** of its matched fields contains **any** of the given keywords (case-insensitive substring match). `org-users` and `org-space-users` previously had no `--include`/`--exclude` at all (only `--filter`); the other commands already had single-pattern `--include`/`--exclude`, which still work unchanged since a single keyword with no comma behaves exactly as before. `org-spaces` shares the same underlying matching and picks up the multi-keyword support too.
+
+  ```bash
+  bo users --include sap.ids,sap.custom
+  bo org-users --exclude sap.default,uaa
+  bo orgs --all --include prod,staging --format csv -o target-orgs.csv
+  ```
+
 ## v0.13 — 2026-07-09
 
 ### Added

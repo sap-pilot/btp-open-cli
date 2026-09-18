@@ -137,7 +137,10 @@ are fetched from CF on demand and never stored locally.
 
 If a user already exists (HTTP 409), creation is skipped and role collection
 assignment proceeds. Without -y, a TOON preview is shown and confirmation is
-required before any changes are made.`,
+required before any changes are made.
+
+--include/--exclude each accept a comma-separated list of keywords; a user
+matches if any of the matched fields contains any of them (case-insensitive).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
@@ -415,6 +418,6 @@ func init() {
 	createUsersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(createUsersCmd)
 	createUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
-	createUsersCmd.Flags().String("exclude", "", "Skip users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
-	createUsersCmd.Flags().String("include", "", "Only include users whose user_name, email, or groups contain this pattern (case-insensitive substring match)")
+	createUsersCmd.Flags().String("exclude", "", "Skip users whose user_name, email, or groups contain any of these comma-separated, case-insensitive keywords")
+	createUsersCmd.Flags().String("include", "", "Only include users whose user_name, email, or groups contain any of these comma-separated, case-insensitive keywords")
 }

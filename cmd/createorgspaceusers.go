@@ -300,7 +300,10 @@ Roles are split by prefix: organization_* roles are applied at the org level;
 space_* roles are applied at the space level.
 
 Without -y, a TOON preview of all targeted users and scopes is shown and
-confirmation is required before any changes are made.`,
+confirmation is required before any changes are made.
+
+--include/--exclude each accept a comma-separated list of keywords; a user
+matches if any of the matched fields contains any of them (case-insensitive).`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -567,6 +570,6 @@ func init() {
 	createOrgSpaceUsersCmd.Flags().String("orgs", "", "Path to orgs CSV file to include (columns: region,org_id,org_name); filters rows by org_id or org_name")
 	createOrgSpaceUsersCmd.Flags().String("excludeOrgs", "", "Path to orgs CSV file to skip (columns: region,org_id,org_name)")
 	createOrgSpaceUsersCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompt")
-	createOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
-	createOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain this pattern (case-insensitive substring match)")
+	createOrgSpaceUsersCmd.Flags().String("exclude", "", "Skip users whose cfuser_name, cfuser_origin, or cfuser_roles contain any of these comma-separated, case-insensitive keywords")
+	createOrgSpaceUsersCmd.Flags().String("include", "", "Only include users whose cfuser_name, cfuser_origin, or cfuser_roles contain any of these comma-separated, case-insensitive keywords")
 }

@@ -59,6 +59,43 @@ func TestOrgSpaceUsers_Filter(t *testing.T) {
 	}
 }
 
+func TestOrgSpaceUsers_IncludeExcludeCSVKeywords(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations":            singleOrgPage("org1", "my-org"),
+		"/v3/organizations/org1/users": orgUsersPage(cfUser("u1", "alice@example.com", "sap.ids")),
+		"/v3/spaces":                   spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/spaces/sp1/users": orgUsersPage(
+			cfUser("u2", "bob@example.com", "uaa"),
+			cfUser("u3", "carol@example.com", "sap.default"),
+		),
+		"/v3/roles": emptyPage(),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "org-space-users", "--include", "alice,carol")
+	if err != nil {
+		t.Fatalf("org-space-users --include failed: %v", err)
+	}
+	if !strings.Contains(stdout, "alice@example.com") || !strings.Contains(stdout, "carol@example.com") {
+		t.Errorf("expected alice and carol in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("bob should be excluded by --include, got: %q", stdout)
+	}
+
+	stdout, _, err = runCmd(t, "org-space-users", "--exclude", "alice,bob")
+	if err != nil {
+		t.Fatalf("org-space-users --exclude failed: %v", err)
+	}
+	if strings.Contains(stdout, "alice@example.com") || strings.Contains(stdout, "bob@example.com") {
+		t.Errorf("alice and bob should be excluded, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "carol@example.com") {
+		t.Errorf("expected carol in output, got: %q", stdout)
+	}
+}
+
 func TestOrgSpaceUsers_CSV(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations":            singleOrgPage("org1", "my-org"),

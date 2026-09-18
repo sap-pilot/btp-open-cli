@@ -90,6 +90,10 @@ If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
 pick one interactively, or pass --org/--orgs directly.
 
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a user matches if any user field
+contains any of them (case-insensitive).
+
 Use --output/-o to write the result to a file instead of stdout.
 
 If --regions is omitted the regions from the last login are used.`,
@@ -102,6 +106,8 @@ If --regions is omitted the regions from the last login are used.`,
 		outputFile, _ := cmd.Flags().GetString("output")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		filter, _ := cmd.Flags().GetString("filter")
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 		fieldsCSV, _ := cmd.Flags().GetString("fields")
 		excludeFieldsCSV, _ := cmd.Flags().GetString("excludeFields")
 		fields := buildUsrFieldSet(fieldsCSV, excludeFieldsCSV)
@@ -224,6 +230,9 @@ If --regions is omitted the regions from the last login are used.`,
 				if !usrMatchesFilter(u, email, lastLogon, groups, filter) {
 					continue
 				}
+				if !usrMatchesIncludeExclude(u, email, lastLogon, groups, includePattern, excludePattern) {
+					continue
+				}
 				outUsers = append(outUsers, usrApplyFields(u, email, lastLogon, groups, fields))
 			}
 			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], usrOutOrg{
@@ -254,7 +263,7 @@ If --regions is omitted the regions from the last login are used.`,
 		case "csv":
 			return writeUsersCSV(out, doc)
 		case "uar.csv":
-			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, filter))
+			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, filter, includePattern, excludePattern))
 		default: // "toon"
 			return writeUsersToon(out, doc)
 		}
@@ -279,7 +288,7 @@ type uarRow struct {
 // buildUARRows pivots per-org users and role collections into one row per
 // role collection membership (or one "N/A" row for role collections with no
 // members), sorted by role collection name within each org.
-func buildUARRows(regionOrder []string, results []usrOrgResult, filter string) []uarRow {
+func buildUARRows(regionOrder []string, results []usrOrgResult, filter, includePattern, excludePattern string) []uarRow {
 	regionResults := make(map[string][]usrOrgResult)
 	for _, r := range results {
 		if r.err != nil {
@@ -297,6 +306,9 @@ func buildUARRows(regionOrder []string, results []usrOrgResult, filter string) [
 				lastLogon := xsuaa.MSToISO(u.LastLogonTime)
 				groups := xsuaa.GroupValues(u.Groups)
 				if !usrMatchesFilter(u, email, lastLogon, groups, filter) {
+					continue
+				}
+				if !usrMatchesIncludeExclude(u, email, lastLogon, groups, includePattern, excludePattern) {
 					continue
 				}
 				for _, g := range u.Groups {
@@ -438,6 +450,8 @@ func init() {
 	usersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	usersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 	usersCmd.Flags().String("filter", "", "Case-insensitive substring filter on any user field (user_id, user_externalId, user_origin, user_name, lastLogonTime, groups)")
+	usersCmd.Flags().String("include", "", "Only include users where any user field contains any of these comma-separated, case-insensitive keywords")
+	usersCmd.Flags().String("exclude", "", "Exclude users where any user field contains any of these comma-separated, case-insensitive keywords")
 	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups)")
 	usersCmd.Flags().String("excludeFields", "", "Comma-separated fields to exclude from output")
 }
@@ -487,6 +501,20 @@ func usrMatchesFilter(u xsuaa.User, email, lastLogon, groups, filter string) boo
 		strings.Contains(strings.ToLower(email), fl) ||
 		strings.Contains(strings.ToLower(lastLogon), fl) ||
 		strings.Contains(strings.ToLower(groups), fl)
+}
+
+// usrMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) against the same fields usrMatchesFilter checks.
+func usrMatchesIncludeExclude(u xsuaa.User, email, lastLogon, groups, includePattern, excludePattern string) bool {
+	fields := []string{u.ID, u.ExternalID, u.Origin, u.UserName, email, lastLogon, groups}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
 }
 
 // usrApplyFields builds a usrOutUser, omitting fields not in the active set.
