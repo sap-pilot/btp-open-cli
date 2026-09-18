@@ -1468,7 +1468,7 @@ All tests use mocked REST API servers — no real BTP credentials or network acc
 ## Using `bo` as an agent skill
 
 This repo ships [`skills/btp-open-cli/SKILL.md`](skills/btp-open-cli/SKILL.md),
-a packaged skill that teaches an AI coding agent (Claude Code, Codex, or
+a packaged skill that teaches an AI coding agent (Claude Code, Codex, Grok, or
 similar) how to drive `bo` for bulk BTP administration — inventory/audit
 tasks freely, plus guardrails for write commands (`create-users`,
 `delete-users`, `create-org-space-users`, `delete-org-space-users`,
@@ -1513,9 +1513,12 @@ mkdir -p .claude/skills
 cp -r /path/to/btp-open-cli/skills/btp-open-cli .claude/skills/btp-open-cli
 ```
 
-**Codex or other agents without a native skill format** — point the agent at
-the file directly, or fold its contents into your `AGENTS.md`/project
-instructions:
+**Codex, Grok, or other agents without a confirmed native skill format** —
+the file's content (guardrails, commands, examples) is plain markdown with no
+Claude Code–specific syntax, so any agent that can read a file and run shell
+commands can follow it; there's just no auto-discovery to rely on. Point the
+agent at the file directly, or fold its contents into whatever
+instructions/system-prompt file it reads (e.g. `AGENTS.md`):
 
 ```bash
 cat skills/btp-open-cli/SKILL.md >> AGENTS.md

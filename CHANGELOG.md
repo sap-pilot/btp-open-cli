@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.15.0 — 2026-09-18
+
+### Added
+
+- **`skills/btp-open-cli/SKILL.md` — agent skill for bulk BTP administration**
+
+  A packaged skill that teaches an AI coding agent (Claude Code, Codex, Grok, or similar) how to drive `bo` safely and non-interactively: read commands are free to run, while write commands (`create-users`, `delete-users`, `create-org-space-users`, `delete-org-space-users`, and the `subaccount-destinations` create/update/delete trio, which has no confirmation step at all) come with explicit guardrails — preview first, never self-approve `-y`, scope orgs explicitly instead of trusting a stale `bo orgs` session default, and redirect stdin on anything that might otherwise hang on a prompt it can't answer. The skill also knows how to bootstrap `bo` itself from the latest GitHub release if it's missing, and how to complete `bo login` (including SSO, see below) without a human needing to babysit the terminal.
+
+  Install via `npx agent-skills-cli add sap-pilot/btp-open-cli`, or copy `skills/btp-open-cli` into `~/.claude/skills` (or a project's `.claude/skills`) manually; see the README's "Using `bo` as an agent skill" section.
+
+- **`bo login --sso ... --passcode <codes>` — non-interactive SSO login**
+
+  `--sso` previously always blocked on a masked, terminal-only "Passcode>" prompt per region — something an agent driving `bo` from a non-interactive shell can't answer. `--passcode` accepts one or more one-time passcodes, comma-separated in the same order as `--regions`/`--region`, and skips the prompt entirely:
+
+  ```bash
+  # 1. Print each region's passcode URL and exit (stdin closed, so it fails
+  #    fast at the prompt instead of hanging)
+  bo login --sso --regions us10,eu10 < /dev/null
+
+  # 2. A human opens each URL in a browser and hands back the resulting code
+  # 3. Finish the login with both codes, non-interactively
+  bo login --sso --regions us10,eu10 --passcode <code-for-us10>,<code-for-eu10>
+  ```
+
 ## v0.14.0 — 2026-09-09
 
 ### Added
