@@ -130,7 +130,8 @@ they're logged in.
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `org-users`,
   `org-space-users`, `users`, `apps`, `role-collections`,
   `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
-  `count-lines`.
+  `count-lines`, `service-credentials` (this one outputs raw secrets — see
+  "Handling `service-credentials` output" below before using it).
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
@@ -183,6 +184,26 @@ Read all of these before running any command from the "Write" list above.
    trail after a bulk operation, and check it yourself if an outcome is
    ambiguous.
 
+## Handling `service-credentials` output
+
+`service-credentials` fetches each matching app's live `VCAP_SERVICES` —
+passwords, client secrets, certificates, the lot — and prints it as plain
+JSON. It's a read command (nothing in BTP changes), but the output itself is
+sensitive, so:
+
+- Prefer `--output <file>` over letting it print to a transcript or chat the
+  user didn't ask to persist, and tell the user where the file landed.
+- Never echo, summarize with values intact, or paste raw credentials back
+  into the conversation — describe *what* was found (e.g. "3 hana bindings
+  across 2 spaces") rather than the secret values themselves, unless the user
+  explicitly asks for a specific value.
+- It's still written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other
+  command's output (see "Everything is logged" above) — mention this to the
+  user so they know that log file now contains secrets too, don't just stay
+  silent about it.
+- Narrow with `--services`/`--spaces`/`--apps` to the minimum needed rather
+  than pulling every binding across the whole org scope by default.
+
 ## Example workflows
 
 ### Inventory / audit (read-only, safe to run freely)
@@ -196,6 +217,10 @@ bo users --orgs prod-orgs.csv --format uar.csv -o uar-export.csv
 
 # Destinations matching a keyword or glob, across the same scope
 bo subaccount-destinations --orgs prod-orgs.csv --include "API*PP" --format csv
+
+# Extract hana credentials for *-srv apps in the prod space, to a file —
+# see "Handling service-credentials output" above before running this
+bo service-credentials --orgs prod-orgs.csv --spaces prod --apps "*-srv" --services hana -o hana-creds.json
 ```
 
 ### Bulk-create users (guarded)

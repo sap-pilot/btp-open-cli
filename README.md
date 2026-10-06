@@ -102,6 +102,7 @@ mv bo ~/.local/bin/   # optional
 | [`create-org-space-users`](#create-org-space-users) | Add users with org and space roles from a CSV file |
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
+| [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 
 ### XSUAA Users
 
@@ -185,8 +186,8 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 ### `orgs`
 
 Interactively select which accessible CF orgs should be the **default scope** for
-org-aware commands (`org-users`, `org-space-users`, `apps`, `users`,
-`role-collections`, `subaccount-destinations` and its create/update/delete
+org-aware commands (`org-users`, `org-space-users`, `apps`, `service-credentials`,
+`users`, `role-collections`, `subaccount-destinations` and its create/update/delete
 variants, and `describe-subaccount`) when they're run without `--org` or `--orgs`.
 
 Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
@@ -241,7 +242,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1183,6 +1184,47 @@ regions:
 CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
 
 The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+
+### `service-credentials`
+
+Look through apps across one or more regions and orgs, fetch each matching app's bound service credentials from `VCAP_SERVICES` (via its system environment variables), and output them as a flat JSON array — one entry per service binding, with `org` and `space` added into each entry.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used.
+
+```bash
+# Every service binding across the default org scope
+bo service-credentials
+
+# Narrow to specific spaces (comma-separated, exact name match)
+bo service-credentials --spaces prod,prod-dr
+
+# Narrow to apps by name pattern (comma-separated; glob if it contains * ? [, else substring)
+bo service-credentials --apps "*-srv,*-app"
+
+# Only hana and xsuaa service bindings
+bo service-credentials --services hana,xsuaa
+
+# Combine, and write to a file instead of stdout
+bo service-credentials --org <org-guid> --spaces prod --apps "*-srv" --services hana -o hana-creds.json
+```
+
+Sample output:
+
+```json
+[
+  {
+    "org": "my-org",
+    "space": "prod",
+    "label": "hana",
+    "name": "FI-EMPMaintain-hdi",
+    "tags": ["hana", "database", "relational"],
+    "instance_guid": "847d683e-e6d5-4d61-8e69-23242ea65404",
+    "credentials": { "host": "...", "password": "...", "...": "..." }
+  }
+]
+```
+
+Fetching an app's environment requires at least Space Developer access to the space it's in; apps that can't be read are reported as warnings on stderr and skipped rather than aborting the whole command.
 
 ### `reorg-wiki-attachments`
 

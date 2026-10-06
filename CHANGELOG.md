@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.16.0 — 2026-10-06
+
+### Added
+
+- **`service-credentials` — extract VCAP_SERVICES credentials across orgs**
+
+  Looks through apps across one or more regions and orgs, fetches each matching app's bound service credentials from `VCAP_SERVICES` (via its system environment variables), and outputs them as a flat JSON array — one entry per service binding, with `org` and `space` added into each entry. Narrow the match set with `--spaces` (comma-separated, exact space names), `--apps` (comma-separated name patterns — glob if a pattern contains `* ? [`, otherwise substring), and `--services` (comma-separated keywords matched against each binding's label or name). Uses the same `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default-scope resolution as `apps`. Apps that can't be read (insufficient role) are reported as warnings and skipped rather than aborting the whole run.
+
+  ```bash
+  bo service-credentials --spaces prod --apps "*-srv,*-app" --services hana,xsuaa -o creds.json
+  ```
+
 ## v0.15.0 — 2026-09-18
 
 ### Added
