@@ -103,6 +103,7 @@ mv bo ~/.local/bin/   # optional
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
+| [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 
 ### XSUAA Users
 
@@ -187,8 +188,9 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 Interactively select which accessible CF orgs should be the **default scope** for
 org-aware commands (`org-users`, `org-space-users`, `apps`, `service-credentials`,
-`users`, `role-collections`, `subaccount-destinations` and its create/update/delete
-variants, and `describe-subaccount`) when they're run without `--org` or `--orgs`.
+`create-ups`, `users`, `role-collections`, `subaccount-destinations` and its
+create/update/delete variants, and `describe-subaccount`) when they're run
+without `--org` or `--orgs`.
 
 Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
 Controls: up/down to move the highlight, space to toggle the highlighted org,
@@ -242,7 +244,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1225,6 +1227,44 @@ Sample output:
 ```
 
 Fetching an app's environment requires at least Space Developer access to the space it's in; apps that can't be read are reported as warnings on stderr and skipped rather than aborting the whole command.
+
+### `create-ups`
+
+Create (or update) user-provided services from a `service-credentials.json` file — the same shape `bo service-credentials` outputs — broadcasting the file's services into a named space across one or more target orgs.
+
+```
+bo create-ups <service-credentials.json> --space <space-name> [-y]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`. `--space` is required and matched by exact name (case-insensitive) within each target org — the source file's own `org`/`space` fields are informational only and don't affect targeting: every filtered service in the file is created in every target org's matching space.
+
+```bash
+# Create every service in the file, in the "prod" space of every org in the default scope
+bo create-ups hana-creds.json --space prod
+
+# Only the hana services, with "-ups" appended to each service's name
+bo create-ups hana-creds.json --space prod --include hana --postfix -ups
+
+# Skip confirmation prompts (for scripts)
+bo create-ups hana-creds.json --space prod -y
+```
+
+Before creating anything, a preview table is shown:
+
+```
+Services to create/update:
+ORG      SPACE  SERVICE-NAME            LABEL  PLAN
+org-one  prod   FI-EMPMaintain-hdi-ups  hana   hdi-shared
+org-two  prod   FI-EMPMaintain-hdi-ups  hana   hdi-shared
+
+2 to create, 0 to update (already exist).
+
+Proceed? [y/N]
+```
+
+Confirmation is required unless `-y`/`--yes` is given. If a service with the same (post-`--postfix`) name already exists in its target space, it's listed separately and a second confirmation to overwrite it is required, also skipped by `-y`. Declining either prompt aborts the whole command — nothing is created or updated.
+
+`--include`/`--exclude` each accept a comma-separated list of keywords and match against each service's `label` or `name` (case-insensitive substring).
 
 ### `reorg-wiki-attachments`
 

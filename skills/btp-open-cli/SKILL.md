@@ -135,7 +135,7 @@ they're logged in.
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
-  `delete-subaccount-destinations`.
+  `delete-subaccount-destinations`, `create-ups`.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -183,13 +183,24 @@ Read all of these before running any command from the "Write" list above.
    timestamped, one entry per invocation) — point the user there for an audit
    trail after a bulk operation, and check it yourself if an outcome is
    ambiguous.
+9. **`create-ups` broadcasts into every target org/space, and reads secrets
+   as input.** It takes a `service-credentials.json` file (see "Handling
+   `service-credentials` output" below — the input is just as sensitive as
+   that command's output) and creates every service in it, in the `--space`
+   you name, in *every* org currently in scope — not just the org(s) the
+   file's services came from. It has two separate confirmations (the create/
+   update preview, and a second one specifically for any service that
+   already exists and would be overwritten); `-y` skips both, so only pass
+   it once a human has seen the preview table and the org scope is
+   deliberate.
 
 ## Handling `service-credentials` output
 
 `service-credentials` fetches each matching app's live `VCAP_SERVICES` —
 passwords, client secrets, certificates, the lot — and prints it as plain
 JSON. It's a read command (nothing in BTP changes), but the output itself is
-sensitive, so:
+sensitive — and the same file is what `create-ups` later reads as input, so
+treat it as sensitive on both ends of that pipeline:
 
 - Prefer `--output <file>` over letting it print to a transcript or chat the
   user didn't ask to persist, and tell the user where the file landed.
@@ -251,6 +262,19 @@ bo delete-org-space-users targets.csv --include sap.default -y             # aft
 bo subaccount-destinations --orgs target-orgs.csv --format json   # current state
 # show dests.json's contents to the user before proceeding
 bo update-subaccount-destinations --orgs target-orgs.csv --destinations dests.json --no-prompt
+```
+
+### Broadcast credentials to other orgs as user-provided services (guarded, sensitive input)
+
+```bash
+# Extract once from a source org (see secrets handling above)
+bo service-credentials --org <source-org-guid> --spaces prod --services hana -o hana-creds.json
+
+# Preview the broadcast — this is a dry look at the plan, not a confirmed run
+bo create-ups hana-creds.json --orgs target-orgs.csv --space prod --postfix -ups < /dev/null
+
+# Only after the preview above has been shown to and approved by the user:
+bo create-ups hana-creds.json --orgs target-orgs.csv --space prod --postfix -ups -y
 ```
 
 ## When something fails

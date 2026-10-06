@@ -12,6 +12,15 @@
   bo service-credentials --spaces prod --apps "*-srv,*-app" --services hana,xsuaa -o creds.json
   ```
 
+- **`create-ups` — create user-provided services from a service-credentials.json file**
+
+  Takes the JSON array produced by `service-credentials` and creates (or updates) a user-provided service instance per entry, in a named `--space` broadcast across every org in scope (`--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope) — the file's own `org`/`space` fields are informational only and don't affect targeting. `--postfix` appends a suffix to each service's name; `--include`/`--exclude` filter entries by label/name (comma-separated keywords). A preview table (`org, space, service-name, label, plan`) is always shown first, requiring confirmation unless `-y`; services that already exist get a second, separate overwrite confirmation, also skipped by `-y`. Declining either prompt aborts the whole run without creating or updating anything.
+
+  ```bash
+  bo service-credentials --org <org-guid> --spaces prod --services hana -o hana-creds.json
+  bo create-ups hana-creds.json --orgs target-orgs.csv --space prod --postfix -ups
+  ```
+
 ## v0.15.0 — 2026-09-18
 
 ### Added
