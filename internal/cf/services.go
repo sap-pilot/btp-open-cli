@@ -317,6 +317,56 @@ func (c *Client) ListServiceInstancesInSpace(ctx context.Context, spaceGUID, pla
 	return all, nil
 }
 
+// ── user-provided service instances ──────────────────────────────────────────
+
+// ListUserProvidedServiceInstancesInSpace lists all user-provided service
+// instances in the given space, for detecting name collisions before create.
+func (c *Client) ListUserProvidedServiceInstancesInSpace(ctx context.Context, spaceGUID string) ([]ServiceInstance, error) {
+	var all []ServiceInstance
+	nextURL := fmt.Sprintf("%s/v3/service_instances?space_guids=%s&type=user-provided&per_page=5000",
+		c.BaseURL(), spaceGUID)
+	for nextURL != "" {
+		var page serviceInstancesResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
+// CreateUserProvidedServiceInstance creates a user-provided service instance.
+// Unlike managed instances, this is synchronous — CF returns 201 Created.
+func (c *Client) CreateUserProvidedServiceInstance(ctx context.Context, name, spaceGUID string, credentials map[string]interface{}, tags []string) error {
+	body := map[string]interface{}{
+		"type":        "user-provided",
+		"name":        name,
+		"credentials": credentials,
+		"tags":        tags,
+		"relationships": map[string]interface{}{
+			"space": map[string]interface{}{"data": map[string]string{"guid": spaceGUID}},
+		},
+	}
+	return c.post(ctx, c.BaseURL()+"/v3/service_instances", body, nil)
+}
+
+// UpdateUserProvidedServiceInstance replaces the credentials and tags of an
+// existing user-provided service instance. This is synchronous — CF returns
+// 200 OK.
+func (c *Client) UpdateUserProvidedServiceInstance(ctx context.Context, instanceGUID string, credentials map[string]interface{}, tags []string) error {
+	body := map[string]interface{}{
+		"credentials": credentials,
+		"tags":        tags,
+	}
+	url := fmt.Sprintf("%s/v3/service_instances/%s", c.BaseURL(), instanceGUID)
+	return c.patch(ctx, url, body, nil)
+}
+
 // FindAnyServiceCredentialBinding returns the first service key found for a
 // service instance, or nil if no keys exist.
 func (c *Client) FindAnyServiceCredentialBinding(ctx context.Context, instanceGUID string) (*ServiceCredentialBinding, error) {

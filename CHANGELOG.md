@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.16.0 — 2026-10-06
+
+### Added
+
+- **`service-credentials` — extract VCAP_SERVICES credentials across orgs**
+
+  Looks through apps across one or more regions and orgs, fetches each matching app's bound service credentials from `VCAP_SERVICES` (via its system environment variables), and outputs them as a flat JSON array — one entry per service binding, with `org` and `space` added into each entry. Narrow the match set with `--spaces` (comma-separated, exact space names), `--apps` (comma-separated name patterns — glob if a pattern contains `* ? [`, otherwise substring), and `--services` (comma-separated keywords matched against each binding's label or name). Uses the same `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default-scope resolution as `apps`. Apps that can't be read (insufficient role) are reported as warnings and skipped rather than aborting the whole run.
+
+  ```bash
+  bo service-credentials --spaces prod --apps "*-srv,*-app" --services hana,xsuaa -o creds.json
+  ```
+
+- **`create-ups` — create user-provided services from a service-credentials.json file**
+
+  Takes the JSON array produced by `service-credentials` and creates (or updates) a user-provided service instance per entry, in a named `--space` broadcast across every org in scope (`--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope) — the file's own `org`/`space` fields are informational only and don't affect targeting. `--postfix` appends a suffix to each service's name; `--include`/`--exclude` filter entries by label/name (comma-separated keywords). A preview table (`org, space, service-name, label, plan`) is always shown first, requiring confirmation unless `-y` (declining aborts everything); services that already exist get a second, independent overwrite confirmation, also skipped by `-y` — declining *that* one just skips the overwrites and still creates whichever services are brand new, rather than aborting the whole run.
+
+  ```bash
+  bo service-credentials --org <org-guid> --spaces prod --services hana -o hana-creds.json
+  bo create-ups hana-creds.json --orgs target-orgs.csv --space prod --postfix -ups
+  ```
+
+- **`spaces` — list spaces in the currently selected or specified orgs**
+
+  The org-scoped counterpart to `org-spaces`: lists spaces (TOON by default — `org(org_name,org_id)->space(space_name,space_id)`, or `--format json|csv`) restricted to `--org`/`--orgs`/`--excludeOrgs`, or the default scope selected via `bo orgs` if none of those is given, instead of every accessible org. Supports the same `--include`/`--exclude`/`--output` conventions as `apps`/`service-credentials`.
+
+  ```bash
+  bo spaces
+  bo spaces --orgs target-orgs.csv --include prod --format csv -o spaces.csv
+  ```
+
 ## v0.15.0 — 2026-09-18
 
 ### Added

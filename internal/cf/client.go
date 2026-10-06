@@ -190,6 +190,39 @@ func (c *Client) post(ctx context.Context, fullURL string, body, out interface{}
 	return nil
 }
 
+// patch marshals body as JSON, PATCHes to fullURL, and — if out is non-nil —
+// unmarshals a successful response into out. A non-2xx status is returned as
+// *APIError so callers can switch on the status code.
+func (c *Client) patch(ctx context.Context, fullURL string, body, out interface{}) error {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "PATCH", fullURL, bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	}
+
+	resp, respBody, err := c.doWithRetry(ctx, makeReq)
+	if err != nil {
+		return fmt.Errorf("PATCH %s: %w", fullURL, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return &APIError{StatusCode: resp.StatusCode, Body: respBody}
+	}
+	if out != nil {
+		return json.Unmarshal(respBody, out)
+	}
+	return nil
+}
+
 // deleteRequest sends DELETE to fullURL and returns *APIError for non-2xx responses.
 func (c *Client) deleteRequest(ctx context.Context, fullURL string) error {
 	makeReq := func() (*http.Request, error) {

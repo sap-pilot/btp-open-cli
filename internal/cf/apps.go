@@ -86,6 +86,33 @@ func (c *Client) ListAppsBySpaces(ctx context.Context, spaceGUIDs []string) ([]A
 	return all, nil
 }
 
+// ── app environment ────────────────────────────────────────────────────────────
+
+type appEnvResponse struct {
+	SystemEnvJSON struct {
+		VCAPServices map[string][]map[string]interface{} `json:"VCAP_SERVICES"`
+	} `json:"system_env_json"`
+}
+
+// GetAppEnv fetches an app's bound service credentials from VCAP_SERVICES
+// (part of its system environment variables), grouped by service offering
+// exactly as the CF API returns them (e.g. "hana", "xsuaa"). Each binding is
+// decoded as a raw map rather than a fixed struct so callers can pass its
+// fields through unmodified — VCAP_SERVICES entries vary per service broker
+// and "credentials" in particular has no fixed shape across services.
+//
+// Fetching this requires at least Space Developer access to the app's space;
+// callers should treat a failure here as a per-app warning rather than
+// aborting a bulk operation across many apps.
+func (c *Client) GetAppEnv(ctx context.Context, appGUID string) (map[string][]map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s/env", c.BaseURL(), appGUID)
+	var resp appEnvResponse
+	if err := c.get(ctx, url, &resp); err != nil {
+		return nil, err
+	}
+	return resp.SystemEnvJSON.VCAPServices, nil
+}
+
 // ListProcessesBySpaces fetches web processes for all apps in spaceGUIDs and
 // returns a map of appGUID → Process. Only the "web" process type is fetched.
 func (c *Client) ListProcessesBySpaces(ctx context.Context, spaceGUIDs []string) (map[string]Process, error) {
