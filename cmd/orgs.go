@@ -69,10 +69,10 @@ var orgsCmd = &cobra.Command{
 	Use:   "orgs",
 	Short: "Select a default set of orgs to scope other commands",
 	Long: `Interactively select which accessible CF orgs should be the default scope for
-org-aware commands (org-users, org-space-users, apps, service-credentials,
-create-ups, users, role-collections, subaccount-destinations and its
-create/update/delete variants, and describe-subaccount) when they are run
-without --org or --orgs.
+org-aware commands (spaces, org-users, org-space-users, apps,
+service-credentials, create-ups, users, role-collections,
+subaccount-destinations and its create/update/delete variants, and
+describe-subaccount) when they are run without --org or --orgs.
 
 Each org is numbered (01, 02, ... — width grows to 3 digits past 99 orgs).
 Controls: up/down to move the highlight, space to toggle the highlighted org,

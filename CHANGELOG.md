@@ -21,6 +21,15 @@
   bo create-ups hana-creds.json --orgs target-orgs.csv --space prod --postfix -ups
   ```
 
+- **`spaces` — list spaces in the currently selected or specified orgs**
+
+  The org-scoped counterpart to `org-spaces`: lists spaces (TOON by default — `org(org_name,org_id)->space(space_name,space_id)`, or `--format json|csv`) restricted to `--org`/`--orgs`/`--excludeOrgs`, or the default scope selected via `bo orgs` if none of those is given, instead of every accessible org. Supports the same `--include`/`--exclude`/`--output` conventions as `apps`/`service-credentials`.
+
+  ```bash
+  bo spaces
+  bo spaces --orgs target-orgs.csv --include prod --format csv -o spaces.csv
+  ```
+
 ## v0.15.0 — 2026-09-18
 
 ### Added

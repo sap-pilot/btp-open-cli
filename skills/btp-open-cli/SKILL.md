@@ -127,8 +127,8 @@ they're logged in.
 
 ## Core building blocks
 
-- **Read-only** (safe to run freely): `orgs`, `org-spaces`, `org-users`,
-  `org-space-users`, `users`, `apps`, `role-collections`,
+- **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
+  `org-users`, `org-space-users`, `users`, `apps`, `role-collections`,
   `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
   `count-lines`, `service-credentials` (this one outputs raw secrets — see
   "Handling `service-credentials` output" below before using it).

@@ -97,6 +97,7 @@ mv bo ~/.local/bin/   # optional
 | Command | Description |
 |---|---|
 | [`org-spaces`](#org-spaces) | List all accessible CF organizations and their spaces |
+| [`spaces`](#spaces) | List spaces in the currently selected or specified orgs |
 | [`org-users`](#org-users) | List users across all accessible CF organizations |
 | [`org-space-users`](#org-space-users) | List users at both organization and space level |
 | [`create-org-space-users`](#create-org-space-users) | Add users with org and space roles from a CSV file |
@@ -187,9 +188,10 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 ### `orgs`
 
 Interactively select which accessible CF orgs should be the **default scope** for
-org-aware commands (`org-users`, `org-space-users`, `apps`, `service-credentials`,
-`create-ups`, `users`, `role-collections`, `subaccount-destinations` and its
-create/update/delete variants, and `describe-subaccount`) when they're run
+org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
+`service-credentials`, `create-ups`, `users`, `role-collections`,
+`subaccount-destinations` and its create/update/delete variants, and
+`describe-subaccount`) when they're run
 without `--org` or `--orgs`.
 
 Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
@@ -244,7 +246,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -286,6 +288,49 @@ regions:
 ```
 
 CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space; `region`, `org_id`, and `org_name` are repeated for every space in the same org. Orgs with no spaces are omitted from the CSV output.
+
+### `spaces`
+
+List spaces in the **currently selected or specified orgs**, rather than every accessible org — the org-scoped counterpart to `org-spaces`.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used.
+
+```bash
+# Spaces in the default org scope (TOON output)
+bo spaces
+
+# JSON or CSV output
+bo spaces --format json
+bo spaces --format csv
+
+# Restrict to specific orgs
+bo spaces --org <org-guid>
+bo spaces --orgs target-orgs.csv
+
+# Only show spaces where org_name or space_name contains any of these
+# comma-separated, case-insensitive keywords
+bo spaces --include prod,staging
+bo spaces --exclude sandbox,test
+
+# Write output to a file instead of stdout
+bo spaces --format csv -o spaces.csv
+```
+
+TOON output format (same shape as `org-spaces`):
+```
+regions:
+  - region: us10
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+        spaces:
+          - space_id: <space-guid>
+            space_name: dev
+          - space_id: <space-guid>
+            space_name: prod
+```
+
+CSV columns: `region,org_id,org_name,space_id,space_name`.
 
 ### `org-users`
 
