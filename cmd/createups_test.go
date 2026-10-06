@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -11,6 +12,34 @@ import (
 	"sync"
 	"testing"
 )
+
+// withStdinLines feeds the given lines (answers to [y/N] prompts, in order)
+// to readLine for the duration of the test, by swapping the shared
+// stdinReader (declared in reauth.go) for one backed by a pipe pre-loaded
+// with that input. Call the returned func to restore the original reader —
+// typically via defer.
+func withStdinLines(t *testing.T, lines ...string) func() {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range lines {
+		if _, err := w.WriteString(l + "\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	orig := stdinReader
+	stdinReader = bufio.NewReader(r)
+	return func() {
+		stdinReader = orig
+		r.Close()
+	}
+}
 
 // cupsServerCalls records what a newCupsServer received, for test assertions.
 type cupsServerCalls struct {
@@ -263,5 +292,86 @@ func TestCreateUps_AbortsWithoutConfirmation(t *testing.T) {
 	defer calls.mu.Unlock()
 	if len(calls.created) != 0 {
 		t.Errorf("expected no create calls when aborted, got %d", len(calls.created))
+	}
+}
+
+func TestCreateUps_DeclineOverwriteStillCreatesNew(t *testing.T) {
+	srv, calls := newCupsServer(t, "org1", "my-org", "sp1", "dev",
+		map[string]string{"my-hdi": "existing-guid-1"})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+	path := writeCupsInputFile(t, hanaCupsEntry("my-hdi"), hanaCupsEntry("my-hdi-2"))
+
+	// "y" to the main "Proceed?" prompt, "n" to the separate overwrite
+	// prompt — the existing service must be skipped without aborting the
+	// still-pending create of the brand-new one.
+	defer withStdinLines(t, "y", "n")()
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "--space", "dev")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Skipping existing services") {
+		t.Errorf("expected a notice about skipping existing services, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "Done: 1 created, 0 updated, 0 failed.") {
+		t.Errorf("expected only the new service to be created, got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 1 || calls.created[0]["name"] != "my-hdi-2" {
+		t.Fatalf("expected only 'my-hdi-2' to be created, got: %+v", calls.created)
+	}
+	if len(calls.updated) != 0 {
+		t.Errorf("expected no update calls after declining the overwrite, got %d", len(calls.updated))
+	}
+}
+
+func TestCreateUps_DeclineOverwriteWithNoNewServices(t *testing.T) {
+	srv, calls := newCupsServer(t, "org1", "my-org", "sp1", "dev",
+		map[string]string{"my-hdi": "existing-guid-1"})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+	path := writeCupsInputFile(t, hanaCupsEntry("my-hdi"))
+
+	defer withStdinLines(t, "y", "n")()
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "--space", "dev")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Nothing to do.") {
+		t.Errorf("expected 'Nothing to do.', got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 0 || len(calls.updated) != 0 {
+		t.Errorf("expected no API calls, got created=%d updated=%d", len(calls.created), len(calls.updated))
+	}
+}
+
+func TestCreateUps_ExplicitYesAnswersBothPrompts(t *testing.T) {
+	srv, calls := newCupsServer(t, "org1", "my-org", "sp1", "dev",
+		map[string]string{"my-hdi": "existing-guid-1"})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+	path := writeCupsInputFile(t, hanaCupsEntry("my-hdi"), hanaCupsEntry("my-hdi-2"))
+
+	defer withStdinLines(t, "y", "y")()
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "--space", "dev")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Done: 1 created, 1 updated, 0 failed.") {
+		t.Errorf("expected both the create and the overwrite to proceed, got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 1 || len(calls.updated) != 1 {
+		t.Errorf("expected 1 create and 1 update, got created=%d updated=%d", len(calls.created), len(calls.updated))
 	}
 }

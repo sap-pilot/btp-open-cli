@@ -1307,7 +1307,7 @@ org-two  prod   FI-EMPMaintain-hdi-ups  hana   hdi-shared
 Proceed? [y/N]
 ```
 
-Confirmation is required unless `-y`/`--yes` is given. If a service with the same (post-`--postfix`) name already exists in its target space, it's listed separately and a second confirmation to overwrite it is required, also skipped by `-y`. Declining either prompt aborts the whole command — nothing is created or updated.
+Confirmation is required unless `-y`/`--yes` is given — declining it aborts the whole command. If a service with the same (post-`--postfix`) name already exists in its target space, it's listed separately and a second, independent confirmation to overwrite it is required, also skipped by `-y`. Declining *that* one doesn't abort anything — it just skips the existing (overwrite) services and still creates whichever ones are brand new.
 
 `--include`/`--exclude` each accept a comma-separated list of keywords and match against each service's `label` or `name` (case-insensitive substring).
 

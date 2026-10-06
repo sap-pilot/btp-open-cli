@@ -86,10 +86,11 @@ service is included/excluded if its label or name contains any of them
 (case-insensitive).
 
 Before creating anything, a preview table (org, space, service-name, label,
-plan) is shown and confirmation is required unless -y is given. If any
-planned service already exists in its target space, a second confirmation to
-overwrite it is required unless -y is given — declining either confirmation
-aborts the whole command without creating or updating anything.
+plan) is shown and confirmation is required unless -y is given; declining it
+aborts the whole command. If any planned service already exists in its
+target space, a second, separate confirmation to overwrite it is required
+unless -y is given — declining only that one skips the existing (overwrite)
+services and still creates the new ones, rather than aborting everything.
 
 If --regions is omitted the regions from the last login are used.`,
 	Args: cobra.ExactArgs(1),
@@ -318,6 +319,11 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 		}
 
+		// toExecute starts as every planned item; declining the separate
+		// overwrite confirmation below drops the existing (update) ones from
+		// it without aborting the creates — the two confirmations gate
+		// independent decisions, not one all-or-nothing batch.
+		toExecute := planned
 		if len(existingItems) > 0 && !skipConfirm {
 			fmt.Fprintf(out, "\n%d service(s) already exist and will be overwritten:\n", len(existingItems))
 			for _, p := range existingItems {
@@ -326,9 +332,19 @@ If --regions is omitted the regions from the last login are used.`,
 			fmt.Fprint(out, "Overwrite existing service(s)? [y/N] ")
 			text, ok := readLine(ctx)
 			if !ok || strings.ToLower(text) != "y" {
-				fmt.Fprintln(out, "Aborted.")
-				return nil
+				fmt.Fprintln(out, "Skipping existing services — proceeding with new ones only.")
+				var newOnly []cupsPlannedItem
+				for _, p := range planned {
+					if p.ExistingGUID == "" {
+						newOnly = append(newOnly, p)
+					}
+				}
+				toExecute = newOnly
 			}
+		}
+		if len(toExecute) == 0 {
+			fmt.Fprintln(out, "Nothing to do.")
+			return nil
 		}
 
 		// Phase 3: create/update, bounded concurrency across the whole batch.
@@ -338,7 +354,7 @@ If --regions is omitted the regions from the last login are used.`,
 			createdCount, updatedCount, fails int
 		)
 		sem := make(chan struct{}, cupsConcurrency)
-		for _, p := range planned {
+		for _, p := range toExecute {
 			execWg.Add(1)
 			sem <- struct{}{}
 			go func(p cupsPlannedItem) {

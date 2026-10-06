@@ -188,11 +188,12 @@ Read all of these before running any command from the "Write" list above.
    `service-credentials` output" below — the input is just as sensitive as
    that command's output) and creates every service in it, in the `--space`
    you name, in *every* org currently in scope — not just the org(s) the
-   file's services came from. It has two separate confirmations (the create/
-   update preview, and a second one specifically for any service that
-   already exists and would be overwritten); `-y` skips both, so only pass
-   it once a human has seen the preview table and the org scope is
-   deliberate.
+   file's services came from. It has two independent confirmations: the
+   create/update preview (declining aborts the whole run), and a separate
+   one only for services that already exist and would be overwritten
+   (declining *that* one just skips the overwrites and still creates the
+   brand-new ones — it does not abort). `-y` skips both, so only pass it
+   once a human has seen the preview table and the org scope is deliberate.
 
 ## Handling `service-credentials` output
 
