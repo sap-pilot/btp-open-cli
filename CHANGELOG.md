@@ -4,7 +4,7 @@
 
 ### Changed
 
-- **Bumped Go to 1.26.10** to pick up upstream security fixes (`crypto/x509`) from the latest point release. No behavior change.
+- **Bumped Go to 1.27.3** (latest release) to pick up upstream security fixes from the latest point release. No behavior change.
 
 ## v0.16.0 — 2026-10-06
 
