@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.17.0 — 2026-10-22
+
+### Changed
+
+- **Bumped Go to 1.26.10** to pick up upstream security fixes (`crypto/x509`) from the latest point release. No behavior change.
+
 ## v0.16.0 — 2026-10-06
 
 ### Added
