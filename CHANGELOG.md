@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.18.0 — 2026-10-26
+
+### Added
+
+- **`create-service-keys` — create or update service keys across orgs and spaces**
+
+  Creates a service key of a given name for every managed service instance matching `--service-instances` (comma-separated name patterns — glob if a pattern contains `* ? [`, otherwise substring), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces` (comma-separated, exact names). Without `-y`, a TOON preview (`org -> space -> service_instances`) is shown first; if any matched instance already has a key with that name, you're asked to `[u]pdate` existing (delete + recreate), `[c]reate` new keys only (skip the conflicting ones — same as `--create-new-keys-only`), or `[a]bort`. `-y` without `--create-new-keys-only` defaults a conflict to `update` with no prompt. Each created/updated key's credentials are fetched and written as a flat JSON array to `--output`/`-o` (or stdout): `[{org, space, instance_name, instance_guid, label, plan, tags, binding_guid, binding_name, credentials}]`.
+
+  ```bash
+  bo create-service-keys mykey --service-instances "*-hdi,*-db" -y -o keys.json
+  bo create-service-keys mykey --orgs target-orgs.csv --spaces prod --create-new-keys-only
+  ```
+
 ## v0.17.0 — 2026-10-22
 
 ### Changed

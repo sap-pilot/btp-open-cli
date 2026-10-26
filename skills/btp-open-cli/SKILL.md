@@ -135,7 +135,9 @@ they're logged in.
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
-  `delete-subaccount-destinations`, `create-ups`.
+  `delete-subaccount-destinations`, `create-ups`, `create-service-keys`
+  (this one also outputs raw secrets — see "Handling commands that output
+  secrets" below before using it).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -185,7 +187,7 @@ Read all of these before running any command from the "Write" list above.
    ambiguous.
 9. **`create-ups` broadcasts into every target org/space, and reads secrets
    as input.** It takes a `service-credentials.json` file (see "Handling
-   `service-credentials` output" below — the input is just as sensitive as
+   commands that output secrets" below — the input is just as sensitive as
    that command's output) and creates every service in it, in the `--space`
    you name, in *every* org currently in scope — not just the org(s) the
    file's services came from. It has two independent confirmations: the
@@ -194,14 +196,27 @@ Read all of these before running any command from the "Write" list above.
    (declining *that* one just skips the overwrites and still creates the
    brand-new ones — it does not abort). `-y` skips both, so only pass it
    once a human has seen the preview table and the org scope is deliberate.
+10. **`create-service-keys` creates/deletes live service bindings and
+    outputs their secrets.** Without `-y`, it shows a TOON preview and — if
+    any matched instance already has a key by that name — asks `[u]pdate`
+    (deletes and recreates the key), `[c]reate` new only (skips the
+    conflicting ones), or `[a]bort`. **`-y` without `--create-new-keys-only`
+    resolves every conflict as `update` automatically**, which deletes and
+    replaces an existing key — don't pass `-y` alone when a conflict is
+    possible unless the user has confirmed that recreate-on-conflict is
+    fine; prefer `--create-new-keys-only` (or a human-approved `-y`) when
+    you only want brand-new keys and must never touch an existing one. See
+    "Handling commands that output secrets" below for its output.
 
-## Handling `service-credentials` output
+## Handling commands that output secrets
 
-`service-credentials` fetches each matching app's live `VCAP_SERVICES` —
-passwords, client secrets, certificates, the lot — and prints it as plain
-JSON. It's a read command (nothing in BTP changes), but the output itself is
-sensitive — and the same file is what `create-ups` later reads as input, so
-treat it as sensitive on both ends of that pipeline:
+`service-credentials` fetches each matching app's live `VCAP_SERVICES`, and
+`create-service-keys` creates service keys and fetches their credentials —
+passwords, client secrets, certificates, the lot — printing them as plain
+JSON. `service-credentials` is read-only (nothing in BTP changes), while
+`create-service-keys` is a write command that also happens to output
+secrets; the same `service-credentials.json` shape is also what `create-ups`
+later reads as input. Treat all of this as sensitive:
 
 - Prefer `--output <file>` over letting it print to a transcript or chat the
   user didn't ask to persist, and tell the user where the file landed.
@@ -213,8 +228,10 @@ treat it as sensitive on both ends of that pipeline:
   command's output (see "Everything is logged" above) — mention this to the
   user so they know that log file now contains secrets too, don't just stay
   silent about it.
-- Narrow with `--services`/`--spaces`/`--apps` to the minimum needed rather
-  than pulling every binding across the whole org scope by default.
+- Narrow with `--services`/`--spaces`/`--apps` (on `service-credentials`) or
+  `--spaces`/`--service-instances` (on `create-service-keys`) to the minimum
+  needed rather than pulling every binding/instance across the whole org
+  scope by default.
 
 ## Example workflows
 

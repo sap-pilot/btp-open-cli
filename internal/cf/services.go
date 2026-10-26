@@ -1,12 +1,20 @@
 package cf
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// serviceCredentialBindingPollInterval is the delay between polls of a CF v3
+// job while waiting for an asynchronous service credential binding create or
+// delete to finish. Tests override this to keep polling fast.
+var serviceCredentialBindingPollInterval = 2 * time.Second
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -121,9 +129,45 @@ func (c *Client) FindServiceCredentialBinding(ctx context.Context, name, instanc
 	return &page.Resources[0], nil
 }
 
-// CreateServiceCredentialBinding creates a service key asynchronously.
-// CF returns 202 Accepted for async creation; this is treated as success.
-func (c *Client) CreateServiceCredentialBinding(ctx context.Context, name, instanceGUID string) error {
+// jobResource is a CF v3 job, as returned from the Location header of an
+// asynchronous (202 Accepted) create/delete response.
+type jobResource struct {
+	State  string `json:"state"` // PROCESSING, POLLING, COMPLETE, or FAILED
+	Errors []struct {
+		Detail string `json:"detail"`
+	} `json:"errors"`
+}
+
+// pollJob polls a CF v3 job at jobURL until it reaches a terminal state
+// (COMPLETE or FAILED), respecting ctx cancellation between polls.
+func (c *Client) pollJob(ctx context.Context, jobURL string) error {
+	for {
+		var job jobResource
+		if err := c.get(ctx, jobURL, &job); err != nil {
+			return fmt.Errorf("checking job status: %w", err)
+		}
+		switch job.State {
+		case "COMPLETE":
+			return nil
+		case "FAILED":
+			if len(job.Errors) > 0 {
+				return fmt.Errorf("job failed: %s", job.Errors[0].Detail)
+			}
+			return fmt.Errorf("job failed")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(serviceCredentialBindingPollInterval):
+		}
+	}
+}
+
+// CreateServiceCredentialBinding creates a service key. CF may bind
+// synchronously (201 Created) or asynchronously (202 Accepted with a job to
+// poll) depending on the broker; either way, this waits for completion and
+// returns the created binding's GUID.
+func (c *Client) CreateServiceCredentialBinding(ctx context.Context, name, instanceGUID string) (string, error) {
 	body := map[string]interface{}{
 		"type": "key",
 		"name": name,
@@ -131,15 +175,87 @@ func (c *Client) CreateServiceCredentialBinding(ctx context.Context, name, insta
 			"service_instance": map[string]interface{}{"data": map[string]string{"guid": instanceGUID}},
 		},
 	}
-	err := c.post(ctx, c.BaseURL()+"/v3/service_credential_bindings", body, nil)
+	data, err := json.Marshal(body)
 	if err != nil {
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusAccepted {
+		return "", err
+	}
+
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL()+"/v3/service_credential_bindings", bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	}
+
+	resp, respBody, err := c.doWithRetry(ctx, makeReq)
+	if err != nil {
+		return "", fmt.Errorf("POST /v3/service_credential_bindings: %w", err)
+	}
+	switch resp.StatusCode {
+	case http.StatusCreated:
+		var created struct {
+			GUID string `json:"guid"`
+		}
+		if err := json.Unmarshal(respBody, &created); err != nil {
+			return "", err
+		}
+		return created.GUID, nil
+	case http.StatusAccepted:
+		jobURL := resp.Header.Get("Location")
+		if jobURL == "" {
+			return "", fmt.Errorf("async service key creation returned no job Location header")
+		}
+		if err := c.pollJob(ctx, jobURL); err != nil {
+			return "", err
+		}
+		binding, err := c.FindServiceCredentialBinding(ctx, name, instanceGUID)
+		if err != nil {
+			return "", err
+		}
+		if binding == nil {
+			return "", fmt.Errorf("service key %q not found after its creation job completed", name)
+		}
+		return binding.GUID, nil
+	default:
+		return "", &APIError{StatusCode: resp.StatusCode, Body: respBody}
+	}
+}
+
+// DeleteServiceCredentialBinding deletes a service key, waiting for CF's job
+// to finish if deletion is asynchronous — so a caller that immediately
+// recreates a binding with the same name doesn't race the deletion.
+func (c *Client) DeleteServiceCredentialBinding(ctx context.Context, bindingGUID string) error {
+	url := fmt.Sprintf("%s/v3/service_credential_bindings/%s", c.BaseURL(), bindingGUID)
+
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		return req, nil
+	}
+
+	resp, body, err := c.doWithRetry(ctx, makeReq)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", url, err)
+	}
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		return nil
+	case http.StatusAccepted:
+		jobURL := resp.Header.Get("Location")
+		if jobURL == "" {
 			return nil
 		}
-		return err
+		return c.pollJob(ctx, jobURL)
+	default:
+		return &APIError{StatusCode: resp.StatusCode, Body: body}
 	}
-	return nil
 }
 
 // GetServiceCredentialDetails fetches the raw credential map for a service key.
@@ -182,8 +298,9 @@ func (c *Client) ListServiceInstancesByPlanGUID(ctx context.Context, planGUID, o
 
 // ServiceInstanceFull includes space and service-plan GUIDs from CF relationships.
 type ServiceInstanceFull struct {
-	GUID          string `json:"guid"`
-	Name          string `json:"name"`
+	GUID          string   `json:"guid"`
+	Name          string   `json:"name"`
+	Tags          []string `json:"tags"`
 	LastOperation struct {
 		State string `json:"state"`
 	} `json:"last_operation"`
@@ -243,6 +360,28 @@ func (c *Client) ListServiceInstancesByOrg(ctx context.Context, orgGUID string) 
 	var all []ServiceInstanceFull
 	nextURL := fmt.Sprintf("%s/v3/service_instances?organization_guids=%s&type=managed&per_page=5000",
 		c.BaseURL(), orgGUID)
+	for nextURL != "" {
+		var page serviceInstancesFullResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
+// ListServiceInstancesFullBySpaces fetches all managed service instances
+// whose space is in spaceGUIDs, including space/service-plan relationships
+// and tags.
+func (c *Client) ListServiceInstancesFullBySpaces(ctx context.Context, spaceGUIDs []string) ([]ServiceInstanceFull, error) {
+	var all []ServiceInstanceFull
+	nextURL := fmt.Sprintf("%s/v3/service_instances?space_guids=%s&type=managed&per_page=5000",
+		c.BaseURL(), strings.Join(spaceGUIDs, ","))
 	for nextURL != "" {
 		var page serviceInstancesFullResponse
 		if err := c.get(ctx, nextURL, &page); err != nil {
