@@ -137,7 +137,9 @@ they're logged in.
   `create-subaccount-destinations`, `update-subaccount-destinations`,
   `delete-subaccount-destinations`, `create-ups`, `create-service-keys`
   (this one also outputs raw secrets — see "Handling commands that output
-  secrets" below before using it).
+  secrets" below before using it), `delete-service-instances` (irreversibly
+  deletes service instances and all their bindings/keys — see guardrail #11
+  below).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -154,11 +156,13 @@ Read all of these before running any command from the "Write" list above.
    `--org`/`--orgs` and `--include`/`--exclude` filters first, and account for
    exactly which rows/orgs will be affected before running the write command.
 2. **Never add `-y`/`--yes` on your own initiative.** `create-users`,
-   `delete-users`, `create-org-space-users`, and `delete-org-space-users`
-   print a full TOON preview and ask `Proceed? [y/N]` before touching
-   anything. Get that preview in front of the user (or reproduce it and get
-   explicit approval) before adding `-y` — don't skip straight to `-y`
-   because it's "obviously" what the user asked for.
+   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
+   `create-service-keys`, and `delete-service-instances` print a full TOON
+   preview and ask `Proceed? [y/N]` (or the `[u/c/a]` variant, for
+   `create-service-keys`) before touching anything. Get that preview in
+   front of the user (or reproduce it and get explicit approval) before
+   adding `-y` — don't skip straight to `-y` because it's "obviously" what
+   the user asked for.
 3. **`create-subaccount-destinations`, `update-subaccount-destinations`, and
    `delete-subaccount-destinations` have no confirmation step and no `-y`
    flag at all — they act immediately on invocation.** Treat these as
@@ -219,6 +223,17 @@ Read all of these before running any command from the "Write" list above.
     much secret material as the `update` path, only without having
     deleted/recreated anything. See "Handling commands that output secrets"
     below for its output.
+11. **`delete-service-instances` is the most destructive write command —
+    there's no undo, and it also deletes every binding/key on each matched
+    instance first, not just the instance.** Its `<service_instance_name_patterns>`
+    argument matches by glob/substring across *every* org/space in scope,
+    the same as `--service-instances` on `create-service-keys` — a loose
+    pattern like `*-db` can match far more than intended. Always run with
+    no `--yes` first (or `< /dev/null` to force a dry-run abort) and show
+    the user the exact TOON preview — which names every matched instance
+    and how many existing bindings/keys would be deleted along with it —
+    before ever adding `-y`. Never guess at a pattern on the user's behalf;
+    confirm the exact pattern they mean, especially a broad one like `*`.
 
 ## Handling commands that output secrets
 

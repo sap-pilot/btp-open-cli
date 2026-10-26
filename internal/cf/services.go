@@ -300,6 +300,7 @@ func (c *Client) ListServiceInstancesByPlanGUID(ctx context.Context, planGUID, o
 type ServiceInstanceFull struct {
 	GUID          string   `json:"guid"`
 	Name          string   `json:"name"`
+	Type          string   `json:"type"` // "managed" or "user-provided"
 	Tags          []string `json:"tags"`
 	LastOperation struct {
 		State string `json:"state"`
@@ -381,6 +382,31 @@ func (c *Client) ListServiceInstancesByOrg(ctx context.Context, orgGUID string) 
 func (c *Client) ListServiceInstancesFullBySpaces(ctx context.Context, spaceGUIDs []string) ([]ServiceInstanceFull, error) {
 	var all []ServiceInstanceFull
 	nextURL := fmt.Sprintf("%s/v3/service_instances?space_guids=%s&type=managed&per_page=5000",
+		c.BaseURL(), strings.Join(spaceGUIDs, ","))
+	for nextURL != "" {
+		var page serviceInstancesFullResponse
+		if err := c.get(ctx, nextURL, &page); err != nil {
+			return nil, err
+		}
+		all = append(all, page.Resources...)
+		if page.Pagination.Next != nil {
+			nextURL = page.Pagination.Next.Href
+		} else {
+			nextURL = ""
+		}
+	}
+	return all, nil
+}
+
+// ListServiceInstancesFullBySpacesAnyType fetches all service instances
+// (managed and user-provided alike) whose space is in spaceGUIDs, including
+// space/service-plan relationships, type, and tags. Unlike
+// ListServiceInstancesFullBySpaces, this does not filter by type — a
+// user-provided instance's Relationships.ServicePlan.Data.GUID is simply
+// empty.
+func (c *Client) ListServiceInstancesFullBySpacesAnyType(ctx context.Context, spaceGUIDs []string) ([]ServiceInstanceFull, error) {
+	var all []ServiceInstanceFull
+	nextURL := fmt.Sprintf("%s/v3/service_instances?space_guids=%s&per_page=5000",
 		c.BaseURL(), strings.Join(spaceGUIDs, ","))
 	for nextURL != "" {
 		var page serviceInstancesFullResponse
@@ -504,6 +530,96 @@ func (c *Client) UpdateUserProvidedServiceInstance(ctx context.Context, instance
 	}
 	url := fmt.Sprintf("%s/v3/service_instances/%s", c.BaseURL(), instanceGUID)
 	return c.patch(ctx, url, body, nil)
+}
+
+// ServiceCredentialBindingFull is a service credential binding (key or app
+// binding) annotated with its type and the service instance it belongs to,
+// for batch lookups across many instances at once.
+type ServiceCredentialBindingFull struct {
+	GUID          string `json:"guid"`
+	Name          string `json:"name"`
+	Type          string `json:"type"` // "key" or "app"
+	Relationships struct {
+		ServiceInstance struct {
+			Data struct {
+				GUID string `json:"guid"`
+			} `json:"data"`
+		} `json:"service_instance"`
+	} `json:"relationships"`
+}
+
+type serviceCredentialBindingsFullResponse struct {
+	Pagination pagination                     `json:"pagination"`
+	Resources  []ServiceCredentialBindingFull `json:"resources"`
+}
+
+// ListServiceCredentialBindingsByInstances lists every service credential
+// binding (both service keys and app bindings) on any of the given service
+// instances, batched to stay within a reasonable URL length.
+func (c *Client) ListServiceCredentialBindingsByInstances(ctx context.Context, instanceGUIDs []string) ([]ServiceCredentialBindingFull, error) {
+	var all []ServiceCredentialBindingFull
+	if len(instanceGUIDs) == 0 {
+		return all, nil
+	}
+	const batchSize = 50
+	for i := 0; i < len(instanceGUIDs); i += batchSize {
+		end := i + batchSize
+		if end > len(instanceGUIDs) {
+			end = len(instanceGUIDs)
+		}
+		nextURL := fmt.Sprintf("%s/v3/service_credential_bindings?service_instance_guids=%s&per_page=5000",
+			c.BaseURL(), strings.Join(instanceGUIDs[i:end], ","))
+		for nextURL != "" {
+			var page serviceCredentialBindingsFullResponse
+			if err := c.get(ctx, nextURL, &page); err != nil {
+				return nil, err
+			}
+			all = append(all, page.Resources...)
+			if page.Pagination.Next != nil {
+				nextURL = page.Pagination.Next.Href
+			} else {
+				nextURL = ""
+			}
+		}
+	}
+	return all, nil
+}
+
+// DeleteServiceInstance deletes a service instance. CF deletes a
+// user-provided instance synchronously (204/200) but a managed instance
+// asynchronously (202 Accepted with a job to poll); either way this waits
+// for completion. The instance must have no remaining service credential
+// bindings/keys or routes, or CF rejects the delete — callers should delete
+// those first (see ListServiceCredentialBindingsByInstances and
+// DeleteServiceCredentialBinding).
+func (c *Client) DeleteServiceInstance(ctx context.Context, instanceGUID string) error {
+	url := fmt.Sprintf("%s/v3/service_instances/%s", c.BaseURL(), instanceGUID)
+
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		return req, nil
+	}
+
+	resp, body, err := c.doWithRetry(ctx, makeReq)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", url, err)
+	}
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		return nil
+	case http.StatusAccepted:
+		jobURL := resp.Header.Get("Location")
+		if jobURL == "" {
+			return nil
+		}
+		return c.pollJob(ctx, jobURL)
+	default:
+		return &APIError{StatusCode: resp.StatusCode, Body: body}
+	}
 }
 
 // FindAnyServiceCredentialBinding returns the first service key found for a

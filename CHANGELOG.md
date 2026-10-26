@@ -21,6 +21,15 @@
   bo create-ups hana-creds.json --postfix -ups --tags hana,database,relational
   ```
 
+- **`delete-service-instances` — delete service instances (and their bindings/keys) by name pattern, across orgs and spaces**
+
+  Deletes every service instance (managed or user-provided) whose name matches `<service_instance_name_patterns>` (comma-separated — glob if a pattern contains `* ? [`, otherwise substring), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space` (comma-separated, exact names; the two combine if both are given). Every existing service credential binding and key on a matched instance is deleted first, since CF refuses to delete an instance that still has any. Without `-y`, a TOON preview (`org -> space -> service_instances`, including a bindings-to-delete count per instance) is shown first, requiring a `[y/N]` confirmation — declining aborts the whole command without deleting anything.
+
+  ```bash
+  bo delete-service-instances "*-ups,tmp-*" -y
+  bo delete-service-instances "*-ups" --orgs target-orgs.csv --spaces prod
+  ```
+
 ## v0.17.0 — 2026-10-22
 
 ### Changed

@@ -106,6 +106,7 @@ mv bo ~/.local/bin/   # optional
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 | [`create-service-keys`](#create-service-keys) | Create or update service keys for matching service instances across orgs and spaces |
+| [`delete-service-instances`](#delete-service-instances) | Delete service instances (and their bindings/keys) matching name patterns, across orgs and spaces |
 
 ### XSUAA Users
 
@@ -190,9 +191,10 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 Interactively select which accessible CF orgs should be the **default scope** for
 org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
-`service-credentials`, `create-ups`, `create-service-keys`, `users`,
-`role-collections`, `subaccount-destinations` and its create/update/delete
-variants, and `describe-subaccount`) when they're run
+`service-credentials`, `create-ups`, `create-service-keys`,
+`delete-service-instances`, `users`, `role-collections`,
+`subaccount-destinations` and its create/update/delete variants, and
+`describe-subaccount`) when they're run
 without `--org` or `--orgs`.
 
 Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
@@ -247,7 +249,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `create-service-keys`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `create-service-keys`, `delete-service-instances`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1383,6 +1385,45 @@ Each created/updated key's credentials are fetched and written as a flat JSON ar
 ```
 
 ⚠️ **This outputs live secrets** (the service key's credentials) in plain JSON — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+### `delete-service-instances`
+
+Delete every service instance (managed or user-provided) whose name matches a comma-separated list of patterns, across target orgs and spaces — deleting each matched instance's existing service credential bindings and keys first, since CF refuses to delete an instance that still has any.
+
+```
+bo delete-service-instances <service_instance_name_patterns> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`/`create-ups`/`create-service-keys`. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<service_instance_name_patterns>` is a required, comma-separated list of patterns, e.g. `*-ups,tmp-*` — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring.
+
+```bash
+# Delete every instance ending in "-ups" or starting with "tmp-" in the default org scope
+bo delete-service-instances "*-ups,tmp-*"
+
+# Narrow to specific orgs and a specific space
+bo delete-service-instances "*-ups" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo delete-service-instances "*-ups" -y
+```
+
+⚠️ **This is destructive and cannot be undone.** Without `-y`, every matched instance is shown in a TOON preview (`org -> space -> service_instances`), including how many existing bindings/keys will be deleted along with it:
+
+```
+Service instances to delete:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,type,label,plan,bindings_to_delete}:
+          <guid-1>,my-hdi-ups,user-provided,,,0
+
+1 service instance(s) to delete, 0 existing binding(s)/key(s) to delete along with them.
+
+This cannot be undone. Proceed? [y/N]
+```
+
+`-y` skips this confirmation entirely — only pass it once a human has seen the preview (or the org/space/pattern scope is otherwise known to be deliberate).
 
 ### `reorg-wiki-attachments`
 
