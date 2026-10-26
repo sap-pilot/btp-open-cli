@@ -135,7 +135,11 @@ they're logged in.
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
-  `delete-subaccount-destinations`, `create-ups`.
+  `delete-subaccount-destinations`, `create-ups`, `create-service-keys`
+  (this one also outputs raw secrets — see "Handling commands that output
+  secrets" below before using it), `delete-service-instances` (irreversibly
+  deletes service instances and all their bindings/keys — see guardrail #11
+  below).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -152,11 +156,13 @@ Read all of these before running any command from the "Write" list above.
    `--org`/`--orgs` and `--include`/`--exclude` filters first, and account for
    exactly which rows/orgs will be affected before running the write command.
 2. **Never add `-y`/`--yes` on your own initiative.** `create-users`,
-   `delete-users`, `create-org-space-users`, and `delete-org-space-users`
-   print a full TOON preview and ask `Proceed? [y/N]` before touching
-   anything. Get that preview in front of the user (or reproduce it and get
-   explicit approval) before adding `-y` — don't skip straight to `-y`
-   because it's "obviously" what the user asked for.
+   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
+   `create-service-keys`, and `delete-service-instances` print a full TOON
+   preview and ask `Proceed? [y/N]` (or the `[u/c/a]` variant, for
+   `create-service-keys`) before touching anything. Get that preview in
+   front of the user (or reproduce it and get explicit approval) before
+   adding `-y` — don't skip straight to `-y` because it's "obviously" what
+   the user asked for.
 3. **`create-subaccount-destinations`, `update-subaccount-destinations`, and
    `delete-subaccount-destinations` have no confirmation step and no `-y`
    flag at all — they act immediately on invocation.** Treat these as
@@ -184,24 +190,60 @@ Read all of these before running any command from the "Write" list above.
    trail after a bulk operation, and check it yourself if an outcome is
    ambiguous.
 9. **`create-ups` broadcasts into every target org/space, and reads secrets
-   as input.** It takes a `service-credentials.json` file (see "Handling
-   `service-credentials` output" below — the input is just as sensitive as
-   that command's output) and creates every service in it, in the `--space`
-   you name, in *every* org currently in scope — not just the org(s) the
-   file's services came from. It has two independent confirmations: the
-   create/update preview (declining aborts the whole run), and a separate
-   one only for services that already exist and would be overwritten
-   (declining *that* one just skips the overwrites and still creates the
-   brand-new ones — it does not abort). `-y` skips both, so only pass it
-   once a human has seen the preview table and the org scope is deliberate.
+   as input.** It takes a `service-credentials.json`-shaped file (see
+   "Handling commands that output secrets" below — the input is just as
+   sensitive as that command's output) and creates every entry in it in
+   *every* org currently in scope — not just the org(s) the file's services
+   came from. With `--space`, every entry broadcasts into that one named
+   space in each target org; without it, each entry is instead targeted at
+   the space named in **its own** `space` field in the file — a typo there
+   means that entry is silently skipped (not an error), so tell the user to
+   confirm each entry's `space` field is the intended *target* space before
+   running without `--space`. `--tags` overrides every entry's own `tags`
+   with a fixed comma-separated list. It has two independent confirmations:
+   the create/update preview (declining aborts the whole run), and a
+   separate one only for services that already exist and would be
+   overwritten (declining *that* one just skips the overwrites and still
+   creates the brand-new ones — it does not abort). `-y` skips both, so
+   only pass it once a human has seen the preview table and the org scope
+   is deliberate.
+10. **`create-service-keys` creates/deletes live service bindings and
+    outputs their secrets.** Without `-y`, it shows a TOON preview and — if
+    any matched instance already has a key by that name — asks `[u]pdate`
+    (deletes and recreates the key), `[c]reate` new only (leaves the
+    conflicting ones untouched), or `[a]bort`. **`-y` without `--create-new-keys-only`
+    resolves every conflict as `update` automatically**, which deletes and
+    replaces an existing key — don't pass `-y` alone when a conflict is
+    possible unless the user has confirmed that recreate-on-conflict is
+    fine; prefer `--create-new-keys-only` (or a human-approved `-y`) when
+    you only want brand-new keys and must never touch an existing one.
+    Even with `[c]reate`/`--create-new-keys-only`, the output still
+    includes the untouched instances' existing credentials (fetched, not
+    regenerated) alongside the newly-created ones — so it carries just as
+    much secret material as the `update` path, only without having
+    deleted/recreated anything. See "Handling commands that output secrets"
+    below for its output.
+11. **`delete-service-instances` is the most destructive write command —
+    there's no undo, and it also deletes every binding/key on each matched
+    instance first, not just the instance.** Its `<service_instance_name_patterns>`
+    argument matches by glob/substring across *every* org/space in scope,
+    the same as `--service-instances` on `create-service-keys` — a loose
+    pattern like `*-db` can match far more than intended. Always run with
+    no `--yes` first (or `< /dev/null` to force a dry-run abort) and show
+    the user the exact TOON preview — which names every matched instance
+    and how many existing bindings/keys would be deleted along with it —
+    before ever adding `-y`. Never guess at a pattern on the user's behalf;
+    confirm the exact pattern they mean, especially a broad one like `*`.
 
-## Handling `service-credentials` output
+## Handling commands that output secrets
 
-`service-credentials` fetches each matching app's live `VCAP_SERVICES` —
-passwords, client secrets, certificates, the lot — and prints it as plain
-JSON. It's a read command (nothing in BTP changes), but the output itself is
-sensitive — and the same file is what `create-ups` later reads as input, so
-treat it as sensitive on both ends of that pipeline:
+`service-credentials` fetches each matching app's live `VCAP_SERVICES`, and
+`create-service-keys` creates service keys and fetches their credentials —
+passwords, client secrets, certificates, the lot — printing them as plain
+JSON. `service-credentials` is read-only (nothing in BTP changes), while
+`create-service-keys` is a write command that also happens to output
+secrets; the same `service-credentials.json` shape is also what `create-ups`
+later reads as input. Treat all of this as sensitive:
 
 - Prefer `--output <file>` over letting it print to a transcript or chat the
   user didn't ask to persist, and tell the user where the file landed.
@@ -213,8 +255,10 @@ treat it as sensitive on both ends of that pipeline:
   command's output (see "Everything is logged" above) — mention this to the
   user so they know that log file now contains secrets too, don't just stay
   silent about it.
-- Narrow with `--services`/`--spaces`/`--apps` to the minimum needed rather
-  than pulling every binding across the whole org scope by default.
+- Narrow with `--services`/`--spaces`/`--apps` (on `service-credentials`) or
+  `--spaces`/`--service-instances` (on `create-service-keys`) to the minimum
+  needed rather than pulling every binding/instance across the whole org
+  scope by default.
 
 ## Example workflows
 

@@ -24,6 +24,7 @@ const cupsConcurrency = 8
 // file (see the `service-credentials` command's output).
 type cupsEntry struct {
 	Name        string
+	Space       string
 	Label       string
 	Plan        string
 	Tags        []string
@@ -71,12 +72,25 @@ least "name" and "credentials"; "label", "plan", and "tags" are used when
 present.
 
 For each target org (--org/--orgs/--excludeOrgs, or the default scope set via
-'bo orgs' if none of those is given) the space named --space is located, and
-every filtered service from the input file is created there as a
-user-provided service instance. The same set of services is created in every
-target org's matching space — this broadcasts the file's contents; it does
-not look at the file's own "org"/"space" fields to decide where to target
-(those are informational only, carried over from 'bo service-credentials').
+'bo orgs' if none of those is given), every filtered service from the input
+file is created as a user-provided service instance in a target space,
+located by exact name (case-insensitive) within that org.
+
+If --space is given, it names that target space for every entry, broadcasting
+the whole file into the same space across every target org — the file's own
+"space" field is then informational only and ignored for targeting. If
+--space is omitted, each entry is targeted at the space named by its own
+service-credentials.json->space field instead (so a single input file can
+spread its entries across several different spaces); review and correct that
+field in the file first if any space names are wrong, since there is no
+preview step that can catch a typo in a space name that simply doesn't match
+anything. Either way, an entry is only created in a given target org if that
+org actually has a matching space — entries/orgs that don't match anything
+are silently skipped, not an error.
+
+--tags, if given, is a comma-separated list applied as the tags for every
+created/updated service, overriding whatever "tags" each entry has in the
+input file. Omit it to use each entry's own "tags" field as-is.
 
 --postfix is appended to each service's name, e.g. "my-hdi" with
 --postfix=-ups becomes "my-hdi-ups".
@@ -97,6 +111,7 @@ If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		spaceName, _ := cmd.Flags().GetString("space")
 		postfix, _ := cmd.Flags().GetString("postfix")
+		tagsFlag, _ := cmd.Flags().GetString("tags")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
@@ -110,6 +125,11 @@ If --regions is omitted the regions from the last login are used.`,
 			return fmt.Errorf("invalid service-credentials JSON: %w", err)
 		}
 
+		var tagsOverride []string
+		if tagsFlag != "" {
+			tagsOverride = splitCSV(tagsFlag)
+		}
+
 		var filtered []cupsEntry
 		for _, e := range entries {
 			if includePattern != "" && !skipMatches(includePattern, e.Label, e.Name) {
@@ -118,10 +138,32 @@ If --regions is omitted the regions from the last login are used.`,
 			if excludePattern != "" && skipMatches(excludePattern, e.Label, e.Name) {
 				continue
 			}
+			if tagsOverride != nil {
+				e.Tags = tagsOverride
+			}
+			if spaceName == "" {
+				if e.Space == "" {
+					fmt.Fprintf(os.Stderr, "warning: entry %q has no \"space\" field and --space was not given — skipping\n", e.Name)
+					continue
+				}
+			}
 			filtered = append(filtered, e)
 		}
 		if len(filtered) == 0 {
-			return fmt.Errorf("no services left after --include/--exclude filtering")
+			return fmt.Errorf("no services left after --include/--exclude filtering (or none had a usable target space — see --space)")
+		}
+
+		// neededSpaces is every distinct target space name (lower-cased) this
+		// run could possibly create something in: just --space, broadcast to
+		// every entry, if given — otherwise each entry's own "space" field,
+		// letting a single input file spread across several spaces.
+		neededSpaces := make(map[string]bool)
+		if spaceName != "" {
+			neededSpaces[strings.ToLower(spaceName)] = true
+		} else {
+			for _, e := range filtered {
+				neededSpaces[strings.ToLower(e.Space)] = true
+			}
 		}
 
 		creds, err := store.Load()
@@ -226,7 +268,7 @@ If --regions is omitted the regions from the last login are used.`,
 
 				var targets []cupsTargetSpace
 				for _, sp := range spaces {
-					if !strings.EqualFold(sp.Name, spaceName) {
+					if !neededSpaces[strings.ToLower(sp.Name)] {
 						continue
 					}
 					orgGUIDForSpace := sp.Relationships.Organization.Data.GUID
@@ -264,6 +306,13 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 			for _, t := range r.Targets {
 				for _, e := range filtered {
+					targetSpace := spaceName
+					if targetSpace == "" {
+						targetSpace = e.Space
+					}
+					if !strings.EqualFold(t.SpaceName, targetSpace) {
+						continue
+					}
 					finalName := e.Name + postfix
 					planned = append(planned, cupsPlannedItem{
 						Client:       r.Client,
@@ -281,7 +330,10 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 		}
 		if len(planned) == 0 {
-			return fmt.Errorf("no target org has a space named %q (or no services matched --include/--exclude)", spaceName)
+			if spaceName != "" {
+				return fmt.Errorf("no target org has a space named %q (or no services matched --include/--exclude)", spaceName)
+			}
+			return fmt.Errorf("no target org has a space matching any service's \"space\" field (or no services matched --include/--exclude)")
 		}
 
 		sort.Slice(planned, func(i, j int) bool {
@@ -418,7 +470,14 @@ func parseCupsEntriesFile(path string) ([]cupsEntry, error) {
 	for i, r := range raw {
 		name, _ := r["name"].(string)
 		if name == "" {
-			fmt.Fprintf(os.Stderr, "warning: entry %d has no usable \"name\" field — skipping\n", i)
+			// service-credentials.json uses "name"; create-service-keys'
+			// output has no "name" field but names the service instance
+			// "instance_name" — accept that too so hana-creds.json produced
+			// by either command can be fed straight into create-ups.
+			name, _ = r["instance_name"].(string)
+		}
+		if name == "" {
+			fmt.Fprintf(os.Stderr, "warning: entry %d has no usable \"name\"/\"instance_name\" field — skipping\n", i)
 			continue
 		}
 		credsMap, _ := r["credentials"].(map[string]interface{})
@@ -427,8 +486,10 @@ func parseCupsEntriesFile(path string) ([]cupsEntry, error) {
 		}
 		label, _ := r["label"].(string)
 		plan, _ := r["plan"].(string)
+		space, _ := r["space"].(string)
 		entries = append(entries, cupsEntry{
 			Name:        name,
+			Space:       space,
 			Label:       label,
 			Plan:        plan,
 			Tags:        cupsStringSlice(r["tags"]),
@@ -495,8 +556,9 @@ func printCupsTable(w io.Writer, items []cupsPlannedItem) {
 func init() {
 	createUpsCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(createUpsCmd)
-	createUpsCmd.Flags().String("space", "", "Target space name (exact, case-insensitive) within each target org to create the services in (required)")
+	createUpsCmd.Flags().String("space", "", "Target space name (exact, case-insensitive) within each target org to create the services in; if omitted, each entry's own \"space\" field from the input file is used instead")
 	createUpsCmd.Flags().String("postfix", "", "Suffix appended to each service name, e.g. '-ups'")
+	createUpsCmd.Flags().String("tags", "", "Comma-separated tags applied to every created/updated service, overriding each entry's own \"tags\" field")
 	createUpsCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompts")
 	createUpsCmd.Flags().String("include", "", "Only include services whose label or name contain any of these comma-separated, case-insensitive keywords")
 	createUpsCmd.Flags().String("exclude", "", "Exclude services whose label or name contain any of these comma-separated, case-insensitive keywords")
@@ -504,5 +566,4 @@ func init() {
 	createUpsCmd.Flags().String("org", "", "Org GUID to target; only this org will be targeted")
 	createUpsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	createUpsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
-	_ = createUpsCmd.MarkFlagRequired("space")
 }

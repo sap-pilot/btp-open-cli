@@ -105,6 +105,8 @@ mv bo ~/.local/bin/   # optional
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
+| [`create-service-keys`](#create-service-keys) | Create or update service keys for matching service instances across orgs and spaces |
+| [`delete-service-instances`](#delete-service-instances) | Delete service instances (and their bindings/keys) matching name patterns, across orgs and spaces |
 
 ### XSUAA Users
 
@@ -189,7 +191,8 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 Interactively select which accessible CF orgs should be the **default scope** for
 org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
-`service-credentials`, `create-ups`, `users`, `role-collections`,
+`service-credentials`, `create-ups`, `create-service-keys`,
+`delete-service-instances`, `users`, `role-collections`,
 `subaccount-destinations` and its create/update/delete variants, and
 `describe-subaccount`) when they're run
 without `--org` or `--orgs`.
@@ -246,7 +249,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `create-service-keys`, `delete-service-instances`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1275,13 +1278,17 @@ Fetching an app's environment requires at least Space Developer access to the sp
 
 ### `create-ups`
 
-Create (or update) user-provided services from a `service-credentials.json` file — the same shape `bo service-credentials` outputs — broadcasting the file's services into a named space across one or more target orgs.
+Create (or update) user-provided services from a `service-credentials.json` (or `create-service-keys` output) file in a target space in one or more target orgs.
 
 ```
-bo create-ups <service-credentials.json> --space <space-name> [-y]
+bo create-ups <service-credentials.json> [--space <space-name>] [--tags <csv>] [-y]
 ```
 
-If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`. `--space` is required and matched by exact name (case-insensitive) within each target org — the source file's own `org`/`space` fields are informational only and don't affect targeting: every filtered service in the file is created in every target org's matching space.
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`.
+
+`--space`, if given, names one target space (matched by exact name, case-insensitive) broadcast across every target org — every filtered service in the file is created in every target org's matching space, and the file's own `space` field is then ignored for targeting. If `--space` is omitted, each entry is instead targeted at the space named in **its own** `space` field in the input file, so a single file can spread its entries across several different spaces at once. **Review (and correct) each entry's `space` field in the file before running without `--space`** — a name that doesn't match any accessible space in scope is silently skipped, not an error, so a typo there means that entry quietly isn't created anywhere. Either way, an entry is only created in a given target org if that org actually has the matching space.
+
+`--tags`, if given, is a comma-separated list applied as the tags on every created/updated service, overriding each entry's own `tags` field. Omit it to use each entry's own tags as-is.
 
 ```bash
 # Create every service in the file, in the "prod" space of every org in the default scope
@@ -1289,6 +1296,9 @@ bo create-ups hana-creds.json --space prod
 
 # Only the hana services, with "-ups" appended to each service's name
 bo create-ups hana-creds.json --space prod --include hana --postfix -ups
+
+# No --space: each entry goes to the space named in its own "space" field
+bo create-ups hana-creds.json --postfix -ups --tags hana,database,relational
 
 # Skip confirmation prompts (for scripts)
 bo create-ups hana-creds.json --space prod -y
@@ -1310,6 +1320,110 @@ Proceed? [y/N]
 Confirmation is required unless `-y`/`--yes` is given — declining it aborts the whole command. If a service with the same (post-`--postfix`) name already exists in its target space, it's listed separately and a second, independent confirmation to overwrite it is required, also skipped by `-y`. Declining *that* one doesn't abort anything — it just skips the existing (overwrite) services and still creates whichever ones are brand new.
 
 `--include`/`--exclude` each accept a comma-separated list of keywords and match against each service's `label` or `name` (case-insensitive substring).
+
+### `create-service-keys`
+
+Create a service key of a given name for every managed service instance matching `--service-instances`, across target orgs and spaces, and write each created/updated (or, when skipped as already-existing, left-as-is) key's credentials out as JSON.
+
+```
+bo create-service-keys <service_key_name> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`/`create-ups`. `--spaces` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org; omit it to search every accessible space in scope. `--service-instances`/`-s` narrows to specific service instance names: comma-separated patterns, e.g. `*-hdi,*-db` — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring; omit it to match every managed service instance in scope.
+
+```bash
+# Create "mykey" for every *-hdi/*-db instance in the default org scope,
+# writing credentials to a file
+bo create-service-keys mykey --service-instances "*-hdi,*-db" -o keys.json
+
+# Narrow to specific orgs and a specific space
+bo create-service-keys mykey --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts) — existing keys of the same name are updated
+bo create-service-keys mykey -y
+
+# Non-interactive, but never touch an instance that already has this key
+bo create-service-keys mykey --create-new-keys-only
+```
+
+Without `-y`, a preview in TOON format is shown first:
+
+```
+Service keys to create/update:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[2]{instance_guid,instance_name,label,plan,service_key_name,status}:
+          <guid-1>,my-hdi,hana,hdi-shared,mykey,create
+          <guid-2>,my-db,postgresql-db,v9.6-dev,mykey,update
+
+1 to create, 1 to update (already exist).
+```
+
+If any matched instance already has a key with that name, you're asked to resolve it: `[u]pdate` existing (delete and recreate it), `[c]reate` new keys only (skip the conflicting ones — the same choice as `--create-new-keys-only`), or `[a]bort` the whole run. If there are no naming conflicts at all, a plain `Proceed? [y/N]` confirmation is shown instead. `-y` without `--create-new-keys-only` resolves a conflict as `update` automatically, with no prompt.
+
+When `[c]reate`/`--create-new-keys-only` applies, the instances that already had a key of that name are left untouched (not deleted, not recreated) — but their existing key's credentials are still fetched and included in the output, so the resulting JSON remains a complete record of every matched instance's key, old and new alike. The final summary line reports them separately, e.g. `Done: 1 created, 0 updated, 0 failed, 1 existing key(s) included in output unchanged.`
+
+Each created/updated key's credentials are fetched and written as a flat JSON array to `--output`/`-o` (or stdout if omitted):
+
+```json
+[
+  {
+    "org": "my-org",
+    "space": "prod",
+    "instance_name": "my-hdi",
+    "instance_guid": "<guid-1>",
+    "label": "hana",
+    "plan": "hdi-shared",
+    "tags": ["hana"],
+    "binding_guid": "<binding-guid-1>",
+    "binding_name": "mykey",
+    "credentials": { "host": "...", "password": "...", "...": "..." }
+  }
+]
+```
+
+⚠️ **This outputs live secrets** (the service key's credentials) in plain JSON — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+### `delete-service-instances`
+
+Delete every service instance (managed or user-provided) whose name matches a comma-separated list of patterns, across target orgs and spaces — deleting each matched instance's existing service credential bindings and keys first, since CF refuses to delete an instance that still has any.
+
+```
+bo delete-service-instances <service_instance_name_patterns> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`/`create-ups`/`create-service-keys`. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<service_instance_name_patterns>` is a required, comma-separated list of patterns, e.g. `*-ups,tmp-*` — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring.
+
+```bash
+# Delete every instance ending in "-ups" or starting with "tmp-" in the default org scope
+bo delete-service-instances "*-ups,tmp-*"
+
+# Narrow to specific orgs and a specific space
+bo delete-service-instances "*-ups" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo delete-service-instances "*-ups" -y
+```
+
+⚠️ **This is destructive and cannot be undone.** Without `-y`, every matched instance is shown in a TOON preview (`org -> space -> service_instances`), including how many existing bindings/keys will be deleted along with it:
+
+```
+Service instances to delete:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,type,label,plan,bindings_to_delete}:
+          <guid-1>,my-hdi-ups,user-provided,,,0
+
+1 service instance(s) to delete, 0 existing binding(s)/key(s) to delete along with them.
+
+This cannot be undone. Proceed? [y/N]
+```
+
+`-y` skips this confirmation entirely — only pass it once a human has seen the preview (or the org/space/pattern scope is otherwise known to be deliberate).
 
 ### `reorg-wiki-attachments`
 

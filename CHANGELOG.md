@@ -1,5 +1,35 @@
 # Changelog
 
+## v0.18.0 — 2026-10-26
+
+### Added
+
+- **`create-service-keys` — create or update service keys across orgs and spaces**
+
+  Creates a service key of a given name for every managed service instance matching `--service-instances` (comma-separated name patterns — glob if a pattern contains `* ? [`, otherwise substring), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces` (comma-separated, exact names). Without `-y`, a TOON preview (`org -> space -> service_instances`) is shown first; if any matched instance already has a key with that name, you're asked to `[u]pdate` existing (delete + recreate), `[c]reate` new keys only (skip the conflicting ones — same as `--create-new-keys-only`), or `[a]bort`. `-y` without `--create-new-keys-only` defaults a conflict to `update` with no prompt. Each created/updated key's credentials are fetched and written as a flat JSON array to `--output`/`-o` (or stdout): `[{org, space, instance_name, instance_guid, label, plan, tags, binding_guid, binding_name, credentials}]`.
+
+  ```bash
+  bo create-service-keys mykey --service-instances "*-hdi,*-db" -y -o keys.json
+  bo create-service-keys mykey --orgs target-orgs.csv --spaces prod --create-new-keys-only
+  ```
+
+- **`create-ups` — `--tags` override, and `--space` is now optional**
+
+  `--tags` takes a comma-separated list applied to every created/updated service, overriding each entry's own `tags` field from the input file. `--space` is no longer required — if omitted, each entry is targeted at the space named by its own `space` field in the input file instead of one space broadcast to everything, so a single file can spread its entries across several spaces; review/correct each entry's `space` field first, since a name that matches nothing in scope is silently skipped rather than an error. Entries from `create-service-keys`' JSON output (which has no `name` field) are now also accepted — `instance_name` is used as the service name when `name` is absent.
+
+  ```bash
+  bo create-ups hana-creds.json --postfix -ups --tags hana,database,relational
+  ```
+
+- **`delete-service-instances` — delete service instances (and their bindings/keys) by name pattern, across orgs and spaces**
+
+  Deletes every service instance (managed or user-provided) whose name matches `<service_instance_name_patterns>` (comma-separated — glob if a pattern contains `* ? [`, otherwise substring), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space` (comma-separated, exact names; the two combine if both are given). Every existing service credential binding and key on a matched instance is deleted first, since CF refuses to delete an instance that still has any. Without `-y`, a TOON preview (`org -> space -> service_instances`, including a bindings-to-delete count per instance) is shown first, requiring a `[y/N]` confirmation — declining aborts the whole command without deleting anything.
+
+  ```bash
+  bo delete-service-instances "*-ups,tmp-*" -y
+  bo delete-service-instances "*-ups" --orgs target-orgs.csv --spaces prod
+  ```
+
 ## v0.17.0 — 2026-10-22
 
 ### Changed
