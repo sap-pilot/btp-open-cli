@@ -131,7 +131,11 @@ confirmation is shown instead, skipped by -y.
 Each created/updated key's credentials are fetched and written as a flat
 JSON array to --output/-o (or stdout if omitted):
 [{org, space, instance_name, instance_guid, label, plan, tags, binding_guid,
-binding_name, credentials}].
+binding_name, credentials}]. When [c]reate-new-keys-only applies (interactively
+or via --create-new-keys-only), instances that already had a key of this name
+and were therefore left untouched still get an entry in this output — their
+existing key's credentials are fetched (not recreated) so the output remains
+a complete record of every matched instance's key, old and new alike.
 
 ⚠️ This outputs live secrets (the service key's credentials) in plain JSON —
 prefer --output to a file over printing to a shared terminal.
@@ -418,26 +422,32 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 
 		toExecute := planned
+		var skipExisting []cskPlannedItem
 		if createNewOnly {
 			var newOnly []cskPlannedItem
 			for _, p := range planned {
 				if p.ExistingBindingGUID == "" {
 					newOnly = append(newOnly, p)
+				} else {
+					skipExisting = append(skipExisting, p)
 				}
 			}
 			toExecute = newOnly
 		}
 		if len(toExecute) == 0 {
-			fmt.Fprintln(out, "Nothing to do.")
-			return nil
+			if len(skipExisting) == 0 {
+				fmt.Fprintln(out, "Nothing to do.")
+				return nil
+			}
+			fmt.Fprintln(out, "Nothing new to create — including existing key(s) in output.")
 		}
 
 		// Phase 3: create/update, bounded concurrency across the whole batch.
 		var (
-			execWg                            sync.WaitGroup
-			mu                                sync.Mutex
-			records                           []cskOutputRecord
-			createdCount, updatedCount, fails int
+			execWg                                           sync.WaitGroup
+			mu                                               sync.Mutex
+			records                                          []cskOutputRecord
+			createdCount, updatedCount, existingCount, fails int
 		)
 		sem := make(chan struct{}, cskConcurrency)
 		for _, p := range toExecute {
@@ -510,7 +520,60 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		execWg.Wait()
 
-		fmt.Fprintf(out, "\nDone: %d created, %d updated, %d failed.\n", createdCount, updatedCount, fails)
+		// Phase 3b: for instances skipped because --create-new-keys-only (or
+		// 'c') was chosen, fetch the existing key's credentials — unchanged,
+		// nothing created or deleted — so the output still has a complete
+		// record of every matched instance's key, old and new alike.
+		if len(skipExisting) > 0 {
+			var existingWg sync.WaitGroup
+			existingSem := make(chan struct{}, cskConcurrency)
+			for _, p := range skipExisting {
+				existingWg.Add(1)
+				existingSem <- struct{}{}
+				go func(p cskPlannedItem) {
+					defer existingWg.Done()
+					defer func() { <-existingSem }()
+
+					credentials, err := p.Client.GetServiceCredentialDetails(ctx, p.ExistingBindingGUID)
+					if err != nil {
+						mu.Lock()
+						fails++
+						mu.Unlock()
+						fmt.Fprintf(os.Stderr, "  ! ERROR fetching credentials for existing key %s/%s/%s: %v\n",
+							p.OrgName, p.SpaceName, p.InstanceName, err)
+						return
+					}
+
+					record := cskOutputRecord{
+						Org:          p.OrgName,
+						Space:        p.SpaceName,
+						InstanceName: p.InstanceName,
+						InstanceGUID: p.InstanceGUID,
+						Label:        p.Label,
+						Plan:         p.Plan,
+						Tags:         p.Tags,
+						BindingGUID:  p.ExistingBindingGUID,
+						BindingName:  serviceKeyName,
+						Credentials:  credentials,
+					}
+
+					mu.Lock()
+					records = append(records, record)
+					existingCount++
+					mu.Unlock()
+
+					fmt.Fprintf(out, "  = existing (unchanged): %s/%s/%s\n", p.OrgName, p.SpaceName, p.InstanceName)
+				}(p)
+			}
+			existingWg.Wait()
+		}
+
+		if existingCount > 0 {
+			fmt.Fprintf(out, "\nDone: %d created, %d updated, %d failed, %d existing key(s) included in output unchanged.\n",
+				createdCount, updatedCount, fails, existingCount)
+		} else {
+			fmt.Fprintf(out, "\nDone: %d created, %d updated, %d failed.\n", createdCount, updatedCount, fails)
+		}
 
 		jsonOut, closeOut, err := resolveOutputWriter(outputFile)
 		if err != nil {

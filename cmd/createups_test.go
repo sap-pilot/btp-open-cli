@@ -375,3 +375,208 @@ func TestCreateUps_ExplicitYesAnswersBothPrompts(t *testing.T) {
 		t.Errorf("expected 1 create and 1 update, got created=%d updated=%d", len(calls.created), len(calls.updated))
 	}
 }
+
+// newCupsMultiSpaceServer serves one org with several spaces (name -> guid),
+// no pre-existing user-provided services, and records create/update calls
+// the same way newCupsServer does.
+func newCupsMultiSpaceServer(t *testing.T, orgGUID, orgName string, spaces map[string]string) (*httptest.Server, *cupsServerCalls) {
+	t.Helper()
+	calls := &cupsServerCalls{}
+
+	spaceResources := make([]map[string]interface{}, 0, len(spaces))
+	for name, guid := range spaces {
+		spaceResources = append(spaceResources, map[string]interface{}{
+			"guid": guid,
+			"name": name,
+			"relationships": map[string]interface{}{
+				"organization": map[string]interface{}{
+					"data": map[string]string{"guid": orgGUID},
+				},
+			},
+		})
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v3/organizations":
+			w.Write([]byte(singleOrgPage(orgGUID, orgName))) //nolint:errcheck
+
+		case r.URL.Path == "/v3/spaces":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources":  spaceResources,
+			})))
+
+		case r.URL.Path == "/v3/service_instances" && r.Method == http.MethodGet:
+			w.Write([]byte(emptyPage())) //nolint:errcheck
+
+		case r.URL.Path == "/v3/service_instances" && r.Method == http.MethodPost:
+			body, _ := io.ReadAll(r.Body)
+			var decoded map[string]interface{}
+			json.Unmarshal(body, &decoded) //nolint:errcheck
+			calls.addCreated(decoded)
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(mustJSONStr(map[string]interface{}{"guid": "new-guid", "name": decoded["name"]}))) //nolint:errcheck
+
+		case strings.HasPrefix(r.URL.Path, "/v3/service_instances/") && r.Method == http.MethodPatch:
+			body, _ := io.ReadAll(r.Body)
+			var decoded map[string]interface{}
+			json.Unmarshal(body, &decoded) //nolint:errcheck
+			calls.addUpdated(decoded)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(mustJSONStr(map[string]interface{}{"guid": strings.TrimPrefix(r.URL.Path, "/v3/service_instances/")}))) //nolint:errcheck
+
+		default:
+			http.Error(w, "no route: "+r.Method+" "+r.URL.Path, 404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, calls
+}
+
+// cupsCreatedSpaceGUID extracts the target space guid a recorded create call
+// was sent with, from its relationships.space.data.guid.
+func cupsCreatedSpaceGUID(t *testing.T, body map[string]interface{}) string {
+	t.Helper()
+	rel, _ := body["relationships"].(map[string]interface{})
+	sp, _ := rel["space"].(map[string]interface{})
+	data, _ := sp["data"].(map[string]interface{})
+	guid, _ := data["guid"].(string)
+	if guid == "" {
+		t.Fatalf("created call has no relationships.space.data.guid: %v", body)
+	}
+	return guid
+}
+
+func TestCreateUps_NoSpaceFlagUsesEntrySpaceField(t *testing.T) {
+	srv, calls := newCupsMultiSpaceServer(t, "org1", "my-org",
+		map[string]string{"dev": "sp-dev", "prod": "sp-prod"})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	devEntry := hanaCupsEntry("dev-hdi")
+	devEntry["space"] = "dev"
+	prodEntry := hanaCupsEntry("prod-hdi")
+	prodEntry["space"] = "prod"
+	path := writeCupsInputFile(t, devEntry, prodEntry)
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "-y")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Done: 2 created, 0 updated, 0 failed.") {
+		t.Errorf("expected both entries created, got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 2 {
+		t.Fatalf("expected 2 created, got %d", len(calls.created))
+	}
+	byName := make(map[string]map[string]interface{}, 2)
+	for _, c := range calls.created {
+		byName[c["name"].(string)] = c
+	}
+	if got := cupsCreatedSpaceGUID(t, byName["dev-hdi"]); got != "sp-dev" {
+		t.Errorf("dev-hdi: expected space sp-dev, got %q", got)
+	}
+	if got := cupsCreatedSpaceGUID(t, byName["prod-hdi"]); got != "sp-prod" {
+		t.Errorf("prod-hdi: expected space sp-prod, got %q", got)
+	}
+}
+
+func TestCreateUps_NoSpaceFlagSkipsEntryWithoutSpaceField(t *testing.T) {
+	srv, calls := newCupsMultiSpaceServer(t, "org1", "my-org",
+		map[string]string{"dev": "sp-dev"})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	withSpace := hanaCupsEntry("dev-hdi")
+	withSpace["space"] = "dev"
+	noSpace := hanaCupsEntry("no-space-hdi")
+	delete(noSpace, "space")
+	path := writeCupsInputFile(t, withSpace, noSpace)
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "-y")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Done: 1 created, 0 updated, 0 failed.") {
+		t.Errorf("expected only the entry with a space field to be created, got: %q", stdout)
+	}
+	if !strings.Contains(stderr, "no-space-hdi") {
+		t.Errorf("expected a warning naming the skipped entry, got stderr: %q", stderr)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 1 {
+		t.Fatalf("expected 1 created, got %d", len(calls.created))
+	}
+}
+
+func TestCreateUps_TagsFlagOverridesEntryTags(t *testing.T) {
+	srv, calls := newCupsServer(t, "org1", "my-org", "sp1", "dev", nil)
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+	path := writeCupsInputFile(t, hanaCupsEntry("my-hdi"))
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "--space", "dev", "--tags", "hana,database,relational", "-y")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Done: 1 created, 0 updated, 0 failed.") {
+		t.Fatalf("expected 1 created, got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 1 {
+		t.Fatalf("expected 1 created, got %d", len(calls.created))
+	}
+	tagsRaw, _ := calls.created[0]["tags"].([]interface{})
+	got := make([]string, len(tagsRaw))
+	for i, v := range tagsRaw {
+		got[i] = v.(string)
+	}
+	want := []string{"hana", "database", "relational"}
+	if len(got) != len(want) {
+		t.Fatalf("expected tags %v, got %v", want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("expected tags %v, got %v", want, got)
+		}
+	}
+}
+
+func TestCreateUps_InstanceNameFieldFallback(t *testing.T) {
+	srv, calls := newCupsServer(t, "org1", "my-org", "sp1", "dev", nil)
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	// Shaped like create-service-keys' output: no "name" field, but
+	// "instance_name" instead.
+	entry := map[string]interface{}{
+		"org": "src-org", "space": "dev",
+		"label": "hana", "instance_name": "my-hdi", "plan": "hdi-shared",
+		"tags":        []string{"hana"},
+		"credentials": map[string]interface{}{"host": "example.com"},
+	}
+	path := writeCupsInputFile(t, entry)
+
+	stdout, stderr, err := runCmd(t, "create-ups", path, "--space", "dev", "-y")
+	if err != nil {
+		t.Fatalf("create-ups failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Done: 1 created, 0 updated, 0 failed.") {
+		t.Fatalf("expected 1 created, got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.created) != 1 || calls.created[0]["name"] != "my-hdi" {
+		t.Fatalf("expected 1 created named my-hdi, got: %v", calls.created)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -273,18 +274,30 @@ func TestCreateServiceKeys_ConflictCreateNewOnlyFlagSkipsExisting(t *testing.T) 
 	setupTestEnv(t, srv.URL)
 	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
 
-	stdout, stderr, err := runCmd(t, "create-service-keys", "mykey", "--create-new-keys-only")
+	path := filepath.Join(t.TempDir(), "out.json")
+	stdout, stderr, err := runCmd(t, "create-service-keys", "mykey", "--create-new-keys-only", "-o", path)
 	if err != nil {
 		t.Fatalf("create-service-keys failed: %v\nstderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "Nothing to do.") {
-		t.Errorf("expected 'Nothing to do.' since the only match already has the key, got: %q", stdout)
+	if !strings.Contains(stdout, "Nothing new to create") {
+		t.Errorf("expected 'Nothing new to create' since the only match already has the key, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "Done: 0 created, 0 updated, 0 failed, 1 existing key(s) included in output unchanged.") {
+		t.Errorf("expected the existing key to be reported as included unchanged, got: %q", stdout)
 	}
 
 	calls.mu.Lock()
-	defer calls.mu.Unlock()
 	if len(calls.created) != 0 || len(calls.deleted) != 0 {
-		t.Errorf("expected no API calls, got created=%d deleted=%d", len(calls.created), len(calls.deleted))
+		t.Errorf("expected no create/delete API calls, got created=%d deleted=%d", len(calls.created), len(calls.deleted))
+	}
+	calls.mu.Unlock()
+
+	records := readCskOutputFile(t, path)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record in output (the existing key), got %d: %v", len(records), records)
+	}
+	if records[0].BindingGUID != "old-binding-1" || records[0].Credentials["host"] != "db.example.com" {
+		t.Errorf("expected the existing key's own binding/credentials in output, got: %+v", records[0])
 	}
 }
 
@@ -321,22 +334,52 @@ func TestCreateServiceKeys_ConflictPromptCreateOnly(t *testing.T) {
 
 	defer withStdinLines(t, "c")()
 
-	stdout, stderr, err := runCmd(t, "create-service-keys", "mykey")
+	path := filepath.Join(t.TempDir(), "out.json")
+	stdout, stderr, err := runCmd(t, "create-service-keys", "mykey", "-o", path)
 	if err != nil {
 		t.Fatalf("create-service-keys failed: %v\nstderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "Done: 1 created, 0 updated, 0 failed.") {
-		t.Errorf("expected only the non-conflicting instance to be created, got: %q", stdout)
+	if !strings.Contains(stdout, "Done: 1 created, 0 updated, 0 failed, 1 existing key(s) included in output unchanged.") {
+		t.Errorf("expected only the non-conflicting instance to be created, and the existing one reported as included unchanged, got: %q", stdout)
 	}
 
 	calls.mu.Lock()
-	defer calls.mu.Unlock()
 	if len(calls.deleted) != 0 {
 		t.Errorf("expected no deletes when choosing create-new-only, got deleted=%v", calls.deleted)
 	}
 	if len(calls.created) != 1 {
 		t.Errorf("expected exactly 1 create, got %d", len(calls.created))
 	}
+	calls.mu.Unlock()
+
+	records := readCskOutputFile(t, path)
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records in output (1 new + 1 existing), got %d: %v", len(records), records)
+	}
+	byInstance := make(map[string]cskOutputRecord, len(records))
+	for _, r := range records {
+		byInstance[r.InstanceName] = r
+	}
+	if r := byInstance["my-hdi-2"]; r.BindingGUID != "new-binding-guid" {
+		t.Errorf("expected my-hdi-2 to carry the newly created binding, got: %+v", r)
+	}
+	if r := byInstance["my-hdi"]; r.BindingGUID != "old-binding-1" {
+		t.Errorf("expected my-hdi to carry its existing (untouched) binding, got: %+v", r)
+	}
+}
+
+// readCskOutputFile reads and decodes a create-service-keys --output JSON file.
+func readCskOutputFile(t *testing.T, path string) []cskOutputRecord {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading output file: %v", err)
+	}
+	var records []cskOutputRecord
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("decoding output file: %v", err)
+	}
+	return records
 }
 
 func TestCreateServiceKeys_ConflictPromptAbort(t *testing.T) {

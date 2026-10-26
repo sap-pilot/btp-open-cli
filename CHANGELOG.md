@@ -13,6 +13,14 @@
   bo create-service-keys mykey --orgs target-orgs.csv --spaces prod --create-new-keys-only
   ```
 
+- **`create-ups` — `--tags` override, and `--space` is now optional**
+
+  `--tags` takes a comma-separated list applied to every created/updated service, overriding each entry's own `tags` field from the input file. `--space` is no longer required — if omitted, each entry is targeted at the space named by its own `space` field in the input file instead of one space broadcast to everything, so a single file can spread its entries across several spaces; review/correct each entry's `space` field first, since a name that matches nothing in scope is silently skipped rather than an error. Entries from `create-service-keys`' JSON output (which has no `name` field) are now also accepted — `instance_name` is used as the service name when `name` is absent.
+
+  ```bash
+  bo create-ups hana-creds.json --postfix -ups --tags hana,database,relational
+  ```
+
 ## v0.17.0 — 2026-10-22
 
 ### Changed

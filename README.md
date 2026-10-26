@@ -1276,13 +1276,17 @@ Fetching an app's environment requires at least Space Developer access to the sp
 
 ### `create-ups`
 
-Create (or update) user-provided services from a `service-credentials.json` file — the same shape `bo service-credentials` outputs — broadcasting the file's services into a named space across one or more target orgs.
+Create (or update) user-provided services from a `service-credentials.json` (or `create-service-keys` output) file in a target space in one or more target orgs.
 
 ```
-bo create-ups <service-credentials.json> --space <space-name> [-y]
+bo create-ups <service-credentials.json> [--space <space-name>] [--tags <csv>] [-y]
 ```
 
-If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`. `--space` is required and matched by exact name (case-insensitive) within each target org — the source file's own `org`/`space` fields are informational only and don't affect targeting: every filtered service in the file is created in every target org's matching space.
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as `apps`/`service-credentials`.
+
+`--space`, if given, names one target space (matched by exact name, case-insensitive) broadcast across every target org — every filtered service in the file is created in every target org's matching space, and the file's own `space` field is then ignored for targeting. If `--space` is omitted, each entry is instead targeted at the space named in **its own** `space` field in the input file, so a single file can spread its entries across several different spaces at once. **Review (and correct) each entry's `space` field in the file before running without `--space`** — a name that doesn't match any accessible space in scope is silently skipped, not an error, so a typo there means that entry quietly isn't created anywhere. Either way, an entry is only created in a given target org if that org actually has the matching space.
+
+`--tags`, if given, is a comma-separated list applied as the tags on every created/updated service, overriding each entry's own `tags` field. Omit it to use each entry's own tags as-is.
 
 ```bash
 # Create every service in the file, in the "prod" space of every org in the default scope
@@ -1290,6 +1294,9 @@ bo create-ups hana-creds.json --space prod
 
 # Only the hana services, with "-ups" appended to each service's name
 bo create-ups hana-creds.json --space prod --include hana --postfix -ups
+
+# No --space: each entry goes to the space named in its own "space" field
+bo create-ups hana-creds.json --postfix -ups --tags hana,database,relational
 
 # Skip confirmation prompts (for scripts)
 bo create-ups hana-creds.json --space prod -y
@@ -1314,7 +1321,7 @@ Confirmation is required unless `-y`/`--yes` is given — declining it aborts th
 
 ### `create-service-keys`
 
-Create a service key of a given name for every managed service instance matching `--service-instances`, across target orgs and spaces, and write each created/updated key's credentials out as JSON.
+Create a service key of a given name for every managed service instance matching `--service-instances`, across target orgs and spaces, and write each created/updated (or, when skipped as already-existing, left-as-is) key's credentials out as JSON.
 
 ```
 bo create-service-keys <service_key_name> [flags]
@@ -1353,6 +1360,8 @@ orgs[1]:
 ```
 
 If any matched instance already has a key with that name, you're asked to resolve it: `[u]pdate` existing (delete and recreate it), `[c]reate` new keys only (skip the conflicting ones — the same choice as `--create-new-keys-only`), or `[a]bort` the whole run. If there are no naming conflicts at all, a plain `Proceed? [y/N]` confirmation is shown instead. `-y` without `--create-new-keys-only` resolves a conflict as `update` automatically, with no prompt.
+
+When `[c]reate`/`--create-new-keys-only` applies, the instances that already had a key of that name are left untouched (not deleted, not recreated) — but their existing key's credentials are still fetched and included in the output, so the resulting JSON remains a complete record of every matched instance's key, old and new alike. The final summary line reports them separately, e.g. `Done: 1 created, 0 updated, 0 failed, 1 existing key(s) included in output unchanged.`
 
 Each created/updated key's credentials are fetched and written as a flat JSON array to `--output`/`-o` (or stdout if omitted):
 
