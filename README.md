@@ -105,8 +105,15 @@ mv bo ~/.local/bin/   # optional
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
+| [`service-instances`](#service-instances) | List service instances across orgs and spaces, optionally including user-provided credentials |
+| [`service-keys`](#service-keys) | List service keys across orgs and spaces, optionally including credentials |
 | [`create-service-keys`](#create-service-keys) | Create or update service keys for matching service instances across orgs and spaces |
 | [`delete-service-instances`](#delete-service-instances) | Delete service instances (and their bindings/keys) matching name patterns, across orgs and spaces |
+| [`delete-service-keys`](#delete-service-keys) | Delete service keys matching name patterns, across orgs and spaces |
+| [`start-apps`](#start-apps) | Start apps matching name patterns, across orgs and spaces |
+| [`stop-apps`](#stop-apps) | Stop apps matching name patterns, across orgs and spaces |
+| [`restart-apps`](#restart-apps) | Restart apps matching name patterns, across orgs and spaces, optionally with a zero-downtime `--strategy` |
+| [`restage-apps`](#restage-apps) | Restage apps matching name patterns, across orgs and spaces, optionally with a zero-downtime `--strategy` |
 
 ### XSUAA Users
 
@@ -191,8 +198,9 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 Interactively select which accessible CF orgs should be the **default scope** for
 org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
-`service-credentials`, `create-ups`, `create-service-keys`,
-`delete-service-instances`, `users`, `role-collections`,
+`service-credentials`, `create-ups`, `service-instances`, `service-keys`,
+`create-service-keys`, `delete-service-instances`, `delete-service-keys`,
+`start-apps`, `stop-apps`, `restart-apps`, `restage-apps`, `users`, `role-collections`,
 `subaccount-destinations` and its create/update/delete variants, and
 `describe-subaccount`) when they're run
 without `--org` or `--orgs`.
@@ -249,7 +257,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `create-service-keys`, `delete-service-instances`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `service-instances`, `service-keys`, `create-service-keys`, `delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`, `restart-apps`, `restage-apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1321,6 +1329,91 @@ Confirmation is required unless `-y`/`--yes` is given — declining it aborts th
 
 `--include`/`--exclude` each accept a comma-separated list of keywords and match against each service's `label` or `name` (case-insensitive substring).
 
+### `service-instances`
+
+List every service instance (managed or user-provided) across one or more regions, organizations, and spaces, nested as `region -> org -> space -> service_instances`.
+
+```
+bo service-instances [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `--service-instances` narrows to specific instance names: comma-separated patterns, e.g. `*-hdi,*-db` — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring; omit it to match every service instance in scope.
+
+```bash
+# List every service instance in the default org scope
+bo service-instances
+
+# Narrow to specific orgs, a specific space, and instance names
+bo service-instances --orgs target-orgs.csv --spaces prod --service-instances "*-hdi,*-db"
+
+# Include user-provided instances' credentials, writing to a file instead of stdout
+bo service-instances --full -o instances.json --format json
+```
+
+Output formats (`--format`):
+
+| Format | Description |
+|---|---|
+| `toon` (default) | Token-Oriented Object Notation — compact, human-readable |
+| `json` | JSON document, same nesting as the TOON output |
+| `csv` | Flat rows, one per service instance — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,type,label,plan,tags,created_at,updated_at,last_operation_type,last_operation_state` (plus a trailing `credentials` JSON column when `--full` is given) |
+
+Without `--full`, only service instance metadata is included — `instance_guid`, `instance_name`, `type`, `label`, `plan`, `tags`, `created_at`, `updated_at`, `last_operation_type`, `last_operation_state`. (The CF API doesn't expose a "created by" user on this resource, so that field isn't included.) With `--full`, each **user-provided** instance's credentials are also fetched and included — managed instances have no credentials of their own (only their service keys do, see [`service-keys`](#service-keys)), so `credentials` is simply left empty for those:
+
+```
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,type,label,plan,tags,created_at,updated_at,last_operation_type,last_operation_state,credentials}:
+          <guid-1>,my-ups,user-provided,,,"hana",2026-01-01T00:00:00Z,2026-01-01T00:00:00Z,create,succeeded,{"host":"...","password":"..."}
+```
+
+⚠️ **`--full` outputs live secrets** (each user-provided instance's credentials) — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+### `service-keys`
+
+List every service key (a service credential binding of type `key`, as opposed to an app binding) across one or more regions, organizations, and spaces, nested as `region -> org -> space -> service_instance -> service_keys`.
+
+```
+bo service-keys [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `--service-instances` and `--service-keys` each narrow to specific names: comma-separated patterns, e.g. `*-hdi,*-db` or `btp*,temp*` — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring; omit either to match everything at that level.
+
+```bash
+# List every service key in the default org scope
+bo service-keys
+
+# Narrow to specific orgs, a specific space, and key names
+bo service-keys --orgs target-orgs.csv --spaces prod --service-keys "btp*"
+
+# Include credentials, writing to a file instead of stdout
+bo service-keys --full -o keys.json --format json
+```
+
+Output formats (`--format`):
+
+| Format | Description |
+|---|---|
+| `toon` (default) | Token-Oriented Object Notation — compact, human-readable |
+| `json` | JSON document, same nesting as the TOON output |
+| `csv` | Flat rows, one per service key — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,label,plan,key_guid,key_name,created_at,updated_at,last_operation_type,last_operation_state` (plus a trailing `credentials` JSON column when `--full` is given) |
+
+Without `--full`, only service key metadata is included — `key_guid`, `key_name`, `created_at`, `updated_at`, `last_operation_type`, `last_operation_state`. (The CF API doesn't expose a "created by" user on this resource, so that field isn't included.) With `--full`, each key's credentials are also fetched and included:
+
+```
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,label,plan,service_keys}:
+          <guid-1>,my-hdi,hana,hdi-shared,[1]{key_guid,key_name,created_at,updated_at,last_operation_type,last_operation_state,credentials}:
+            <key-guid-1>,btp-key,2026-01-01T00:00:00Z,2026-01-01T00:00:00Z,create,succeeded,{"host":"...","password":"..."}
+```
+
+⚠️ **`--full` outputs live secrets** (each service key's credentials) — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
 ### `create-service-keys`
 
 Create a service key of a given name for every managed service instance matching `--service-instances`, across target orgs and spaces, and write each created/updated (or, when skipped as already-existing, left-as-is) key's credentials out as JSON.
@@ -1424,6 +1517,149 @@ This cannot be undone. Proceed? [y/N]
 ```
 
 `-y` skips this confirmation entirely — only pass it once a human has seen the preview (or the org/space/pattern scope is otherwise known to be deliberate).
+
+### `delete-service-keys`
+
+Delete every service key (a service credential binding of type `key`, as opposed to an app binding) whose name matches a comma-separated list of patterns, across target orgs and spaces.
+
+```
+bo delete-service-keys <service_key_name_patterns> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<service_key_name_patterns>` is a required, comma-separated list of patterns, e.g. `btp*,temp*` or `*` (matches every key name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it: `!btp*` selects every key name that does *not* match `btp*`. A key is selected if any pattern in the list — negated or not — matches its name.
+
+```bash
+# Delete every key named "btp*" or "temp*" in the default org scope
+bo delete-service-keys "btp*,temp*"
+
+# Delete every key EXCEPT those named "btp*"
+bo delete-service-keys "!btp*"
+
+# Narrow to specific orgs and a specific space
+bo delete-service-keys "btp*" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo delete-service-keys "btp*" -y
+```
+
+⚠️ **This is destructive and cannot be undone.** Without `-y`, every matched key is shown in a TOON preview (`org -> space -> service_instance -> service_keys`):
+
+```
+Service keys to delete:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,service_keys}:
+          <guid-1>,my-hdi,[1]{key_guid,key_name}:
+            <key-guid-1>,btp-key
+
+1 service key(s) to delete.
+
+This cannot be undone. Proceed? [y/N]
+```
+
+`-y` skips this confirmation entirely — only pass it once a human has seen the preview (or the org/space/pattern scope is otherwise known to be deliberate).
+
+### `start-apps`
+
+Start every app whose name matches a comma-separated list of patterns, across target orgs and spaces.
+
+```
+bo start-apps <app_name_patterns> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<app_name_patterns>` is a required, comma-separated list of patterns, e.g. `web-*,worker-*` or `*` (matches every app name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it, same as [`delete-service-keys`](#delete-service-keys).
+
+```bash
+# Start every app named "web-*" or "worker-*" in the default org scope
+bo start-apps "web-*,worker-*"
+
+# Narrow to specific orgs and a specific space
+bo start-apps "web-*" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo start-apps "web-*" -y
+```
+
+Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state) and a plain `Proceed? [y/N]` confirmation is required:
+
+```
+Apps to start:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        apps[1]{app_guid,app_name,state}:
+          <guid-1>,web-1,STOPPED
+
+1 app(s) to start.
+
+Proceed? [y/N]
+```
+
+`-y` skips this confirmation entirely.
+
+### `stop-apps`
+
+Stop every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), just in reverse.
+
+```
+bo stop-apps <app_name_patterns> [flags]
+```
+
+```bash
+# Stop every app named "web-*" or "worker-*" in the default org scope
+bo stop-apps "web-*,worker-*"
+
+# Narrow to specific orgs and a specific space
+bo stop-apps "web-*" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo stop-apps "web-*" -y
+```
+
+### `restart-apps`
+
+Restart every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+
+```
+bo restart-apps <app_name_patterns> [flags]
+```
+
+By default (`--strategy null`, or omitting the flag) a restart is an immediate stop+start via CF's classic "restart" action — it causes downtime. `--strategy rolling` or `--strategy canary` instead restarts with zero downtime, by creating a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) of the app's current droplet with that strategy; canary is marked experimental by CF itself and requires a reasonably recent CF API version.
+
+```bash
+# Restart every app named "web-*" or "worker-*" in the default org scope (causes downtime)
+bo restart-apps "web-*,worker-*"
+
+# Zero-downtime restart via a rolling deployment
+bo restart-apps "web-*" --strategy rolling
+
+# Narrow to specific orgs and a specific space, non-interactive
+bo restart-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy rolling -y
+```
+
+### `restage-apps`
+
+Restage every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+
+```
+bo restage-apps <app_name_patterns> [flags]
+```
+
+By default (`--strategy null`, or omitting the flag) a restage rebuilds a droplet from the app's current package and redeploys it via CF's classic "restage" action — it causes downtime. `--strategy rolling` or `--strategy canary` builds the new droplet the same way but rolls it out with zero downtime instead: it fetches the app's current package, creates a [build](https://v3-apidocs.cloudfoundry.org/#builds), polls it until staging finishes, then deploys the resulting droplet via a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) with that strategy — canary is marked experimental by CF itself and requires a reasonably recent CF API version. CF's v3 API has no single-call equivalent of the classic restage action once a strategy is involved, so this takes noticeably longer per app than the other bulk app commands (it waits for a real build to finish staging).
+
+```bash
+# Restage every app named "web-*" or "worker-*" in the default org scope (causes downtime)
+bo restage-apps "web-*,worker-*"
+
+# Zero-downtime restage via a rolling deployment
+bo restage-apps "web-*" --strategy rolling
+
+# Narrow to specific orgs and a specific space, non-interactive
+bo restage-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy canary -y
+```
 
 ### `reorg-wiki-attachments`
 
@@ -1581,7 +1817,20 @@ Run `bo completion <shell> --help` for shell-specific installation instructions.
 | Flag | Description |
 |------|-------------|
 | `-v`, `--verbose` | Enable debug/verbose output |
+| `--color` | Color console output: `auto` (default), `always`, or `never` — see [Colorized toon/csv output](#colorized-tooncsv-output) |
 | `-h`, `--help` | Show help |
+
+### Colorized toon/csv output
+
+`spaces`, `apps`, `service-instances`, `service-keys`, `role-collections`, `users`, `org-users`, and `org-space-users` colorize each column of their `toon` and `csv` (including `uar.csv`) output — one color per column, cycling across the row, à la the "rainbow csv" editor plugins — so wide rows stay easy to scan by eye. For `toon` output this colors both the compact tabular array headers (`spaces[2]{space_id,space_name}:`) and the comma-separated rows beneath them; plain `key: value` lines are left as-is.
+
+`--color` controls when:
+
+- **`auto` (default)** — colored whenever *something* indicates a terminal or terminal-like view is involved: an interactive local terminal, an SSH session (including a one-off `ssh host 'bo ...'` run without `-t`, via `SSH_TTY`), or VS Code's integrated terminal/Tasks/Debug Console — including over a Remote-SSH/tunnel connection, via `TERM_PROGRAM=vscode`. These are session-level signals, not per-destination checks, so **redirecting (`> file`) or piping (`| less`) still gets colored** when run inside an SSH session or VS Code, even though the immediate destination isn't a terminal itself. Color is skipped when none of those signals are present (e.g. output captured by another program via `$(...)`, or a CI pipeline), when `NO_COLOR` is set, or when `--output`/`-o` is used.
+- **`always`** — colored unconditionally, including when writing to `--output`/`-o` or a pipe.
+- **`never`** — never colored, overriding every other signal.
+
+To guarantee plain, machine-readable output regardless of environment, pass `--color never`, or write to a file with `--output`/`-o` (plain unless `--color always` is also given).
 
 ## Environment variables
 
@@ -1589,6 +1838,7 @@ Run `bo completion <shell> --help` for shell-specific installation instructions.
 |----------|-------------|
 | `HTTPS_PROXY` | Route all HTTPS requests through a proxy (e.g. `http://127.0.0.1:8080`) |
 | `HTTPS_PROXY_INSECURE` | Set to `true` to skip TLS verification — required when using mitmproxy |
+| `NO_COLOR` | Set to any non-empty value to disable toon/csv column coloring in `--color auto` mode (same effect as `--color never`) |
 
 ## Command history and logs
 

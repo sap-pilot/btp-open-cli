@@ -113,6 +113,41 @@ func (c *Client) GetAppEnv(ctx context.Context, appGUID string) (map[string][]ma
 	return resp.SystemEnvJSON.VCAPServices, nil
 }
 
+// ── start/stop actions ────────────────────────────────────────────────────────
+
+// StartApp starts an app via its v3 "start" action and returns its updated state.
+func (c *Client) StartApp(ctx context.Context, appGUID string) (*App, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s/actions/start", c.BaseURL(), appGUID)
+	var app App
+	if err := c.post(ctx, url, struct{}{}, &app); err != nil {
+		return nil, err
+	}
+	return &app, nil
+}
+
+// StopApp stops an app via its v3 "stop" action and returns its updated state.
+func (c *Client) StopApp(ctx context.Context, appGUID string) (*App, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s/actions/stop", c.BaseURL(), appGUID)
+	var app App
+	if err := c.post(ctx, url, struct{}{}, &app); err != nil {
+		return nil, err
+	}
+	return &app, nil
+}
+
+// RestartApp restarts an app via its v3 "restart" action — an immediate
+// stop+start that causes downtime — and returns its updated state. For a
+// zero-downtime restart, create a Deployment instead (see CreateDeployment
+// in deployments.go).
+func (c *Client) RestartApp(ctx context.Context, appGUID string) (*App, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s/actions/restart", c.BaseURL(), appGUID)
+	var app App
+	if err := c.post(ctx, url, struct{}{}, &app); err != nil {
+		return nil, err
+	}
+	return &app, nil
+}
+
 // ListProcessesBySpaces fetches web processes for all apps in spaceGUIDs and
 // returns a map of appGUID → Process. Only the "web" process type is fetched.
 func (c *Client) ListProcessesBySpaces(ctx context.Context, spaceGUIDs []string) (map[string]Process, error) {

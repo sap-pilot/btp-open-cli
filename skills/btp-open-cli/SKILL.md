@@ -131,7 +131,10 @@ they're logged in.
   `org-users`, `org-space-users`, `users`, `apps`, `role-collections`,
   `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
   `count-lines`, `service-credentials` (this one outputs raw secrets — see
-  "Handling `service-credentials` output" below before using it).
+  "Handling commands that output secrets" below before using it),
+  `service-instances`, `service-keys` (both are read-only by default, but
+  `--full` fetches and prints live credentials on each — see "Handling
+  commands that output secrets" below before using `--full`).
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
@@ -139,7 +142,10 @@ they're logged in.
   (this one also outputs raw secrets — see "Handling commands that output
   secrets" below before using it), `delete-service-instances` (irreversibly
   deletes service instances and all their bindings/keys — see guardrail #11
-  below).
+  below), `delete-service-keys` (irreversibly deletes service keys — see
+  guardrail #12 below), `start-apps`, `stop-apps`, `restart-apps`,
+  `restage-apps` (app lifecycle actions, scoped by name pattern — see
+  guardrail #13 below).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -147,6 +153,14 @@ they're logged in.
   `--exclude <kw1,kw2,...>` — comma-separated, case-insensitive, OR-matched
   substrings (the destination commands also accept a glob per keyword, e.g.
   `API*PP`).
+- **Global `--color auto|always|never` flag (default `auto`).** In `auto`
+  mode, `toon`/`csv` output on `spaces`, `apps`, `service-instances`,
+  `service-keys`, `role-collections`, `users`, `org-users`, and
+  `org-space-users` can come back with embedded ANSI color codes — not just
+  in a real terminal, but also whenever an SSH or VS Code session signal is
+  present, even if you redirect or pipe the output. If you're going to parse
+  that output programmatically (rather than just showing it to the user),
+  always pass `--color never` to guarantee plain text.
 
 ## Guardrails for write operations
 
@@ -234,14 +248,41 @@ Read all of these before running any command from the "Write" list above.
     and how many existing bindings/keys would be deleted along with it —
     before ever adding `-y`. Never guess at a pattern on the user's behalf;
     confirm the exact pattern they mean, especially a broad one like `*`.
+12. **`delete-service-keys` deletes service keys (not whole instances) —
+    still no undo.** `<service_key_name_patterns>` matches by glob/substring
+    across every org/space in scope, `!`-negatable the same way as
+    `delete-service-instances`. Show the TOON preview (org -> space ->
+    service_instance -> service_keys) and get approval before adding `-y`.
+13. **`start-apps`/`stop-apps`/`restart-apps`/`restage-apps` act on every app
+    matching a name pattern, across the whole org/space scope.** All four
+    show a TOON preview (including each app's current state) and require
+    `[y/N]` before `-y`. A few extra things to flag to the user before
+    running these:
+    - `restart-apps`/`restage-apps` cause a brief **downtime** window unless
+      `--strategy rolling` or `--strategy canary` is given, in which case the
+      app is redeployed with zero downtime via a CF v3 Deployment instead.
+      `canary` is experimental on CF's side and needs a fairly recent CF API
+      version — confirm with the user before relying on it in a scripted
+      rollout.
+    - `restage-apps` rebuilds a fresh droplet from the app's current package
+      before redeploying it (regardless of `--strategy`), so it takes
+      meaningfully longer per app than `start-apps`/`stop-apps`/
+      `restart-apps` and can fail outright if the current package fails to
+      stage — treat a staging failure as a real error to report, not
+      something to retry blindly.
+    - Loose patterns (e.g. `*`) can match far more apps than intended, same
+      caution as `delete-service-instances`/`delete-service-keys`.
 
 ## Handling commands that output secrets
 
-`service-credentials` fetches each matching app's live `VCAP_SERVICES`, and
-`create-service-keys` creates service keys and fetches their credentials —
+`service-credentials` fetches each matching app's live `VCAP_SERVICES`,
+`create-service-keys` creates service keys and fetches their credentials,
+and `service-instances --full` / `service-keys --full` fetch and include
+each matched (user-provided instance's or key's) existing credentials —
 passwords, client secrets, certificates, the lot — printing them as plain
-JSON. `service-credentials` is read-only (nothing in BTP changes), while
-`create-service-keys` is a write command that also happens to output
+JSON/TOON/CSV. `service-credentials`, and `service-instances`/
+`service-keys` even with `--full`, are read-only (nothing in BTP changes),
+while `create-service-keys` is a write command that also happens to output
 secrets; the same `service-credentials.json` shape is also what `create-ups`
 later reads as input. Treat all of this as sensitive:
 
@@ -255,10 +296,12 @@ later reads as input. Treat all of this as sensitive:
   command's output (see "Everything is logged" above) — mention this to the
   user so they know that log file now contains secrets too, don't just stay
   silent about it.
-- Narrow with `--services`/`--spaces`/`--apps` (on `service-credentials`) or
-  `--spaces`/`--service-instances` (on `create-service-keys`) to the minimum
-  needed rather than pulling every binding/instance across the whole org
-  scope by default.
+- Narrow with `--services`/`--spaces`/`--apps` (on `service-credentials`),
+  `--spaces`/`--service-instances` (on `create-service-keys` and
+  `service-instances`), or `--spaces`/`--service-instances`/`--service-keys`
+  (on `service-keys`) to the minimum needed, and only pass `--full` on
+  `service-instances`/`service-keys` when you actually need the credentials
+  — omit it for a plain metadata inventory.
 
 ## Example workflows
 

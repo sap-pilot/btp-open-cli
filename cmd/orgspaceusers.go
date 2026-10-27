@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -294,21 +293,23 @@ If --regions is omitted, the regions from the last login are used.`,
 			return err
 		}
 		defer closeOut()
+		colorMode, _ := cmd.Flags().GetString("color")
+		color := consoleColorEnabled(outputFile, colorMode)
 
 		switch strings.ToLower(format) {
 		case "json":
 			return writeOspJSON(out, results, includePattern, excludePattern)
 		case "csv":
-			return writeOspCSV(out, results, includePattern, excludePattern)
+			return writeOspCSV(out, results, includePattern, excludePattern, color)
 		case "uar.csv":
-			return writeOspUARCSV(out, results, includePattern, excludePattern)
+			return writeOspUARCSV(out, results, includePattern, excludePattern, color)
 		default: // "toon"
-			return writeOspToon(out, results, includePattern, excludePattern)
+			return writeOspToon(out, results, includePattern, excludePattern, color)
 		}
 	},
 }
 
-func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludePattern string, color bool) error {
 	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
@@ -317,6 +318,7 @@ func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludeP
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
+	out = colorizeToon(out, color)
 	if _, err = w.Write(out); err != nil {
 		return err
 	}
@@ -340,13 +342,13 @@ func writeOspJSON(w io.Writer, results []ospRegionData, includePattern, excludeP
 // writeOspCSV writes one row per user with columns:
 // region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
 // space_id and space_name are empty for org-level users.
-func writeOspCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+func writeOspCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string, color bool) error {
 	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	csvW := csv.NewWriter(w)
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	if err := csvW.Write([]string{
@@ -386,13 +388,13 @@ func writeOspCSV(w io.Writer, results []ospRegionData, includePattern, excludePa
 
 // writeOspUARCSV writes the uar.csv format: one row per org/space membership,
 // columns Space/Org ID,Space/Org Name,Group Type,Member,Role.
-func writeOspUARCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
+func writeOspUARCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string, color bool) error {
 	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	csvW := csv.NewWriter(w)
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	if err := csvW.Write([]string{"Space/Org ID", "Space/Org Name", "Group Type", "Member", "Role"}); err != nil {

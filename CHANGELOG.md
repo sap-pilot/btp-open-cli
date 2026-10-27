@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.19.0 — 2026-10-27
+
+### Added
+
+- **`service-instances` — list service instances across orgs and spaces**
+
+  Lists every service instance (managed or user-provided) across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to `--spaces`/`--space` and `--service-instances` (comma-separated name patterns — glob or substring). Output is nested `region -> org -> space -> service_instances` in `--format toon` (default), `json`, or flat `csv`. Without `--full`, only instance metadata is included (guid, name, type, label, plan, tags, created_at, updated_at, last_operation_type/state); with `--full`, each **user-provided** instance's own credentials are also fetched and included (managed instances have none of their own — only their service keys do). `--output`/`-o` writes to a file instead of stdout.
+
+  ```bash
+  bo service-instances --spaces prod --service-instances "*-hdi,*-db"
+  bo service-instances --full -o instances.json --format json
+  ```
+
+- **`service-keys` — list service keys across orgs and spaces**
+
+  Lists every service key (a service credential binding of type `key`) across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to `--spaces`/`--space`, `--service-instances`, and `--service-keys` (comma-separated name patterns — glob or substring). Output is nested `region -> org -> space -> service_instance -> service_keys` in `--format toon` (default), `json`, or flat `csv`. Without `--full`, only key metadata is included (name, guid, created_at, updated_at, last_operation_type/state); with `--full`, each key's credentials are also fetched and included. `--output`/`-o` writes to a file instead of stdout.
+
+  ```bash
+  bo service-keys --spaces prod --service-keys "btp*"
+  bo service-keys --full -o keys.json --format json
+  ```
+
+- **`delete-service-keys` — delete service keys by name pattern, across orgs and spaces**
+
+  Deletes every service key (a service credential binding of type `key`, as opposed to an app binding) whose name matches `<service_key_name_patterns>` (comma-separated — glob if a pattern contains `* ? [`, otherwise substring; `*` matches every key name), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Prefixing a pattern with `!` reverses it — `!btp*` selects every key name that does *not* match `btp*` — and a key is selected if any pattern in the list, negated or not, matches. Without `-y`, every matched key is shown in a TOON preview (`org -> space -> service_instance -> service_keys`), requiring a `[y/N]` confirmation — declining aborts without deleting anything.
+
+  ```bash
+  bo delete-service-keys "btp*,temp*" -y
+  bo delete-service-keys "!btp*" --orgs target-orgs.csv --spaces prod
+  ```
+
+- **`start-apps` / `stop-apps` — start or stop apps by name pattern, across orgs and spaces**
+
+  Starts (or stops) every app whose name matches `<app_name_patterns>` (comma-separated patterns — glob or substring, `!`-negatable, same syntax as `delete-service-keys`), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state), requiring a `[y/N]` confirmation.
+
+  ```bash
+  bo start-apps "web-*,worker-*" -y
+  bo stop-apps "!web-*" --orgs target-orgs.csv --spaces prod
+  ```
+
+- **Colorized `toon`/`csv` console output, plus a global `--color` flag**
+
+  `spaces`, `apps`, `service-instances`, `service-keys`, `role-collections`, `users`, `org-users`, and `org-space-users` now colorize each column of their `toon` and `csv` (including `uar.csv`) output — one color per column, cycling across the row, à la the "rainbow csv" editor plugins — so wide rows stay easy to scan. A new global `--color auto|always|never` flag controls it (default `auto`): colored whenever a terminal or terminal-like view is involved — an interactive local terminal, an SSH session (even a one-off `ssh host 'bo ...'` run without `-t`), or VS Code's integrated terminal/Tasks/Debug Console, including over a Remote-SSH/tunnel connection. These are session-level signals, so **redirected (`> file`) or piped (`| less`) output is still colored** when run inside an SSH session or VS Code. Color is skipped when `NO_COLOR` is set, when none of those signals are present (plain pipes/CI), or whenever `--output`/`-o` is used — pass `--color never`, or write to a file with `--output`/`-o`, for guaranteed plain, machine-readable output.
+
+  ```bash
+  bo spaces --format csv                       # colored automatically in a terminal
+  bo spaces --format csv --color never > spaces.csv
+  bo spaces --format toon --color always | less -R
+  ```
+
+- **`restart-apps` / `restage-apps` — restart or restage apps by name pattern, with an optional zero-downtime `--strategy`**
+
+  Restarts (or restages) every app whose name matches `<app_name_patterns>` (comma-separated patterns — glob or substring, `!`-negatable, same syntax as `start-apps`/`stop-apps`), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state), requiring a `[y/N]` confirmation. Both commands take an optional `--strategy canary|rolling|null` flag (default `null`): with `null` (or the flag omitted), `restart-apps` is CF's classic, downtime-causing stop+start, and `restage-apps` is CF's classic, downtime-causing rebuild-and-redeploy from the app's current package. With `rolling` or `canary`, both instead redeploy with zero downtime via a CF v3 Deployment — `restage-apps` additionally builds a fresh droplet from the app's current package first and polls it until staging finishes, so it takes noticeably longer per app than the other bulk app commands.
+
+  ```bash
+  bo restart-apps "web-*,worker-*" --strategy rolling -y
+  bo restage-apps "!web-*" --orgs target-orgs.csv --spaces prod --strategy canary
+  ```
+
 ## v0.18.0 — 2026-10-26
 
 ### Added

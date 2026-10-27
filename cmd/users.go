@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -252,16 +251,18 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 		defer closeOut()
+		colorMode, _ := cmd.Flags().GetString("color")
+		color := consoleColorEnabled(outputFile, colorMode)
 
 		switch strings.ToLower(format) {
 		case "json":
 			return writeUsersJSON(out, doc)
 		case "csv":
-			return writeUsersCSV(out, doc)
+			return writeUsersCSV(out, doc, color)
 		case "uar.csv":
-			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, includePattern, excludePattern))
+			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, includePattern, excludePattern), color)
 		default: // "toon"
-			return writeUsersToon(out, doc)
+			return writeUsersToon(out, doc, color)
 		}
 	},
 }
@@ -371,8 +372,8 @@ func buildUARRows(regionOrder []string, results []usrOrgResult, includePattern, 
 
 // writeUsersUARCSV writes the uar.csv format: one row per role collection
 // membership, columns Role Collection,Description,Role Collection Members,Origin,Subaccount ID.
-func writeUsersUARCSV(w io.Writer, rows []uarRow) error {
-	csvW := csv.NewWriter(w)
+func writeUsersUARCSV(w io.Writer, rows []uarRow, color bool) error {
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	if err := csvW.Write([]string{
@@ -390,11 +391,12 @@ func writeUsersUARCSV(w io.Writer, rows []uarRow) error {
 	return nil
 }
 
-func writeUsersToon(w io.Writer, doc usrOutDoc) error {
+func writeUsersToon(w io.Writer, doc usrOutDoc, color bool) error {
 	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding output: %w", err)
 	}
+	out = colorizeToon(out, color)
 	if _, err = w.Write(out); err != nil {
 		return err
 	}
@@ -413,8 +415,8 @@ func writeUsersJSON(w io.Writer, doc usrOutDoc) error {
 
 // writeUsersCSV writes one row per user with columns:
 // region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
-func writeUsersCSV(w io.Writer, doc usrOutDoc) error {
-	csvW := csv.NewWriter(w)
+func writeUsersCSV(w io.Writer, doc usrOutDoc, color bool) error {
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	if err := csvW.Write([]string{
