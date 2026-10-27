@@ -50,6 +50,15 @@
   bo spaces --format toon --color always | less -R
   ```
 
+- **`restart-apps` / `restage-apps` — restart or restage apps by name pattern, with an optional zero-downtime `--strategy`**
+
+  Restarts (or restages) every app whose name matches `<app_name_patterns>` (comma-separated patterns — glob or substring, `!`-negatable, same syntax as `start-apps`/`stop-apps`), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state), requiring a `[y/N]` confirmation. Both commands take an optional `--strategy canary|rolling|null` flag (default `null`): with `null` (or the flag omitted), `restart-apps` is CF's classic, downtime-causing stop+start, and `restage-apps` is CF's classic, downtime-causing rebuild-and-redeploy from the app's current package. With `rolling` or `canary`, both instead redeploy with zero downtime via a CF v3 Deployment — `restage-apps` additionally builds a fresh droplet from the app's current package first and polls it until staging finishes, so it takes noticeably longer per app than the other bulk app commands.
+
+  ```bash
+  bo restart-apps "web-*,worker-*" --strategy rolling -y
+  bo restage-apps "!web-*" --orgs target-orgs.csv --spaces prod --strategy canary
+  ```
+
 ## v0.18.0 — 2026-10-26
 
 ### Added

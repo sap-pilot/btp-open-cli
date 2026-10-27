@@ -296,6 +296,24 @@ func printSawPreview(w io.Writer, matched []sawMatchedApp) error {
 	return err
 }
 
+// parseAppStrategy reads and validates the --strategy flag shared by
+// restart-apps/restage-apps. "" and "null" (not given, or given explicitly)
+// both mean no deployment strategy — the classic, downtime-causing action;
+// "rolling" and "canary" mean a zero-downtime deployment with that
+// strategy. The returned string is "", "rolling", or "canary".
+func parseAppStrategy(cmd *cobra.Command) (string, error) {
+	raw, _ := cmd.Flags().GetString("strategy")
+	strategy := strings.ToLower(strings.TrimSpace(raw))
+	switch strategy {
+	case "", "null":
+		return "", nil
+	case "rolling", "canary":
+		return strategy, nil
+	default:
+		return "", fmt.Errorf("invalid --strategy value %q: must be canary, rolling, or null", raw)
+	}
+}
+
 // runStartStopApps implements the shared body of start-apps/stop-apps:
 // resolve matched apps, show a TOON preview and confirm (unless -y), then
 // invoke action on each matched app with bounded concurrency. verb is the

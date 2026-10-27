@@ -112,6 +112,8 @@ mv bo ~/.local/bin/   # optional
 | [`delete-service-keys`](#delete-service-keys) | Delete service keys matching name patterns, across orgs and spaces |
 | [`start-apps`](#start-apps) | Start apps matching name patterns, across orgs and spaces |
 | [`stop-apps`](#stop-apps) | Stop apps matching name patterns, across orgs and spaces |
+| [`restart-apps`](#restart-apps) | Restart apps matching name patterns, across orgs and spaces, optionally with a zero-downtime `--strategy` |
+| [`restage-apps`](#restage-apps) | Restage apps matching name patterns, across orgs and spaces, optionally with a zero-downtime `--strategy` |
 
 ### XSUAA Users
 
@@ -198,7 +200,7 @@ Interactively select which accessible CF orgs should be the **default scope** fo
 org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
 `service-credentials`, `create-ups`, `service-instances`, `service-keys`,
 `create-service-keys`, `delete-service-instances`, `delete-service-keys`,
-`start-apps`, `stop-apps`, `users`, `role-collections`,
+`start-apps`, `stop-apps`, `restart-apps`, `restage-apps`, `users`, `role-collections`,
 `subaccount-destinations` and its create/update/delete variants, and
 `describe-subaccount`) when they're run
 without `--org` or `--orgs`.
@@ -255,7 +257,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `service-instances`, `service-keys`, `create-service-keys`, `delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `service-instances`, `service-keys`, `create-service-keys`, `delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`, `restart-apps`, `restage-apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1615,6 +1617,48 @@ bo stop-apps "web-*" --orgs target-orgs.csv --spaces prod
 
 # Non-interactive (for scripts)
 bo stop-apps "web-*" -y
+```
+
+### `restart-apps`
+
+Restart every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+
+```
+bo restart-apps <app_name_patterns> [flags]
+```
+
+By default (`--strategy null`, or omitting the flag) a restart is an immediate stop+start via CF's classic "restart" action — it causes downtime. `--strategy rolling` or `--strategy canary` instead restarts with zero downtime, by creating a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) of the app's current droplet with that strategy; canary is marked experimental by CF itself and requires a reasonably recent CF API version.
+
+```bash
+# Restart every app named "web-*" or "worker-*" in the default org scope (causes downtime)
+bo restart-apps "web-*,worker-*"
+
+# Zero-downtime restart via a rolling deployment
+bo restart-apps "web-*" --strategy rolling
+
+# Narrow to specific orgs and a specific space, non-interactive
+bo restart-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy rolling -y
+```
+
+### `restage-apps`
+
+Restage every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+
+```
+bo restage-apps <app_name_patterns> [flags]
+```
+
+By default (`--strategy null`, or omitting the flag) a restage rebuilds a droplet from the app's current package and redeploys it via CF's classic "restage" action — it causes downtime. `--strategy rolling` or `--strategy canary` builds the new droplet the same way but rolls it out with zero downtime instead: it fetches the app's current package, creates a [build](https://v3-apidocs.cloudfoundry.org/#builds), polls it until staging finishes, then deploys the resulting droplet via a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) with that strategy — canary is marked experimental by CF itself and requires a reasonably recent CF API version. CF's v3 API has no single-call equivalent of the classic restage action once a strategy is involved, so this takes noticeably longer per app than the other bulk app commands (it waits for a real build to finish staging).
+
+```bash
+# Restage every app named "web-*" or "worker-*" in the default org scope (causes downtime)
+bo restage-apps "web-*,worker-*"
+
+# Zero-downtime restage via a rolling deployment
+bo restage-apps "web-*" --strategy rolling
+
+# Narrow to specific orgs and a specific space, non-interactive
+bo restage-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy canary -y
 ```
 
 ### `reorg-wiki-attachments`
