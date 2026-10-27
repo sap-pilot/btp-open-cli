@@ -539,6 +539,12 @@ type ServiceCredentialBindingFull struct {
 	GUID          string `json:"guid"`
 	Name          string `json:"name"`
 	Type          string `json:"type"` // "key" or "app"
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+	LastOperation struct {
+		Type  string `json:"type"`
+		State string `json:"state"`
+	} `json:"last_operation"`
 	Relationships struct {
 		ServiceInstance struct {
 			Data struct {

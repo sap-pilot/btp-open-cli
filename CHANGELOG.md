@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`service-keys` — list service keys across orgs and spaces**
+
+  Lists every service key (a service credential binding of type `key`) across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to `--spaces`/`--space`, `--service-instances`, and `--service-keys` (comma-separated name patterns — glob or substring). Output is nested `region -> org -> space -> service_instance -> service_keys` in `--format toon` (default), `json`, or flat `csv`. Without `--full`, only key metadata is included (name, guid, created_at, updated_at, last_operation_type/state); with `--full`, each key's credentials are also fetched and included. `--output`/`-o` writes to a file instead of stdout.
+
+  ```bash
+  bo service-keys --spaces prod --service-keys "btp*"
+  bo service-keys --full -o keys.json --format json
+  ```
+
 - **`delete-service-keys` — delete service keys by name pattern, across orgs and spaces**
 
   Deletes every service key (a service credential binding of type `key`, as opposed to an app binding) whose name matches `<service_key_name_patterns>` (comma-separated — glob if a pattern contains `* ? [`, otherwise substring; `*` matches every key name), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Prefixing a pattern with `!` reverses it — `!btp*` selects every key name that does *not* match `btp*` — and a key is selected if any pattern in the list, negated or not, matches. Without `-y`, every matched key is shown in a TOON preview (`org -> space -> service_instance -> service_keys`), requiring a `[y/N]` confirmation — declining aborts without deleting anything.
