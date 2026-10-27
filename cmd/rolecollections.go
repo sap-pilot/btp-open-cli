@@ -296,6 +296,8 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 		defer closeOut()
+		colorMode, _ := cmd.Flags().GetString("color")
+		color := consoleColorEnabled(outputFile, colorMode)
 
 		switch strings.ToLower(format) {
 		case "json":
@@ -309,6 +311,7 @@ If --regions is omitted the regions from the last login are used.`,
 			if err != nil {
 				return fmt.Errorf("encoding TOON: %w", err)
 			}
+			out = colorizeToon(out, color)
 			if _, err = w.Write(out); err != nil {
 				return err
 			}

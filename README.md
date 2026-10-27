@@ -1773,7 +1773,20 @@ Run `bo completion <shell> --help` for shell-specific installation instructions.
 | Flag | Description |
 |------|-------------|
 | `-v`, `--verbose` | Enable debug/verbose output |
+| `--color` | Color console output: `auto` (default), `always`, or `never` — see [Colorized toon/csv output](#colorized-tooncsv-output) |
 | `-h`, `--help` | Show help |
+
+### Colorized toon/csv output
+
+`spaces`, `apps`, `service-instances`, `service-keys`, `role-collections`, `users`, `org-users`, and `org-space-users` colorize each column of their `toon` and `csv` (including `uar.csv`) output — one color per column, cycling across the row, à la the "rainbow csv" editor plugins — so wide rows stay easy to scan by eye. For `toon` output this colors both the compact tabular array headers (`spaces[2]{space_id,space_name}:`) and the comma-separated rows beneath them; plain `key: value` lines are left as-is.
+
+`--color` controls when:
+
+- **`auto` (default)** — colored whenever *something* indicates a terminal or terminal-like view is involved: an interactive local terminal, an SSH session (including a one-off `ssh host 'bo ...'` run without `-t`, via `SSH_TTY`), or VS Code's integrated terminal/Tasks/Debug Console — including over a Remote-SSH/tunnel connection, via `TERM_PROGRAM=vscode`. These are session-level signals, not per-destination checks, so **redirecting (`> file`) or piping (`| less`) still gets colored** when run inside an SSH session or VS Code, even though the immediate destination isn't a terminal itself. Color is skipped when none of those signals are present (e.g. output captured by another program via `$(...)`, or a CI pipeline), when `NO_COLOR` is set, or when `--output`/`-o` is used.
+- **`always`** — colored unconditionally, including when writing to `--output`/`-o` or a pipe.
+- **`never`** — never colored, overriding every other signal.
+
+To guarantee plain, machine-readable output regardless of environment, pass `--color never`, or write to a file with `--output`/`-o` (plain unless `--color always` is also given).
 
 ## Environment variables
 
@@ -1781,6 +1794,7 @@ Run `bo completion <shell> --help` for shell-specific installation instructions.
 |----------|-------------|
 | `HTTPS_PROXY` | Route all HTTPS requests through a proxy (e.g. `http://127.0.0.1:8080`) |
 | `HTTPS_PROXY_INSECURE` | Set to `true` to skip TLS verification — required when using mitmproxy |
+| `NO_COLOR` | Set to any non-empty value to disable toon/csv column coloring in `--color auto` mode (same effect as `--color never`) |
 
 ## Command history and logs
 

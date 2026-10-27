@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,10 @@ var rootCmd = &cobra.Command{
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		if verbose {
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		}
+		color, _ := cmd.Flags().GetString("color")
+		if !validColorModes[strings.ToLower(color)] {
+			return fmt.Errorf("invalid --color value %q: must be auto, always, or never", color)
 		}
 		return nil
 	},
@@ -43,6 +48,7 @@ func RegisterCommand(c *cobra.Command) {
 
 func init() {
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose/debug output")
+	rootCmd.PersistentFlags().String("color", "auto", "Color console output: auto (default, only for an interactive terminal), always, or never")
 
 	rootCmd.AddGroup(
 		&cobra.Group{ID: "common", Title: "Common:"},

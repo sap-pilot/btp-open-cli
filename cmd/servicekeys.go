@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -415,14 +414,16 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 		defer closeOut()
+		colorMode, _ := cmd.Flags().GetString("color")
+		color := consoleColorEnabled(outputFile, colorMode)
 
 		switch strings.ToLower(format) {
 		case "json":
 			return writeServiceKeysJSON(out, allMatched)
 		case "csv":
-			return writeServiceKeysCSV(out, allMatched, fullFlag)
+			return writeServiceKeysCSV(out, allMatched, fullFlag, color)
 		default:
-			return writeServiceKeysToon(out, allMatched)
+			return writeServiceKeysToon(out, allMatched, color)
 		}
 	},
 }
@@ -496,12 +497,13 @@ func buildServiceKeysDoc(matched []skMatchedKey) skOutDoc {
 	return doc
 }
 
-func writeServiceKeysToon(w io.Writer, matched []skMatchedKey) error {
+func writeServiceKeysToon(w io.Writer, matched []skMatchedKey, color bool) error {
 	doc := buildServiceKeysDoc(matched)
 	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
+	out = colorizeToon(out, color)
 	if _, err := w.Write(out); err != nil {
 		return err
 	}
@@ -519,8 +521,8 @@ func writeServiceKeysJSON(w io.Writer, matched []skMatchedKey) error {
 	return nil
 }
 
-func writeServiceKeysCSV(w io.Writer, matched []skMatchedKey, full bool) error {
-	csvW := csv.NewWriter(w)
+func writeServiceKeysCSV(w io.Writer, matched []skMatchedKey, full bool, color bool) error {
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	header := []string{

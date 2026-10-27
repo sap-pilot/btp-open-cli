@@ -40,6 +40,16 @@
   bo stop-apps "!web-*" --orgs target-orgs.csv --spaces prod
   ```
 
+- **Colorized `toon`/`csv` console output, plus a global `--color` flag**
+
+  `spaces`, `apps`, `service-instances`, `service-keys`, `role-collections`, `users`, `org-users`, and `org-space-users` now colorize each column of their `toon` and `csv` (including `uar.csv`) output — one color per column, cycling across the row, à la the "rainbow csv" editor plugins — so wide rows stay easy to scan. A new global `--color auto|always|never` flag controls it (default `auto`): colored whenever a terminal or terminal-like view is involved — an interactive local terminal, an SSH session (even a one-off `ssh host 'bo ...'` run without `-t`), or VS Code's integrated terminal/Tasks/Debug Console, including over a Remote-SSH/tunnel connection. These are session-level signals, so **redirected (`> file`) or piped (`| less`) output is still colored** when run inside an SSH session or VS Code. Color is skipped when `NO_COLOR` is set, when none of those signals are present (plain pipes/CI), or whenever `--output`/`-o` is used — pass `--color never`, or write to a file with `--output`/`-o`, for guaranteed plain, machine-readable output.
+
+  ```bash
+  bo spaces --format csv                       # colored automatically in a terminal
+  bo spaces --format csv --color never > spaces.csv
+  bo spaces --format toon --color always | less -R
+  ```
+
 ## v0.18.0 — 2026-10-26
 
 ### Added

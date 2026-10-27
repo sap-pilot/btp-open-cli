@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -393,14 +392,16 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 		defer closeOut()
+		colorMode, _ := cmd.Flags().GetString("color")
+		color := consoleColorEnabled(outputFile, colorMode)
 
 		switch strings.ToLower(format) {
 		case "json":
 			return writeServiceInstancesJSON(out, allMatched)
 		case "csv":
-			return writeServiceInstancesCSV(out, allMatched, fullFlag)
+			return writeServiceInstancesCSV(out, allMatched, fullFlag, color)
 		default:
-			return writeServiceInstancesToon(out, allMatched)
+			return writeServiceInstancesToon(out, allMatched, color)
 		}
 	},
 }
@@ -466,12 +467,13 @@ func buildServiceInstancesDoc(matched []siMatchedInstance) siOutDoc {
 	return doc
 }
 
-func writeServiceInstancesToon(w io.Writer, matched []siMatchedInstance) error {
+func writeServiceInstancesToon(w io.Writer, matched []siMatchedInstance, color bool) error {
 	doc := buildServiceInstancesDoc(matched)
 	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
+	out = colorizeToon(out, color)
 	if _, err := w.Write(out); err != nil {
 		return err
 	}
@@ -489,8 +491,8 @@ func writeServiceInstancesJSON(w io.Writer, matched []siMatchedInstance) error {
 	return nil
 }
 
-func writeServiceInstancesCSV(w io.Writer, matched []siMatchedInstance, full bool) error {
-	csvW := csv.NewWriter(w)
+func writeServiceInstancesCSV(w io.Writer, matched []siMatchedInstance, full bool, color bool) error {
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	header := []string{

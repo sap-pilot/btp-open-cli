@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -263,14 +262,16 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 		defer closeOut()
+		colorMode, _ := cmd.Flags().GetString("color")
+		color := consoleColorEnabled(outputFile, colorMode)
 
 		switch strings.ToLower(format) {
 		case "json":
 			return writeAppsJSON(out, results, includePattern, excludePattern)
 		case "csv":
-			return writeAppsCSV(out, results, includePattern, excludePattern)
+			return writeAppsCSV(out, results, includePattern, excludePattern, color)
 		default:
-			return writeAppsToon(out, results, includePattern, excludePattern)
+			return writeAppsToon(out, results, includePattern, excludePattern, color)
 		}
 	},
 }
@@ -337,7 +338,7 @@ func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern str
 	return doc, errs
 }
 
-func writeAppsToon(w io.Writer, results []appsRegionResult, includePattern, excludePattern string) error {
+func writeAppsToon(w io.Writer, results []appsRegionResult, includePattern, excludePattern string, color bool) error {
 	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
@@ -346,6 +347,7 @@ func writeAppsToon(w io.Writer, results []appsRegionResult, includePattern, excl
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
+	out = colorizeToon(out, color)
 	if _, err = w.Write(out); err != nil {
 		return err
 	}
@@ -366,13 +368,13 @@ func writeAppsJSON(w io.Writer, results []appsRegionResult, includePattern, excl
 	return nil
 }
 
-func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, excludePattern string) error {
+func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, excludePattern string, color bool) error {
 	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
 	for _, e := range errs {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 	}
 
-	csvW := csv.NewWriter(w)
+	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
 	if err := csvW.Write([]string{
