@@ -107,6 +107,9 @@ mv bo ~/.local/bin/   # optional
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 | [`create-service-keys`](#create-service-keys) | Create or update service keys for matching service instances across orgs and spaces |
 | [`delete-service-instances`](#delete-service-instances) | Delete service instances (and their bindings/keys) matching name patterns, across orgs and spaces |
+| [`delete-service-keys`](#delete-service-keys) | Delete service keys matching name patterns, across orgs and spaces |
+| [`start-apps`](#start-apps) | Start apps matching name patterns, across orgs and spaces |
+| [`stop-apps`](#stop-apps) | Stop apps matching name patterns, across orgs and spaces |
 
 ### XSUAA Users
 
@@ -192,7 +195,8 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 Interactively select which accessible CF orgs should be the **default scope** for
 org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
 `service-credentials`, `create-ups`, `create-service-keys`,
-`delete-service-instances`, `users`, `role-collections`,
+`delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`,
+`users`, `role-collections`,
 `subaccount-destinations` and its create/update/delete variants, and
 `describe-subaccount`) when they're run
 without `--org` or `--orgs`.
@@ -249,7 +253,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `create-service-keys`, `delete-service-instances`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `create-service-keys`, `delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1424,6 +1428,107 @@ This cannot be undone. Proceed? [y/N]
 ```
 
 `-y` skips this confirmation entirely — only pass it once a human has seen the preview (or the org/space/pattern scope is otherwise known to be deliberate).
+
+### `delete-service-keys`
+
+Delete every service key (a service credential binding of type `key`, as opposed to an app binding) whose name matches a comma-separated list of patterns, across target orgs and spaces.
+
+```
+bo delete-service-keys <service_key_name_patterns> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<service_key_name_patterns>` is a required, comma-separated list of patterns, e.g. `btp*,temp*` or `*` (matches every key name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it: `!btp*` selects every key name that does *not* match `btp*`. A key is selected if any pattern in the list — negated or not — matches its name.
+
+```bash
+# Delete every key named "btp*" or "temp*" in the default org scope
+bo delete-service-keys "btp*,temp*"
+
+# Delete every key EXCEPT those named "btp*"
+bo delete-service-keys "!btp*"
+
+# Narrow to specific orgs and a specific space
+bo delete-service-keys "btp*" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo delete-service-keys "btp*" -y
+```
+
+⚠️ **This is destructive and cannot be undone.** Without `-y`, every matched key is shown in a TOON preview (`org -> space -> service_instance -> service_keys`):
+
+```
+Service keys to delete:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,service_keys}:
+          <guid-1>,my-hdi,[1]{key_guid,key_name}:
+            <key-guid-1>,btp-key
+
+1 service key(s) to delete.
+
+This cannot be undone. Proceed? [y/N]
+```
+
+`-y` skips this confirmation entirely — only pass it once a human has seen the preview (or the org/space/pattern scope is otherwise known to be deliberate).
+
+### `start-apps`
+
+Start every app whose name matches a comma-separated list of patterns, across target orgs and spaces.
+
+```
+bo start-apps <app_name_patterns> [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<app_name_patterns>` is a required, comma-separated list of patterns, e.g. `web-*,worker-*` or `*` (matches every app name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it, same as [`delete-service-keys`](#delete-service-keys).
+
+```bash
+# Start every app named "web-*" or "worker-*" in the default org scope
+bo start-apps "web-*,worker-*"
+
+# Narrow to specific orgs and a specific space
+bo start-apps "web-*" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo start-apps "web-*" -y
+```
+
+Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state) and a plain `Proceed? [y/N]` confirmation is required:
+
+```
+Apps to start:
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        apps[1]{app_guid,app_name,state}:
+          <guid-1>,web-1,STOPPED
+
+1 app(s) to start.
+
+Proceed? [y/N]
+```
+
+`-y` skips this confirmation entirely.
+
+### `stop-apps`
+
+Stop every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), just in reverse.
+
+```
+bo stop-apps <app_name_patterns> [flags]
+```
+
+```bash
+# Stop every app named "web-*" or "worker-*" in the default org scope
+bo stop-apps "web-*,worker-*"
+
+# Narrow to specific orgs and a specific space
+bo stop-apps "web-*" --orgs target-orgs.csv --spaces prod
+
+# Non-interactive (for scripts)
+bo stop-apps "web-*" -y
+```
 
 ### `reorg-wiki-attachments`
 

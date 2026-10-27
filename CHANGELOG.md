@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.19.0 — 2026-10-27
+
+### Added
+
+- **`delete-service-keys` — delete service keys by name pattern, across orgs and spaces**
+
+  Deletes every service key (a service credential binding of type `key`, as opposed to an app binding) whose name matches `<service_key_name_patterns>` (comma-separated — glob if a pattern contains `* ? [`, otherwise substring; `*` matches every key name), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Prefixing a pattern with `!` reverses it — `!btp*` selects every key name that does *not* match `btp*` — and a key is selected if any pattern in the list, negated or not, matches. Without `-y`, every matched key is shown in a TOON preview (`org -> space -> service_instance -> service_keys`), requiring a `[y/N]` confirmation — declining aborts without deleting anything.
+
+  ```bash
+  bo delete-service-keys "btp*,temp*" -y
+  bo delete-service-keys "!btp*" --orgs target-orgs.csv --spaces prod
+  ```
+
+- **`start-apps` / `stop-apps` — start or stop apps by name pattern, across orgs and spaces**
+
+  Starts (or stops) every app whose name matches `<app_name_patterns>` (comma-separated patterns — glob or substring, `!`-negatable, same syntax as `delete-service-keys`), across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to specific `--spaces`/`--space`. Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state), requiring a `[y/N]` confirmation.
+
+  ```bash
+  bo start-apps "web-*,worker-*" -y
+  bo stop-apps "!web-*" --orgs target-orgs.csv --spaces prod
+  ```
+
 ## v0.18.0 — 2026-10-26
 
 ### Added
