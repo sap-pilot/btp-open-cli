@@ -268,6 +268,19 @@ func (c *Client) GetServiceCredentialDetails(ctx context.Context, bindingGUID st
 	return details.Credentials, nil
 }
 
+// GetServiceInstanceCredentials fetches the raw credentials object for a
+// user-provided service instance. Managed instances have no credentials of
+// their own (only their service keys do) — CF returns an error for those,
+// which callers should treat as "not applicable" rather than a failure.
+func (c *Client) GetServiceInstanceCredentials(ctx context.Context, instanceGUID string) (map[string]interface{}, error) {
+	url := fmt.Sprintf("%s/v3/service_instances/%s/credentials", c.BaseURL(), instanceGUID)
+	var creds map[string]interface{}
+	if err := c.get(ctx, url, &creds); err != nil {
+		return nil, err
+	}
+	return creds, nil
+}
+
 // ListServiceInstancesByPlanGUID lists all managed service instances with the
 // given plan GUID. If orgGUID is non-empty, results are restricted to that org.
 func (c *Client) ListServiceInstancesByPlanGUID(ctx context.Context, planGUID, orgGUID string) ([]ServiceInstance, error) {
@@ -302,7 +315,10 @@ type ServiceInstanceFull struct {
 	Name          string   `json:"name"`
 	Type          string   `json:"type"` // "managed" or "user-provided"
 	Tags          []string `json:"tags"`
+	CreatedAt     string   `json:"created_at"`
+	UpdatedAt     string   `json:"updated_at"`
 	LastOperation struct {
+		Type  string `json:"type"`
 		State string `json:"state"`
 	} `json:"last_operation"`
 	Relationships struct {

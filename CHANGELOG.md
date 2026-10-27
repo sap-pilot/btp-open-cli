@@ -4,6 +4,15 @@
 
 ### Added
 
+- **`service-instances` — list service instances across orgs and spaces**
+
+  Lists every service instance (managed or user-provided) across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to `--spaces`/`--space` and `--service-instances` (comma-separated name patterns — glob or substring). Output is nested `region -> org -> space -> service_instances` in `--format toon` (default), `json`, or flat `csv`. Without `--full`, only instance metadata is included (guid, name, type, label, plan, tags, created_at, updated_at, last_operation_type/state); with `--full`, each **user-provided** instance's own credentials are also fetched and included (managed instances have none of their own — only their service keys do). `--output`/`-o` writes to a file instead of stdout.
+
+  ```bash
+  bo service-instances --spaces prod --service-instances "*-hdi,*-db"
+  bo service-instances --full -o instances.json --format json
+  ```
+
 - **`service-keys` — list service keys across orgs and spaces**
 
   Lists every service key (a service credential binding of type `key`) across `--org`/`--orgs`/`--excludeOrgs`/`bo orgs` default scope, optionally narrowed to `--spaces`/`--space`, `--service-instances`, and `--service-keys` (comma-separated name patterns — glob or substring). Output is nested `region -> org -> space -> service_instance -> service_keys` in `--format toon` (default), `json`, or flat `csv`. Without `--full`, only key metadata is included (name, guid, created_at, updated_at, last_operation_type/state); with `--full`, each key's credentials are also fetched and included. `--output`/`-o` writes to a file instead of stdout.

@@ -105,6 +105,7 @@ mv bo ~/.local/bin/   # optional
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
+| [`service-instances`](#service-instances) | List service instances across orgs and spaces, optionally including user-provided credentials |
 | [`service-keys`](#service-keys) | List service keys across orgs and spaces, optionally including credentials |
 | [`create-service-keys`](#create-service-keys) | Create or update service keys for matching service instances across orgs and spaces |
 | [`delete-service-instances`](#delete-service-instances) | Delete service instances (and their bindings/keys) matching name patterns, across orgs and spaces |
@@ -195,9 +196,9 @@ Clears: CF region tokens, XSUAA access tokens, destination service access tokens
 
 Interactively select which accessible CF orgs should be the **default scope** for
 org-aware commands (`spaces`, `org-users`, `org-space-users`, `apps`,
-`service-credentials`, `create-ups`, `service-keys`, `create-service-keys`,
-`delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`,
-`users`, `role-collections`,
+`service-credentials`, `create-ups`, `service-instances`, `service-keys`,
+`create-service-keys`, `delete-service-instances`, `delete-service-keys`,
+`start-apps`, `stop-apps`, `users`, `role-collections`,
 `subaccount-destinations` and its create/update/delete variants, and
 `describe-subaccount`) when they're run
 without `--org` or `--orgs`.
@@ -254,7 +255,7 @@ regions:
         org_id: <org-guid>
 ```
 
-The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `service-keys`, `create-service-keys`, `delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
+The `--format csv` output (`region,org_name,org_id`) is compatible with the `--orgs` and `--excludeOrgs` flags accepted by `create-org-space-users`, `delete-org-space-users`, `spaces`, `org-users`, `org-space-users`, `apps`, `service-credentials`, `create-ups`, `service-instances`, `service-keys`, `create-service-keys`, `delete-service-instances`, `delete-service-keys`, `start-apps`, `stop-apps`, `users`, `role-collections`, `subaccount-destinations` (and its create/update/delete variants), and `describe-subaccount` — those flags identify columns by name, so either column order parses correctly.
 
 ### `org-spaces`
 
@@ -1325,6 +1326,48 @@ Proceed? [y/N]
 Confirmation is required unless `-y`/`--yes` is given — declining it aborts the whole command. If a service with the same (post-`--postfix`) name already exists in its target space, it's listed separately and a second, independent confirmation to overwrite it is required, also skipped by `-y`. Declining *that* one doesn't abort anything — it just skips the existing (overwrite) services and still creates whichever ones are brand new.
 
 `--include`/`--exclude` each accept a comma-separated list of keywords and match against each service's `label` or `name` (case-insensitive substring).
+
+### `service-instances`
+
+List every service instance (managed or user-provided) across one or more regions, organizations, and spaces, nested as `region -> org -> space -> service_instances`.
+
+```
+bo service-instances [flags]
+```
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `--service-instances` narrows to specific instance names: comma-separated patterns, e.g. `*-hdi,*-db` — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring; omit it to match every service instance in scope.
+
+```bash
+# List every service instance in the default org scope
+bo service-instances
+
+# Narrow to specific orgs, a specific space, and instance names
+bo service-instances --orgs target-orgs.csv --spaces prod --service-instances "*-hdi,*-db"
+
+# Include user-provided instances' credentials, writing to a file instead of stdout
+bo service-instances --full -o instances.json --format json
+```
+
+Output formats (`--format`):
+
+| Format | Description |
+|---|---|
+| `toon` (default) | Token-Oriented Object Notation — compact, human-readable |
+| `json` | JSON document, same nesting as the TOON output |
+| `csv` | Flat rows, one per service instance — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,type,label,plan,tags,created_at,updated_at,last_operation_type,last_operation_state` (plus a trailing `credentials` JSON column when `--full` is given) |
+
+Without `--full`, only service instance metadata is included — `instance_guid`, `instance_name`, `type`, `label`, `plan`, `tags`, `created_at`, `updated_at`, `last_operation_type`, `last_operation_state`. (The CF API doesn't expose a "created by" user on this resource, so that field isn't included.) With `--full`, each **user-provided** instance's credentials are also fetched and included — managed instances have no credentials of their own (only their service keys do, see [`service-keys`](#service-keys)), so `credentials` is simply left empty for those:
+
+```
+orgs[1]:
+  - org_name: my-org
+    spaces[1]:
+      - space_name: prod
+        service_instances[1]{instance_guid,instance_name,type,label,plan,tags,created_at,updated_at,last_operation_type,last_operation_state,credentials}:
+          <guid-1>,my-ups,user-provided,,,"hana",2026-01-01T00:00:00Z,2026-01-01T00:00:00Z,create,succeeded,{"host":"...","password":"..."}
+```
+
+⚠️ **`--full` outputs live secrets** (each user-provided instance's credentials) — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
 
 ### `service-keys`
 
