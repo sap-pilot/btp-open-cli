@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.20.0 — 2026-10-28
+
+### Changed
+
+- **`orgs` — `--output` skips the picker and dumps the accessible org list directly**
+
+  Passing `--output`/`-o` no longer runs the interactive picker at all: instead of waiting for input, `bo orgs` writes the full list of accessible orgs (after `--include`/`--exclude` filtering) straight to that file, and the default org scope is left untouched — `--all` has no effect in this mode, since nothing is being selected. `--format` is now only valid together with `--output`; without a file, the command's own output is the interactive picker, not a listing one of these formats could represent, so passing `--format` alone is now an error.
+
+  ```bash
+  bo orgs --output my-orgs.csv --format csv
+  bo orgs --include prod --format csv -o prod-orgs.csv
+  ```
+
 ## v0.19.0 — 2026-10-27
 
 ### Added

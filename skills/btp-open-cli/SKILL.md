@@ -111,11 +111,14 @@ they're logged in.
 
 - `bo orgs` (the interactive org picker) requires a real terminal and fails
   fast otherwise. Never run it bare in an agent shell. Instead:
-  - `bo orgs --all` (optionally with `--include`/`--exclude`) selects a scope
-    without prompting, and can persist it via `--format csv -o some.csv` for
-    reuse as `--orgs some.csv` on other commands, or
+  - `bo orgs --output some.csv --format csv` (optionally with
+    `--include`/`--exclude`) skips the picker entirely — no prompting, no
+    default scope change — and dumps the full accessible org list straight to
+    the file, for reuse as `--orgs some.csv` on other commands, or
   - skip `bo orgs` entirely and pass `--org <guid-or-name>` / `--orgs <csv>`
     directly to whichever command you're running.
+  - Note: `--format` is only accepted alongside `--output`, and `--all` has no
+    effect when `--output` is given (nothing is being selected in that mode).
 - Commands with a `[y/N]` confirmation or a "press Enter to retry / type 's'
   to skip / Ctrl-C to abort" prompt read one line from stdin. On closed/EOF
   stdin they abort safely (no changes made) — but if the shell you're given
@@ -308,8 +311,8 @@ later reads as input. Treat all of this as sensitive:
 ### Inventory / audit (read-only, safe to run freely)
 
 ```bash
-# Pick a scope non-interactively and save it for reuse
-bo orgs --all --include prod --format csv -o prod-orgs.csv
+# Dump the accessible org list non-interactively and save it for reuse
+bo orgs --include prod --format csv -o prod-orgs.csv
 
 # User Access Review export across those orgs
 bo users --orgs prod-orgs.csv --format uar.csv -o uar-export.csv

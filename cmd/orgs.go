@@ -93,17 +93,22 @@ you run an org-aware command without an explicit scope. Running 'bo orgs'
 again within the same session pre-checks whatever is currently selected, so
 you can tweak the scope instead of starting over — only login/logoff clear it.
 
-Output formats (--format), showing the orgs just selected, columns/fields
-ordered region, org_name, org_id to match the picker:
+Use --output/-o to write this listing to a file instead of stdout — shell '>'
+redirection won't work here since the interactive picker also writes to
+stdout. When --output is given, the interactive picker is skipped entirely
+(no prompting, no waiting on user input, and --all is ignored): the full
+list of accessible orgs (after --include/--exclude filtering) is written
+straight to the file, and the default org scope is left untouched.
+
+Output formats (--format), columns/fields ordered region, org_name, org_id
+to match the picker. --format is only valid together with --output, since
+the interactive picker's own stdout output is not a listing one of these
+formats could represent:
   toon  Token-Oriented Object Notation — compact, human-readable (default)
   json  JSON document
   csv   CSV rows: region,org_name,org_id — directly reusable as any other
         command's --orgs/--excludeOrgs file (column order is not significant
         when read back — only the column names are)
-
-Use --output/-o to write this listing to a file instead of stdout — shell '>'
-redirection won't work here since the interactive picker also writes to
-stdout.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -113,6 +118,10 @@ If --regions is omitted the regions from the last login are used.`,
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		allOrgs, _ := cmd.Flags().GetBool("all")
 		outputFile, _ := cmd.Flags().GetString("output")
+
+		if outputFile == "" && cmd.Flags().Changed("format") {
+			return fmt.Errorf("--format can only be used together with --output")
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -151,6 +160,30 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		if len(candidates) == 0 {
 			return fmt.Errorf("no orgs match the given --include/--exclude filters")
+		}
+
+		if outputFile != "" {
+			out, closeOut, err := resolveOutputWriter(outputFile)
+			if err != nil {
+				return err
+			}
+			defer closeOut()
+
+			doc := buildOrgsOutDoc(candidates)
+			switch strings.ToLower(format) {
+			case "json":
+				err = writeOrgsJSON(out, doc)
+			case "csv":
+				err = writeOrgsCSV(out, doc)
+			default: // "toon"
+				err = writeOrgsToon(out, doc)
+			}
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(os.Stderr, "\nWrote %d accessible org(s) to %s.\n", len(candidates), outputFile)
+			return nil
 		}
 
 		var selected []orgChoice
@@ -245,9 +278,9 @@ func init() {
 	orgsCmd.GroupID = "common"
 	rootCmd.AddCommand(orgsCmd)
 	orgsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv — only valid together with --output")
 	orgsCmd.Flags().String("include", "", "Only show/select orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().Bool("all", false, "Select every matching org without prompting for interactive selection")
-	orgsCmd.Flags().StringP("output", "o", "", "Write the selected orgs listing to this file instead of stdout")
+	orgsCmd.Flags().StringP("output", "o", "", "Write the list of accessible orgs to this file, skipping the interactive picker")
 }

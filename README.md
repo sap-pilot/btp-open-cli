@@ -221,6 +221,15 @@ only `bo login`/`bo logoff` clear it.
 If an org-aware command is run with no `--org`/`--orgs` and no default scope has
 been set yet, it prints an error telling you to run `bo orgs` first.
 
+**`--output`/`-o` writes to a file and skips the picker entirely.** Rather than
+writing the *selected* scope, passing `--output` makes `bo orgs` print the
+full list of accessible orgs (after `--include`/`--exclude` filtering)
+straight to that file, with no prompting and no waiting for input — `--all`
+is ignored in this mode, and the default org scope is left untouched.
+`--format` is only valid together with `--output`, since without a file the
+command's output is the interactive picker itself, not a listing one of
+these formats could represent.
+
 ```bash
 # Interactively pick the default org scope for this session
 bo orgs
@@ -236,19 +245,17 @@ bo orgs --exclude sandbox,test
 # Specific regions
 bo orgs --regions us10,us20,eu10
 
-# JSON output of the orgs just selected
-bo orgs --all --format json
+# Non-interactive: dump every accessible org straight to a file, skipping
+# the picker — shell '>' doesn't work here since the interactive picker
+# also writes to stdout
+bo orgs --output my-orgs.csv --format csv
 
-# Write the selection to a file instead of stdout — shell '>' doesn't work
-# here since the interactive picker also writes to stdout
-bo orgs --format csv --output my-orgs.csv
-
-# Non-interactive: select every prod org and save as a reusable --orgs CSV
-bo orgs --all --include prod --format csv -o prod-orgs.csv
+# Narrow the dumped list to prod orgs and save as a reusable --orgs CSV
+bo orgs --include prod --format csv -o prod-orgs.csv
 bo create-org-space-users users.csv --orgs prod-orgs.csv
 ```
 
-Default TOON output (showing the orgs just selected, fields ordered to match the picker):
+Default TOON output (the full list of accessible orgs, fields ordered to match the picker):
 ```
 regions:
   - region: us10
