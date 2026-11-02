@@ -33,12 +33,21 @@ org scope selected via 'bo orgs'.
 
 --role-collections <file> mode: <file> is a JSON or TOON document produced
 by 'bo role-collections' (or hand-authored with the same
-regions -> orgs -> roleCollections shape). Only the orgs and role
-collections listed in the file are targeted — --org/--orgs/--excludeOrgs,
---regions, and the default org scope are all ignored.
-<role_collection_name_pattern> becomes optional in this mode (default '*',
-every role collection in the file) and still further narrows the file's
-role collections by name.
+regions -> orgs -> roleCollections shape). Role collections are matched by
+name from the (filtered) file; --org/--orgs/--excludeOrgs/--regions are
+ignored. <role_collection_name_pattern> becomes optional in this mode
+(default '*', every role collection in the file) and still further narrows
+the file's role collections by name.
+
+The orgs actually targeted depend on whether a default org scope is
+currently selected via 'bo orgs': if one is, every role collection in the
+file is deleted from those org(s) instead of the file's own — discarding
+the file's own org assignment entirely. If no default org scope is
+selected, each role collection's own org (exactly as specified in the
+file) is used. Either way, each role reference's roleTemplateAppId is
+automatically re-resolved against an existing role in the target org,
+matching by app name (ignoring the subaccount-specific suffix after '!'),
+roleTemplateName, and role_name.
 
 ⚠️ This is destructive and cannot be undone.
 
@@ -66,20 +75,26 @@ and confirmation is required before any changes are made.`,
 		defer cancel()
 
 		var targets []rcTarget
+		var scopeNote string
 		if rcFile != "" {
 			entries, err := parseRoleCollectionsFile(rcFile)
 			if err != nil {
 				return fmt.Errorf("invalid --role-collections file: %w", err)
 			}
-			var filtered []rcFileEntry
-			for _, e := range entries {
-				if matchesNegatablePattern(pattern, e.RC.Name) {
-					filtered = append(filtered, e)
-				}
-			}
+			filtered := filterRCEntriesByPattern(entries, pattern)
 			if len(filtered) == 0 {
 				return fmt.Errorf("no role collections matched — check the --role-collections file and the name pattern")
 			}
+
+			destOrgs := resolveFileOrgRetarget(creds)
+			filtered = retargetEntries(filtered, destOrgs, func(e rcFileEntry, region, orgID, orgName string) rcFileEntry {
+				e.Region, e.OrgID, e.OrgName = region, orgID, orgName
+				return e
+			})
+			if destOrgs != nil {
+				scopeNote = orgScopeNote(destOrgs, "--role-collections file")
+			}
+
 			targets, err = resolveRCTargets(ctx, creds, filtered)
 			if err != nil {
 				return err
@@ -97,7 +112,7 @@ and confirmation is required before any changes are made.`,
 		sortRCTargets(targets)
 
 		return applyRCPreviewAndRun(ctx, targets,
-			"Role collections to be deleted:", "This cannot be undone. Proceed? [y/N] ", "Deleting role collections...", "-",
+			"Role collections to be deleted:", "This cannot be undone. Proceed? [y/N] ", "Deleting role collections...", "-", scopeNote,
 			skipConfirm,
 			func(ctx context.Context, apiURL, token string, rc xsuaa.RoleCollection) error {
 				return xsuaa.DeleteRoleCollection(ctx, apiURL, token, rc.Name)
@@ -226,7 +241,7 @@ func init() {
 	deleteRoleCollectionsCmd.Flags().String("org", "", "Org name or GUID to target (case-insensitive substring match on name, exact on GUID)")
 	deleteRoleCollectionsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	deleteRoleCollectionsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
-	deleteRoleCollectionsCmd.Flags().String("role-collections", "", "Path to a role-collections JSON/TOON file produced by 'bo role-collections'; bypasses --org/--orgs/--excludeOrgs/--regions and the 'bo orgs' default scope, targeting exactly the orgs/role collections it lists")
+	deleteRoleCollectionsCmd.Flags().String("role-collections", "", "Path to a role-collections JSON/TOON file produced by 'bo role-collections'; bypasses --org/--orgs/--excludeOrgs/--regions, targeting the role collections it lists within whatever org(s) are selected via 'bo orgs' (or, with no default org scope selected, the orgs the file itself specifies)")
 	deleteRoleCollectionsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped (discovery mode only)")
 	deleteRoleCollectionsCmd.Flags().BoolP("yes", "y", false, "Skip the confirmation prompt")
 }

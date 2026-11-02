@@ -22,8 +22,11 @@ import (
 // ── output types ─────────────────────────────────────────────────────────────
 
 type roOutRoleAttr struct {
-	AttributeName      string   `json:"attributeName"      toon:"attributeName"`
-	AttributeValueList []string `json:"attributeValueList" toon:"attributeValueList"`
+	AttributeName        string   `json:"attributeName"                   toon:"attributeName"`
+	AttributeValueOrigin string   `json:"attributeValueOrigin,omitempty"   toon:"attributeValueOrigin,omitempty"`
+	AttributeValues      []string `json:"attributeValues"                 toon:"attributeValues"`
+	Description          string   `json:"description,omitempty"           toon:"description,omitempty"`
+	ValueRequired        bool     `json:"valueRequired,omitempty"         toon:"valueRequired,omitempty"`
 }
 
 type roOutRole struct {
@@ -54,7 +57,13 @@ type roOutDoc struct {
 func xsuaaRoleToOut(role xsuaa.Role) roOutRole {
 	var attrs []roOutRoleAttr
 	for _, a := range role.AttributeList {
-		attrs = append(attrs, roOutRoleAttr{AttributeName: a.AttributeName, AttributeValueList: a.AttributeValueList})
+		attrs = append(attrs, roOutRoleAttr{
+			AttributeName:        a.AttributeName,
+			AttributeValueOrigin: a.AttributeValueOrigin,
+			AttributeValues:      a.AttributeValues,
+			Description:          a.Description,
+			ValueRequired:        a.ValueRequired,
+		})
 	}
 	return roOutRole{
 		RoleTemplateAppID: role.RoleTemplateAppID,
@@ -70,7 +79,13 @@ func xsuaaRoleToOut(role xsuaa.Role) roOutRole {
 func roOutToXsuaaRole(role roOutRole) xsuaa.Role {
 	var attrs []xsuaa.RoleAttribute
 	for _, a := range role.AttributeList {
-		attrs = append(attrs, xsuaa.RoleAttribute{AttributeName: a.AttributeName, AttributeValueList: a.AttributeValueList})
+		attrs = append(attrs, xsuaa.RoleAttribute{
+			AttributeName:        a.AttributeName,
+			AttributeValueOrigin: a.AttributeValueOrigin,
+			AttributeValues:      a.AttributeValues,
+			Description:          a.Description,
+			ValueRequired:        a.ValueRequired,
+		})
 	}
 	return xsuaa.Role{
 		RoleTemplateAppID: role.RoleTemplateAppID,
@@ -86,10 +101,17 @@ func roOutToXsuaaRole(role roOutRole) xsuaa.Role {
 // ── command ───────────────────────────────────────────────────────────────────
 
 var rolesCmd = &cobra.Command{
-	Use:   "roles",
+	Use:   "roles [role_name_pattern]",
 	Short: "Export XSUAA roles (with attributes) across all accessible organizations",
 	Long: `Export roles, including their attribute lists, from the XSUAA Authorization
 API across one or more regions and organizations.
+
+<role_name_pattern> is optional — a comma-separated list of patterns, e.g.
+'Custom_*,temp-*' or '*' (the default when omitted: every role). Each
+pattern is a glob (via filepath.Match) if it contains * ? [, otherwise a
+case-insensitive substring; a pattern prefixed with '!' reverses it, and a
+role is selected if any pattern — negated or not — matches it. Only roles
+matching the pattern are included in the output.
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
@@ -105,10 +127,20 @@ pick one interactively, or pass --org/--orgs directly.
 
 Use --output/-o to write the result to a file instead of stdout. The written
 file (JSON or TOON) can be fed back into 'bo create-roles', 'bo update-roles',
-or 'bo delete-roles --roles <file>'.
+or 'bo delete-roles --roles <file>'. If --format is not explicitly given, it
+is auto-detected as json when --output ends in .json — otherwise the
+default toon applies.
 
 If --regions is omitted the regions from the last login are used.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		pattern := "*"
+		if len(args) > 0 {
+			pattern = strings.TrimSpace(args[0])
+			if pattern == "" {
+				return fmt.Errorf("role_name_pattern cannot be empty")
+			}
+		}
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
@@ -116,6 +148,11 @@ If --regions is omitted the regions from the last login are used.`,
 		outputFile, _ := cmd.Flags().GetString("output")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json"}); auto != "" {
+				format = auto
+			}
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -246,6 +283,9 @@ If --regions is omitted the regions from the last login are used.`,
 
 			var outRoles []roOutRole
 			for _, role := range r.roles {
+				if !matchesNegatablePattern(pattern, role.Name) {
+					continue
+				}
 				outRoles = append(outRoles, xsuaaRoleToOut(role))
 			}
 			sort.Slice(outRoles, func(i, j int) bool {
@@ -312,5 +352,5 @@ func init() {
 	rolesCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	rolesCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	rolesCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
-	rolesCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
+	rolesCmd.Flags().String("format", "toon", "Output format: toon (default) or json; auto-detected as json when --output ends in .json and --format is not explicitly given")
 }

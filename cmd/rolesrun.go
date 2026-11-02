@@ -71,6 +71,19 @@ func parseRolesFile(path string) ([]roFileEntry, error) {
 	return entries, nil
 }
 
+// filterRoleEntriesByPattern returns only the entries whose role name
+// matches pattern — a comma-separated, "!"-negatable pattern list (see
+// matchesNegatablePattern); pattern "*" matches every entry.
+func filterRoleEntriesByPattern(entries []roFileEntry, pattern string) []roFileEntry {
+	var filtered []roFileEntry
+	for _, e := range entries {
+		if matchesNegatablePattern(pattern, e.Role.Name) {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 // roleTarget pairs one role with its already-resolved XSUAA client.
 type roleTarget struct {
 	RegionName string
@@ -174,17 +187,58 @@ func buildRolePreviewDoc(targets []roleTarget) roOutDoc {
 	return doc
 }
 
+// resolveRoleTemplateAppIDs corrects each target's Role.RoleTemplateAppID to
+// the one actually registered, in that target's own org, for the same app
+// name (ignoring the subaccount-specific suffix after '!' — see
+// xsuaa.AppIDPrefix) and role template name. This matters whenever a role
+// is being created/updated/deleted in a different subaccount than the one
+// it was exported from: the exported appId's suffix is specific to the
+// source subaccount's app registration and is very likely wrong for the
+// destination. Targets are mutated in place. If no matching template is
+// found for a target, or its org's template list can't be fetched, that
+// target is left unchanged so the normal create/update/delete call still
+// runs and surfaces whatever error (or success) the literal exported appId
+// produces.
+func resolveRoleTemplateAppIDs(ctx context.Context, targets []roleTarget) {
+	templatesByAPIURL := make(map[string][]xsuaa.RoleTemplate)
+	fetchFailed := make(map[string]bool)
+
+	for i, t := range targets {
+		if fetchFailed[t.APIURL] {
+			continue
+		}
+		templates, ok := templatesByAPIURL[t.APIURL]
+		if !ok {
+			var err error
+			templates, err = xsuaa.ListRoleTemplates(ctx, t.APIURL, t.Token)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: [%s] %s: listing role templates: %v — using roleTemplateAppId as given\n",
+					t.RegionName, t.OrgName, err)
+				fetchFailed[t.APIURL] = true
+				continue
+			}
+			templatesByAPIURL[t.APIURL] = templates
+		}
+		if resolved, ok := xsuaa.ResolveRoleTemplateAppID(templates, t.Role.RoleTemplateAppID, t.Role.RoleTemplateName); ok {
+			targets[i].Role.RoleTemplateAppID = resolved
+		}
+	}
+}
+
 // applyRolesPreviewAndRun shows a TOON preview of targets (unless
-// skipConfirm), asks for confirmation, then calls fn for each target,
-// reporting ErrAlreadyExists/ErrNotFound as informational rather than
-// failures. successGlyph is the per-item prefix on success, e.g. "+", "~", "-".
+// skipConfirm), optionally followed by scopeNote (see orgScopeNote), asks
+// for confirmation, then calls fn for each target, reporting
+// ErrAlreadyExists/ErrNotFound as informational rather than failures.
+// successGlyph is the per-item prefix on success, e.g. "+", "~", "-".
 func applyRolesPreviewAndRun(
 	ctx context.Context,
 	targets []roleTarget,
-	previewHeader, confirmPrompt, progressHeader, successGlyph string,
+	previewHeader, confirmPrompt, progressHeader, successGlyph, scopeNote string,
 	skipConfirm bool,
 	fn func(ctx context.Context, apiURL, token string, role xsuaa.Role) error,
 ) error {
+	resolveRoleTemplateAppIDs(ctx, targets)
+
 	if !skipConfirm {
 		doc := buildRolePreviewDoc(targets)
 		out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
@@ -194,6 +248,9 @@ func applyRolesPreviewAndRun(
 		fmt.Fprintln(os.Stdout, previewHeader)
 		os.Stdout.Write(out) //nolint:errcheck
 		fmt.Fprintln(os.Stdout)
+		if scopeNote != "" {
+			fmt.Fprintln(os.Stdout, scopeNote)
+		}
 		fmt.Fprint(os.Stdout, confirmPrompt)
 		text, ok := readLine(ctx)
 		if !ok || strings.ToLower(text) != "y" {
@@ -221,9 +278,13 @@ func applyRolesPreviewAndRun(
 }
 
 // runRolesFileApply implements the shared body of create-roles and
-// update-roles: parse --roles, resolve targets, preview, confirm, and apply fn.
+// update-roles: parse --roles, narrow to entries matching pattern (a
+// comma-separated, "!"-negatable pattern list matched against each role's
+// name — "*" matches every entry in the file), resolve targets, preview,
+// confirm, and apply fn.
 func runRolesFileApply(
 	cmd *cobra.Command,
+	pattern string,
 	previewHeader, confirmPrompt, progressHeader, successGlyph string,
 	fn func(ctx context.Context, apiURL, token string, role xsuaa.Role) error,
 ) error {
@@ -235,6 +296,11 @@ func runRolesFileApply(
 		return fmt.Errorf("invalid --roles file: %w", err)
 	}
 
+	entries = filterRoleEntriesByPattern(entries, pattern)
+	if len(entries) == 0 {
+		return fmt.Errorf("no roles matched — check the --roles file and the name pattern")
+	}
+
 	creds, err := store.Load()
 	if err != nil {
 		return fmt.Errorf("not logged in — run: bo login --regions <region>")
@@ -242,6 +308,16 @@ func runRolesFileApply(
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer cancel()
+
+	destOrgs := resolveFileOrgRetarget(creds)
+	entries = retargetEntries(entries, destOrgs, func(e roFileEntry, region, orgID, orgName string) roFileEntry {
+		e.Region, e.OrgID, e.OrgName = region, orgID, orgName
+		return e
+	})
+	var scopeNote string
+	if destOrgs != nil {
+		scopeNote = orgScopeNote(destOrgs, "--roles file")
+	}
 
 	targets, err := resolveRoleTargets(ctx, creds, entries)
 	if err != nil {
@@ -253,5 +329,5 @@ func runRolesFileApply(
 	}
 	sortRoleTargets(targets)
 
-	return applyRolesPreviewAndRun(ctx, targets, previewHeader, confirmPrompt, progressHeader, successGlyph, skipConfirm, fn)
+	return applyRolesPreviewAndRun(ctx, targets, previewHeader, confirmPrompt, progressHeader, successGlyph, scopeNote, skipConfirm, fn)
 }

@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -65,6 +68,27 @@ func TestRoleCollections_Default(t *testing.T) {
 	}
 }
 
+func TestRoleCollections_NamePatternFilters(t *testing.T) {
+	const orgGUID = "org1"
+	rcSrv := newRoleCollectionsServer(t, "GlobalAdmin", "Custom_Viewer")
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, rcSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
+
+	stdout, _, err := runCmd(t, "role-collections", "Custom_*", "--no-prompt")
+	if err != nil {
+		t.Fatalf("role-collections failed: %v", err)
+	}
+	if !strings.Contains(stdout, "Custom_Viewer") {
+		t.Errorf("expected Custom_Viewer in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "GlobalAdmin") {
+		t.Errorf("expected GlobalAdmin to be excluded by the pattern, got: %q", stdout)
+	}
+}
+
 func TestRoleCollections_CSV(t *testing.T) {
 	const orgGUID = "org1"
 	rcSrv := newRoleCollectionsServer(t, "GlobalAdmin")
@@ -80,5 +104,30 @@ func TestRoleCollections_CSV(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "rolecollection_name") {
 		t.Errorf("expected CSV header, got: %q", stdout)
+	}
+}
+
+func TestRoleCollections_OutputJSONExtensionAutoDetected(t *testing.T) {
+	const orgGUID = "org1"
+	rcSrv := newRoleCollectionsServer(t, "GlobalAdmin")
+	cfSrv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
+	})
+	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, rcSrv.URL)
+	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "role-collections.json")
+	_, _, err := runCmd(t, "role-collections", "--output", path, "--no-prompt")
+	if err != nil {
+		t.Fatalf("role-collections --output role-collections.json failed: %v", err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading output file: %v", err)
+	}
+	var doc rcOutDoc
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("expected JSON auto-detected from .json extension, got invalid JSON: %v\n%s", err, body)
 	}
 }

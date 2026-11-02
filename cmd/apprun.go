@@ -69,10 +69,10 @@ type sawPreviewDoc struct {
 // reverses that one pattern — see matchesNegatablePattern), across the
 // region/org/space scope selected by the command's --regions/--org/--orgs/
 // --excludeOrgs/--spaces/--space flags, in parallel across regions.
-func resolveMatchedApps(ctx context.Context, cmd *cobra.Command, patternsCSV string) ([]sawMatchedApp, error) {
+func resolveMatchedApps(ctx context.Context, cmd *cobra.Command, patternsCSV string) ([]sawMatchedApp, string, error) {
 	creds, err := store.Load()
 	if err != nil {
-		return nil, fmt.Errorf("not logged in — run: bo login --regions <region>")
+		return nil, "", fmt.Errorf("not logged in — run: bo login --regions <region>")
 	}
 
 	appsFile, _ := cmd.Flags().GetString("apps")
@@ -105,28 +105,28 @@ func resolveMatchedApps(ctx context.Context, cmd *cobra.Command, patternsCSV str
 		apiURLs = creds.ActiveAPIURLs
 	}
 	if len(apiURLs) == 0 {
-		return nil, fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
+		return nil, "", fmt.Errorf("no regions configured — run: bo login --regions <region1,region2>")
 	}
 
 	var includeOrgs cosOrgSet
 	if orgsFile != "" {
 		includeOrgs, err = parseCosOrgCSV(orgsFile)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --orgs CSV: %w", err)
+			return nil, "", fmt.Errorf("invalid --orgs CSV: %w", err)
 		}
 	}
 	var excludeOrgs cosOrgSet
 	if excludeOrgsFile != "" {
 		excludeOrgs, err = parseCosOrgCSV(excludeOrgsFile)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --excludeOrgs CSV: %w", err)
+			return nil, "", fmt.Errorf("invalid --excludeOrgs CSV: %w", err)
 		}
 	}
 
 	if orgGUID == "" && orgsFile == "" {
 		includeOrgs, err = resolveDefaultOrgScope(creds)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 
@@ -243,7 +243,7 @@ func resolveMatchedApps(ctx context.Context, cmd *cobra.Command, patternsCSV str
 
 	sortMatchedApps(allMatched)
 
-	return allMatched, nil
+	return allMatched, "", nil
 }
 
 // sortMatchedApps sorts matched apps by org name, then space name, then app
@@ -350,7 +350,8 @@ func apiURLForRegion(creds *store.Credentials, region string) (string, bool) {
 // scopeFlagsIgnoredByAppsCSV lists the org/space targeting flags that --apps
 // (direct CSV targeting) makes moot, since each CSV row already carries its
 // own exact region/org/space/app. The `bo orgs` default scope isn't a flag,
-// so it's mentioned separately by the caller.
+// so it's not in this list — when a default org scope is selected, it's
+// still consulted (see resolveFileOrgFilterKeepSet), it's just not "ignored".
 var scopeFlagsIgnoredByAppsCSV = []string{"regions", "org", "orgs", "excludeOrgs", "spaces", "space"}
 
 // warnIgnoredScopeFlagsForAppsCSV warns when --apps is combined with any
@@ -363,7 +364,7 @@ func warnIgnoredScopeFlagsForAppsCSV(cmd *cobra.Command) {
 		}
 	}
 	if len(ignored) > 0 {
-		fmt.Fprintf(os.Stderr, "warning: --apps targets apps directly by region/org/space from the CSV; ignoring %s (and any 'bo orgs' default scope)\n",
+		fmt.Fprintf(os.Stderr, "warning: --apps targets apps directly by region/org/space from the CSV; ignoring %s\n",
 			strings.Join(ignored, ", "))
 	}
 }
@@ -373,10 +374,17 @@ func warnIgnoredScopeFlagsForAppsCSV(cmd *cobra.Command) {
 // each row's app_name, fetching each app's live state directly by GUID
 // (grouped by space, per region) rather than discovering it via org/space
 // listing.
-func resolveMatchedAppsFromCSV(ctx context.Context, creds *store.Credentials, path, patternsCSV string) ([]sawMatchedApp, error) {
+//
+// If a default org scope is currently selected via 'bo orgs', the CSV is
+// filtered down to just the rows whose org is in that scope — see
+// resolveFileOrgFilterKeepSet. With no default org scope selected, every
+// row in the CSV is used. The returned string is a note to show in the
+// confirmation preview whenever that filtering happened, so the caller can
+// warn if it wasn't intended.
+func resolveMatchedAppsFromCSV(ctx context.Context, creds *store.Credentials, path, patternsCSV string) ([]sawMatchedApp, string, error) {
 	refs, err := parseAppsCSV(path)
 	if err != nil {
-		return nil, fmt.Errorf("invalid --apps CSV: %w", err)
+		return nil, "", fmt.Errorf("invalid --apps CSV: %w", err)
 	}
 
 	var filtered []appCSVRef
@@ -386,7 +394,18 @@ func resolveMatchedAppsFromCSV(ctx context.Context, creds *store.Credentials, pa
 		}
 	}
 	if len(filtered) == 0 {
-		return nil, nil
+		return nil, "", nil
+	}
+
+	appEntryOrgOf := func(ref appCSVRef) (string, string) { return ref.Region, ref.OrgName }
+	keep := resolveFileOrgFilterKeepSet(creds)
+	filtered = filterByOrgKeepSet(filtered, keep, appEntryOrgOf)
+	if len(filtered) == 0 {
+		return nil, "", nil
+	}
+	var scopeNote string
+	if keep != nil {
+		scopeNote = orgScopeNote(defaultOrgScopeOrgs(creds), "--apps CSV")
 	}
 
 	var regionOrder []string
@@ -449,7 +468,7 @@ func resolveMatchedAppsFromCSV(ctx context.Context, creds *store.Credentials, pa
 
 	sortMatchedApps(allMatched)
 
-	return allMatched, nil
+	return allMatched, scopeNote, nil
 }
 
 // printSawPreview renders the matched apps as a TOON document nested
@@ -555,7 +574,7 @@ func runStartStopApps(cmd *cobra.Command, args []string, verb, ingForm, pastForm
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer cancel()
 
-	matched, err := resolveMatchedApps(ctx, cmd, patternsCSV)
+	matched, scopeNote, err := resolveMatchedApps(ctx, cmd, patternsCSV)
 	if err != nil {
 		return err
 	}
@@ -574,6 +593,10 @@ func runStartStopApps(cmd *cobra.Command, args []string, verb, ingForm, pastForm
 	fmt.Fprintf(out, "\n%d app(s) to %s.\n", len(matched), verb)
 
 	if !skipConfirm {
+		if scopeNote != "" {
+			fmt.Fprintln(out)
+			fmt.Fprint(out, scopeNote)
+		}
 		fmt.Fprint(out, "\nProceed? [y/N] ")
 		text, ok := readLine(ctx)
 		if !ok || strings.ToLower(text) != "y" {

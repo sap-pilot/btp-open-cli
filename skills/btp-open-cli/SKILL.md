@@ -283,11 +283,18 @@ Read all of these before running any command from the "Write" list above.
     - All four also accept `--apps <file>` to target exact apps by GUID from
       a CSV (same columns as `bo apps --format csv`: `region_id`, `org_name`,
       `space_id`, `space_name`, `app_id`, `app_name`), bypassing all
-      org/space scope flags and the `bo orgs` default scope entirely — useful
-      for "restart/restage only the apps that were already running", e.g.
+      org/space scope flags (`--org`/`--orgs`/`--excludeOrgs`/`--spaces`/
+      `--space`/`--regions`) entirely — useful for "restart/restage only the
+      apps that were already running", e.g.
       `bo apps --include STARTED --format csv -o started.csv` followed by
       `bo restage-apps --apps started.csv -y`. The name-pattern argument
-      becomes optional in this mode (default `*`).
+      becomes optional in this mode (default `*`). **If a default org scope
+      *is* currently selected via `bo orgs`, it still always wins**: the CSV
+      is filtered down to just the rows whose org is in that selection (no
+      prompt, no `--orgs` override — only `bo orgs` matters here). Only with
+      no `bo orgs` selection is every row in the CSV used as-is. Check
+      whether the user has a `bo orgs` selection active before assuming
+      `-y` will run the CSV unmodified.
 14. **`create-roles`/`update-roles`/`delete-roles` and
     `create-role-collections`/`update-role-collections`/
     `delete-role-collections` take a `--roles`/`--role-collections <file>` —
@@ -304,6 +311,14 @@ Read all of these before running any command from the "Write" list above.
     - `update-*` warns and skips (doesn't fail the run) a role/role
       collection that doesn't exist (HTTP 404) — tell the user to run the
       matching `create-*` first if that happens unexpectedly.
+    - `create-roles`/`update-roles`/`create-role-collections`/
+      `update-role-collections` all take an optional leading
+      `[name_pattern]` argument (same glob/substring/`!`-negation syntax as
+      `delete-service-keys`) that narrows which entries of the
+      `--roles`/`--role-collections` file are acted on — omitted or `*`
+      means every entry in the file. Confirm with the user whether they
+      want the whole file applied or only a subset before adding a pattern
+      (or before letting it default to "everything").
     - **`update-role-collections` fully replaces each collection's
       `roleReferences`** with exactly what the file specifies — a role
       reference that's on the server but missing from the file is removed,
@@ -314,11 +329,41 @@ Read all of these before running any command from the "Write" list above.
       org/space scope (same glob/substring/`!`-negation as
       `delete-service-keys`), or `--roles`/`--role-collections <file>` which
       instead targets *exactly* the orgs/entries the file lists — ignoring
-      `--org`/`--orgs`/`--excludeOrgs`/`--regions`/the `bo orgs` default
-      scope entirely — with the name pattern becoming optional (default
-      `*`) in that mode. Confirm with the user which of the two modes they
-      mean; a bare pattern with no `--roles`/`--role-collections` can match
-      far more than intended, the same caution as `delete-service-keys`.
+      `--org`/`--excludeOrgs`/`--regions` entirely — with the name pattern
+      becoming optional (default `*`) in that mode. Confirm with the user
+      which of the two modes they mean; a bare pattern with no
+      `--roles`/`--role-collections` can match far more than intended, the
+      same caution as `delete-service-keys`.
+    - **All six (the three roles commands and the three role-collections
+      commands) always target whatever org(s) are currently selected via
+      `bo orgs`, if any are selected — there's no prompt, no `--orgs`
+      override, and no comparison against the file's own orgs.** With a
+      `bo orgs` selection active, every entry in the file is **retargeted**
+      onto every org in that selection, discarding the file's own org
+      assignment entirely. Only when *no* default org scope is selected is
+      each entry's own org (exactly as specified in the file) used. Unlike
+      the `--apps` case above, this is a genuine *relocation*, not a
+      filter: with a `bo orgs` selection active, these commands create (or
+      update/delete) **every** role/role-collection in the file within
+      whatever org is currently selected, even if the file was exported
+      from a completely different subaccount — that's the intended way to
+      replicate a role setup across subaccounts, but it also means a stale
+      `bo orgs` selection silently sends the file's definitions to the
+      *wrong* subaccount. **Before running any of these six commands,
+      always check (or ask) what the user's current `bo orgs` selection
+      is** and confirm that's the subaccount they actually mean to target —
+      if it's wrong, the fix is `bo orgs` to pick the right one, or `bo
+      orgs` then 'c' to clear the selection so the file's own orgs are used
+      instead (the confirmation preview, shown unless `-y`, states this).
+    - When retargeting across subaccounts (or whenever the exported value
+      doesn't match what's actually registered), each role's
+      `roleTemplateAppId` is automatically re-resolved against the target
+      org's own role templates (role-collections: against its existing
+      roles instead, since a reference names a specific role) by matching
+      the app name — everything before `!` — and `roleTemplateName` (and,
+      for role-collections, `role_name` too). This is what makes
+      cross-subaccount replication actually work, since the suffix after
+      `!` is specific to the subaccount the role was exported from.
     - These commands exist because they modify who has administrative
       access to a subaccount — treat every call as security-sensitive, not
       just "another bulk write."

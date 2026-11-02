@@ -126,6 +126,19 @@ func parseRoleCollectionsFile(path string) ([]rcFileEntry, error) {
 	return entries, nil
 }
 
+// filterRCEntriesByPattern returns only the entries whose role collection
+// name matches pattern — a comma-separated, "!"-negatable pattern list (see
+// matchesNegatablePattern); pattern "*" matches every entry.
+func filterRCEntriesByPattern(entries []rcFileEntry, pattern string) []rcFileEntry {
+	var filtered []rcFileEntry
+	for _, e := range entries {
+		if matchesNegatablePattern(pattern, e.RC.Name) {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
+}
+
 // rcTarget pairs one role collection with its already-resolved XSUAA client.
 type rcTarget struct {
 	RegionName string
@@ -229,17 +242,60 @@ func buildRCPreviewDoc(targets []rcTarget) rcrPreviewDoc {
 	return doc
 }
 
-// applyRCPreviewAndRun shows a TOON preview of targets (unless skipConfirm),
-// asks for confirmation, then calls fn for each target, reporting
+// resolveRoleReferenceAppIDs corrects each target's role references'
+// RoleTemplateAppID to the one actually registered, in that target's own
+// org, for the same app name (ignoring the subaccount-specific suffix after
+// '!' — see xsuaa.AppIDPrefix), role template name, and role name. This
+// matters whenever a role collection is being created/updated in a
+// different subaccount than the one it was exported from: a role reference
+// identifies a specific existing role, and that role's appId suffix is
+// specific to the subaccount it was created in. Targets are mutated in
+// place. If no matching role is found for a reference, or its org's role
+// list can't be fetched, that reference is left unchanged so the normal
+// create/update call still runs and surfaces whatever error (or success)
+// the literal exported appId produces.
+func resolveRoleReferenceAppIDs(ctx context.Context, targets []rcTarget) {
+	rolesByAPIURL := make(map[string][]xsuaa.Role)
+	fetchFailed := make(map[string]bool)
+
+	for i, t := range targets {
+		if fetchFailed[t.APIURL] {
+			continue
+		}
+		roles, ok := rolesByAPIURL[t.APIURL]
+		if !ok {
+			var err error
+			roles, err = xsuaa.ListRoles(ctx, t.APIURL, t.Token)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: [%s] %s: listing roles: %v — using roleTemplateAppId as given\n",
+					t.RegionName, t.OrgName, err)
+				fetchFailed[t.APIURL] = true
+				continue
+			}
+			rolesByAPIURL[t.APIURL] = roles
+		}
+		for j, ref := range t.RC.RoleReferences {
+			if resolved, ok := xsuaa.ResolveRoleAppID(roles, ref.RoleTemplateAppID, ref.RoleTemplateName, ref.Name); ok {
+				targets[i].RC.RoleReferences[j].RoleTemplateAppID = resolved
+			}
+		}
+	}
+}
+
+// applyRCPreviewAndRun shows a TOON preview of targets (unless
+// skipConfirm), optionally followed by scopeNote (see orgScopeNote), asks
+// for confirmation, then calls fn for each target, reporting
 // ErrAlreadyExists/ErrNotFound as informational rather than failures.
 // successGlyph is the per-item prefix on success, e.g. "+", "~", "-".
 func applyRCPreviewAndRun(
 	ctx context.Context,
 	targets []rcTarget,
-	previewHeader, confirmPrompt, progressHeader, successGlyph string,
+	previewHeader, confirmPrompt, progressHeader, successGlyph, scopeNote string,
 	skipConfirm bool,
 	fn func(ctx context.Context, apiURL, token string, rc xsuaa.RoleCollection) error,
 ) error {
+	resolveRoleReferenceAppIDs(ctx, targets)
+
 	if !skipConfirm {
 		doc := buildRCPreviewDoc(targets)
 		out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
@@ -249,6 +305,9 @@ func applyRCPreviewAndRun(
 		fmt.Fprintln(os.Stdout, previewHeader)
 		os.Stdout.Write(out) //nolint:errcheck
 		fmt.Fprintln(os.Stdout)
+		if scopeNote != "" {
+			fmt.Fprintln(os.Stdout, scopeNote)
+		}
 		fmt.Fprint(os.Stdout, confirmPrompt)
 		text, ok := readLine(ctx)
 		if !ok || strings.ToLower(text) != "y" {
@@ -277,9 +336,13 @@ func applyRCPreviewAndRun(
 
 // runRoleCollectionsFileApply implements the shared body of
 // create-role-collections and update-role-collections: parse
-// --role-collections, resolve targets, preview, confirm, and apply fn.
+// --role-collections, narrow to entries matching pattern (a comma-separated,
+// "!"-negatable pattern list matched against each role collection's name —
+// "*" matches every entry in the file), resolve targets, preview, confirm,
+// and apply fn.
 func runRoleCollectionsFileApply(
 	cmd *cobra.Command,
+	pattern string,
 	previewHeader, confirmPrompt, progressHeader, successGlyph string,
 	fn func(ctx context.Context, apiURL, token string, rc xsuaa.RoleCollection) error,
 ) error {
@@ -291,6 +354,11 @@ func runRoleCollectionsFileApply(
 		return fmt.Errorf("invalid --role-collections file: %w", err)
 	}
 
+	entries = filterRCEntriesByPattern(entries, pattern)
+	if len(entries) == 0 {
+		return fmt.Errorf("no role collections matched — check the --role-collections file and the name pattern")
+	}
+
 	creds, err := store.Load()
 	if err != nil {
 		return fmt.Errorf("not logged in — run: bo login --regions <region>")
@@ -298,6 +366,16 @@ func runRoleCollectionsFileApply(
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 	defer cancel()
+
+	destOrgs := resolveFileOrgRetarget(creds)
+	entries = retargetEntries(entries, destOrgs, func(e rcFileEntry, region, orgID, orgName string) rcFileEntry {
+		e.Region, e.OrgID, e.OrgName = region, orgID, orgName
+		return e
+	})
+	var scopeNote string
+	if destOrgs != nil {
+		scopeNote = orgScopeNote(destOrgs, "--role-collections file")
+	}
 
 	targets, err := resolveRCTargets(ctx, creds, entries)
 	if err != nil {
@@ -309,5 +387,5 @@ func runRoleCollectionsFileApply(
 	}
 	sortRCTargets(targets)
 
-	return applyRCPreviewAndRun(ctx, targets, previewHeader, confirmPrompt, progressHeader, successGlyph, skipConfirm, fn)
+	return applyRCPreviewAndRun(ctx, targets, previewHeader, confirmPrompt, progressHeader, successGlyph, scopeNote, skipConfirm, fn)
 }

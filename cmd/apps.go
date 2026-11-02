@@ -90,7 +90,10 @@ comma-separated list of keywords, and an app matches if mta_id, app_id,
 app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb
 contains any of them (case-insensitive).
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv — otherwise (including no --output)
+the default toon applies.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -100,6 +103,11 @@ If --regions is omitted the regions from the last login are used.`,
 		orgGUID, _ := cmd.Flags().GetString("org")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv"}); auto != "" {
+				format = auto
+			}
+		}
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 
@@ -435,7 +443,7 @@ func init() {
 	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	appsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
-	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json or .csv) when --format is not explicitly given")
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 }

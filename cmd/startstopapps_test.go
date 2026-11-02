@@ -313,6 +313,40 @@ func TestStartApps_AppsCSV_TargetsDirectlyWithoutOrgScope(t *testing.T) {
 	}
 }
 
+func TestStartApps_AppsCSV_OrgScopeMismatch_YesFlagDefaultsToCurrentScope(t *testing.T) {
+	srv, calls := newSawServer(t, "org1", "my-org", "sp1", "dev",
+		[]sawTestApp{{GUID: "app1", Name: "web-1", State: "STOPPED", SpaceGUID: "sp1"}})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	region := store.APIURLToRegion(srv.URL)
+	// The CSV references the org in the current 'bo orgs' scope (my-org) and
+	// a different one (other-org) that isn't — the second row's app/space
+	// GUIDs don't need to exist anywhere, since it must be filtered out
+	// before any lookup is attempted for it.
+	csvPath := filepath.Join(t.TempDir(), "apps.csv")
+	content := "region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state\n" +
+		region + ",org1,my-org,sp1,dev,,app1,web-1,STOPPED\n" +
+		region + ",org2,other-org,sp2,dev,,app2,web-2,STOPPED\n"
+	if err := os.WriteFile(csvPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing apps CSV: %v", err)
+	}
+
+	stdout, stderr, err := runCmd(t, "start-apps", "--apps", csvPath, "--yes")
+	if err != nil {
+		t.Fatalf("start-apps --apps failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Done: 1 started, 0 failed.") {
+		t.Errorf("expected only the in-scope app to be started, got: %q", stdout)
+	}
+
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if len(calls.started) != 1 || calls.started[0] != "app1" {
+		t.Errorf("expected only app1 started, got: %v", calls.started)
+	}
+}
+
 func TestStartApps_AppsCSV_FiltersByNamePattern(t *testing.T) {
 	srv, calls := newSawServer(t, "org1", "my-org", "sp1", "dev", []sawTestApp{
 		{GUID: "app1", Name: "web-1", State: "STOPPED", SpaceGUID: "sp1"},
