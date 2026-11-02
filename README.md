@@ -122,7 +122,14 @@ mv bo ~/.local/bin/   # optional
 | [`users`](#users) | List XSUAA users across all accessible CF organizations |
 | [`create-users`](#create-users) | Create XSUAA users and assign role collections |
 | [`delete-users`](#delete-users) | Delete XSUAA users across all accessible CF organizations |
+| [`roles`](#roles) | Export XSUAA roles (with attributes) across all accessible CF organizations |
+| [`create-roles`](#create-roles) | Create XSUAA roles from an exported roles file |
+| [`update-roles`](#update-roles) | Update XSUAA roles from an exported roles file |
+| [`delete-roles`](#delete-roles) | Delete XSUAA roles by name pattern, or from an exported roles file |
 | [`role-collections`](#role-collections) | List XSUAA roles and role collections across all accessible CF organizations |
+| [`create-role-collections`](#create-role-collections) | Create XSUAA role collections from an exported role-collections file |
+| [`update-role-collections`](#update-role-collections) | Update XSUAA role collections from an exported role-collections file |
+| [`delete-role-collections`](#delete-role-collections) | Delete XSUAA role collections by name pattern, or from an exported role-collections file |
 
 ### Destination
 
@@ -735,6 +742,121 @@ regions:
 
 Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is prompted before any changes are made.
 
+### `roles`
+
+Export roles, including their attribute lists, from the XSUAA Authorization API across all accessible CF organizations.
+
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
+
+Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
+```bash
+# Export roles across all orgs in the default scope from `bo orgs`
+bo roles
+
+# Fetch roles from a single org by name or GUID
+bo roles --org <org-name-or-guid>
+
+# Include only specific orgs (CSV: region,org_id,org_name)
+bo roles --orgs target-orgs.csv
+
+# JSON output
+bo roles --format json
+
+# Write output to a file, ready to feed into create-roles/update-roles/delete-roles
+bo roles --output roles.json --format json
+```
+
+Output format (TOON):
+```
+regions:
+  - region: us10
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+        roles:
+          - roleTemplateAppId: custom!t1
+            roleTemplateName: Custom_Role_Template
+            role_name: Custom Cost Center Viewer
+            appName: custom
+            description: Restricted to specific cost centers
+            isReadOnly: false
+            attributeList:
+              - attributeName: costcenter
+                attributeValueList: ["1000", "2000"]
+```
+
+### `create-roles`
+
+Create roles in the XSUAA (Authorization and Trust Management) `apiaccess` service.
+
+```
+bo create-roles --roles <roles.json> [-y]
+```
+
+`<roles.json>` (or `.toon`) is a JSON or TOON document in the same shape `bo roles` writes — `regions -> orgs -> roles`, each role carrying `roleTemplateAppId`, `roleTemplateName`, `role_name`, `description`, and an optional `attributeList`. It can be produced by `bo roles --format json`/`bo roles --format toon`, or hand-authored. Only the orgs referenced in the file have their XSUAA tokens resolved.
+
+If a role with the same identity already exists (HTTP 409), creation is skipped for it.
+
+```bash
+# Export, edit, then create
+bo roles --org <org-guid> --format json -o roles.json
+# ... edit roles.json to add/adjust entries ...
+bo create-roles --roles roles.json
+
+# Skip confirmation prompt
+bo create-roles --roles roles.json -y
+```
+
+Without `-y`, a TOON preview of all roles to be created is shown and `Proceed with role creation? [y/N]` is prompted before any changes are made.
+
+### `update-roles`
+
+Update roles' description and `attributeList` in the XSUAA `apiaccess` service.
+
+```
+bo update-roles --roles <roles.json> [-y]
+```
+
+Same file shape as `create-roles`. Each role is matched against the server by `roleTemplateAppId` + `roleTemplateName` + `role_name`. If a referenced role doesn't exist (HTTP 404), it is skipped with a warning — run `bo create-roles` first.
+
+```bash
+bo roles --org <org-guid> --format json -o roles.json
+# ... edit roles.json (e.g. change an attributeList) ...
+bo update-roles --roles roles.json -y
+```
+
+### `delete-roles`
+
+Delete roles from the XSUAA `apiaccess` service, either by name pattern across discovered orgs, or from an exported roles file.
+
+```
+bo delete-roles <role_name_pattern> [flags]
+bo delete-roles [role_name_pattern] --roles <roles.json> [-y]
+```
+
+Without `--roles`, `<role_name_pattern>` is required and roles are discovered the same way as `bo roles` (across `--org`/`--orgs`/`--excludeOrgs` or the `bo orgs` default scope) — same glob/substring/`!`-negation pattern syntax as `delete-service-keys`. With `--roles <file>` (same shape as `create-roles`), only the orgs/roles in the file are targeted — `--org`/`--orgs`/`--excludeOrgs`/`--regions` and the default org scope are ignored — and `<role_name_pattern>` becomes optional (default `*`), still narrowing the file's roles by name.
+
+⚠️ This is destructive and cannot be undone.
+
+```bash
+# Discover and delete by pattern
+bo delete-roles "Custom_*" -y
+
+# Delete exactly the roles listed in an exported file
+bo roles --org <org-guid> -o roles.json --format json
+bo delete-roles --roles roles.json -y
+
+# Delete only a subset of the file's roles
+bo delete-roles "Custom Role A" --roles roles.json -y
+```
+
+Without `-y`, a TOON preview of all roles to be deleted is shown and `This cannot be undone. Proceed? [y/N]` is prompted before any changes are made.
+
 ### `role-collections`
 
 List XSUAA roles and role collections (with their role references) across all accessible CF organizations.
@@ -797,6 +919,66 @@ regions:
                 role_name: User and Role Administrator
                 description: Manage authorizations, trusted identity providers, and users.
 ```
+
+### `create-role-collections`
+
+Create role collections (with their role references) in the XSUAA `apiaccess` service.
+
+```
+bo create-role-collections --role-collections <role-collections.json> [-y]
+```
+
+`<role-collections.json>` (or `.toon`) is a JSON or TOON document in the same shape `bo role-collections` writes — `regions -> orgs -> roleCollections` (its `roles` field, if present, is ignored). It can be produced by `bo role-collections --format json`/`--format toon`, or hand-authored. Only the orgs referenced in the file have their XSUAA tokens resolved.
+
+If a role collection with the same name already exists (HTTP 409), creation is skipped for it.
+
+```bash
+bo role-collections --org <org-guid> --format json -o role-collections.json
+# ... edit role-collections.json ...
+bo create-role-collections --role-collections role-collections.json -y
+```
+
+Without `-y`, a TOON preview of all role collections to be created is shown and confirmation is required before any changes are made.
+
+### `update-role-collections`
+
+Update role collections in the XSUAA `apiaccess` service.
+
+```
+bo update-role-collections --role-collections <role-collections.json> [-y]
+```
+
+Same file shape as `create-role-collections`. Each role collection is matched by name, and the update **fully replaces** its description and `roleReferences` with what the file specifies — a role reference present on the server but absent from the file is removed. If a referenced role collection doesn't exist (HTTP 404), it is skipped with a warning — run `bo create-role-collections` first.
+
+```bash
+bo role-collections --org <org-guid> --format json -o role-collections.json
+# ... edit role-collections.json (e.g. add/remove a roleReferences entry) ...
+bo update-role-collections --role-collections role-collections.json -y
+```
+
+### `delete-role-collections`
+
+Delete role collections from the XSUAA `apiaccess` service, either by name pattern across discovered orgs, or from an exported role-collections file.
+
+```
+bo delete-role-collections <role_collection_name_pattern> [flags]
+bo delete-role-collections [role_collection_name_pattern] --role-collections <role-collections.json> [-y]
+```
+
+Without `--role-collections`, `<role_collection_name_pattern>` is required and role collections are discovered the same way as `bo role-collections` (across `--org`/`--orgs`/`--excludeOrgs` or the `bo orgs` default scope). With `--role-collections <file>` (same shape as `create-role-collections`), only the orgs/role collections in the file are targeted and the name pattern becomes optional (default `*`).
+
+⚠️ This is destructive and cannot be undone.
+
+```bash
+# Discover and delete by pattern
+bo delete-role-collections "Temp_*" -y
+
+# Delete exactly the role collections listed in an exported file
+bo role-collections --org <org-guid> -o role-collections.json --format json
+bo delete-role-collections --role-collections role-collections.json -y
+```
+
+Without `-y`, a TOON preview of all role collections to be deleted is shown and confirmation is required before any changes are made.
 
 ### `describe-subaccount`
 

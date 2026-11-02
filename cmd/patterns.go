@@ -3,7 +3,23 @@ package cmd
 import (
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
+
+// optionalPatternArgsIfFlagSet returns a cobra Args validator for a command
+// whose single positional name-pattern argument is normally required, but
+// becomes optional when flagName was explicitly passed (because that flag
+// supplies its own exact targets, e.g. a CSV/JSON file, making the pattern
+// argument an optional further filter rather than a required target).
+func optionalPatternArgsIfFlagSet(flagName string) func(cmd *cobra.Command, args []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed(flagName) {
+			return cobra.MaximumNArgs(1)(cmd, args)
+		}
+		return cobra.ExactArgs(1)(cmd, args)
+	}
+}
 
 // matchesNegatablePattern reports whether name is selected by patternsCSV, a
 // comma-separated list of patterns. Each pattern is treated as a glob (via

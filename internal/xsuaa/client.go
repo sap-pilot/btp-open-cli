@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,15 @@ import (
 	"strings"
 	"time"
 )
+
+// ErrAlreadyExists is returned by Create* functions when the XSUAA API
+// reports the resource already exists (HTTP 409) — callers typically treat
+// this as a no-op rather than a failure.
+var ErrAlreadyExists = errors.New("already exists")
+
+// ErrNotFound is returned by Update*/Delete* functions when the XSUAA API
+// reports the resource does not exist (HTTP 404).
+var ErrNotFound = errors.New("not found")
 
 // ── types ─────────────────────────────────────────────────────────────────────
 
@@ -225,14 +235,24 @@ func ListUsers(ctx context.Context, apiBaseURL, accessToken string) ([]User, err
 
 // ── roles ─────────────────────────────────────────────────────────────────────
 
-// Role represents a single XSUAA authorization role.
+// RoleAttribute is a single attribute restriction carried by a role, scoping
+// what the role authorizes (e.g. a cost center or region value list).
+type RoleAttribute struct {
+	AttributeName      string   `json:"attributeName"`
+	AttributeValueList []string `json:"attributeValueList"`
+}
+
+// Role represents a single XSUAA authorization role. A role is uniquely
+// identified within a subaccount by the combination of Name,
+// RoleTemplateAppID, and RoleTemplateName.
 type Role struct {
-	RoleTemplateAppID string `json:"roleTemplateAppId"`
-	RoleTemplateName  string `json:"roleTemplateName"`
-	Name              string `json:"name"`
-	AppName           string `json:"appName"`
-	Description       string `json:"description"`
-	IsReadOnly        bool   `json:"isReadOnly"`
+	RoleTemplateAppID string          `json:"roleTemplateAppId"`
+	RoleTemplateName  string          `json:"roleTemplateName"`
+	Name              string          `json:"name"`
+	AppName           string          `json:"appName"`
+	Description       string          `json:"description"`
+	IsReadOnly        bool            `json:"isReadOnly"`
+	AttributeList     []RoleAttribute `json:"attributeList,omitempty"`
 }
 
 // RoleReference is a role reference inside a role collection.
@@ -305,6 +325,190 @@ func ListRoleCollections(ctx context.Context, apiBaseURL, accessToken string) ([
 		return nil, fmt.Errorf("parsing XSUAA role collections response: %w", err)
 	}
 	return rcs, nil
+}
+
+// CreateRole creates a new XSUAA authorization role via POST /roles.
+// Returns ErrAlreadyExists if a role with the same identity already exists
+// (HTTP 409).
+func CreateRole(ctx context.Context, apiBaseURL, accessToken string, role Role) error {
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/roles"
+	b, err := json.Marshal(role)
+	if err != nil {
+		return err
+	}
+
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return ErrAlreadyExists
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("XSUAA create role %q failed (HTTP %d): %s", role.Name, resp.StatusCode, body)
+	}
+	return nil
+}
+
+// UpdateRole updates an existing role's description/attributeList via
+// PUT /roles. The role is identified by the combination of Name,
+// RoleTemplateAppID, and RoleTemplateName carried in the body. Returns
+// ErrNotFound if no such role exists (HTTP 404).
+func UpdateRole(ctx context.Context, apiBaseURL, accessToken string, role Role) error {
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/roles"
+	b, err := json.Marshal(role)
+	if err != nil {
+		return err
+	}
+
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "PUT", u, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return fmt.Errorf("PUT %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("XSUAA update role %q failed (HTTP %d): %s", role.Name, resp.StatusCode, body)
+	}
+	return nil
+}
+
+// DeleteRole deletes a role identified by name, roleTemplateAppID, and
+// roleTemplateName via DELETE /roles/{name}. Returns ErrNotFound if no such
+// role exists (HTTP 404).
+func DeleteRole(ctx context.Context, apiBaseURL, accessToken, name, roleTemplateAppID, roleTemplateName string) error {
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/roles/" + url.PathEscape(name) +
+		"?roleTemplateAppId=" + url.QueryEscape(roleTemplateAppID) + "&roleTemplateName=" + url.QueryEscape(roleTemplateName)
+
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("XSUAA delete role %q failed (HTTP %d): %s", name, resp.StatusCode, body)
+	}
+	return nil
+}
+
+// CreateRoleCollection creates a new role collection (including its
+// roleReferences) via POST /rolecollections. Returns ErrAlreadyExists if a
+// collection with the same name already exists (HTTP 409).
+func CreateRoleCollection(ctx context.Context, apiBaseURL, accessToken string, rc RoleCollection) error {
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections"
+	b, err := json.Marshal(rc)
+	if err != nil {
+		return err
+	}
+
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return fmt.Errorf("POST %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return ErrAlreadyExists
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("XSUAA create role collection %q failed (HTTP %d): %s", rc.Name, resp.StatusCode, body)
+	}
+	return nil
+}
+
+// UpdateRoleCollection replaces an existing role collection's description and
+// full set of roleReferences via PUT /rolecollections/{name}. Returns
+// ErrNotFound if no such collection exists (HTTP 404).
+func UpdateRoleCollection(ctx context.Context, apiBaseURL, accessToken string, rc RoleCollection) error {
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections/" + url.PathEscape(rc.Name)
+	b, err := json.Marshal(rc)
+	if err != nil {
+		return err
+	}
+
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "PUT", u, bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return fmt.Errorf("PUT %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("XSUAA update role collection %q failed (HTTP %d): %s", rc.Name, resp.StatusCode, body)
+	}
+	return nil
+}
+
+// DeleteRoleCollection deletes a role collection by name via
+// DELETE /rolecollections/{name}. Returns ErrNotFound if no such collection
+// exists (HTTP 404).
+func DeleteRoleCollection(ctx context.Context, apiBaseURL, accessToken, name string) error {
+	u := strings.TrimRight(apiBaseURL, "/") + "/sap/rest/authorization/v2/rolecollections/" + url.PathEscape(name)
+
+	resp, body, err := doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "DELETE", u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", u, err)
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("XSUAA delete role collection %q failed (HTTP %d): %s", name, resp.StatusCode, body)
+	}
+	return nil
 }
 
 // CreateUser provisions a new user in the XSUAA tenant via the SCIM API.

@@ -131,7 +131,7 @@ they're logged in.
 ## Core building blocks
 
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
-  `org-users`, `org-space-users`, `users`, `apps`, `role-collections`,
+  `org-users`, `org-space-users`, `users`, `apps`, `roles`, `role-collections`,
   `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
   `count-lines`, `service-credentials` (this one outputs raw secrets — see
   "Handling commands that output secrets" below before using it),
@@ -148,7 +148,10 @@ they're logged in.
   below), `delete-service-keys` (irreversibly deletes service keys — see
   guardrail #12 below), `start-apps`, `stop-apps`, `restart-apps`,
   `restage-apps` (app lifecycle actions, scoped by name pattern — see
-  guardrail #13 below).
+  guardrail #13 below), `create-roles`, `update-roles`, `delete-roles`,
+  `create-role-collections`, `update-role-collections`,
+  `delete-role-collections` (XSUAA role/role-collection management from an
+  exported file or by name pattern — see guardrail #14 below).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -174,8 +177,10 @@ Read all of these before running any command from the "Write" list above.
    exactly which rows/orgs will be affected before running the write command.
 2. **Never add `-y`/`--yes` on your own initiative.** `create-users`,
    `delete-users`, `create-org-space-users`, `delete-org-space-users`,
-   `create-service-keys`, and `delete-service-instances` print a full TOON
-   preview and ask `Proceed? [y/N]` (or the `[u/c/a]` variant, for
+   `create-service-keys`, `delete-service-instances`, `create-roles`,
+   `update-roles`, `delete-roles`, `create-role-collections`,
+   `update-role-collections`, and `delete-role-collections` print a full
+   TOON preview and ask `Proceed? [y/N]` (or the `[u/c/a]` variant, for
    `create-service-keys`) before touching anything. Get that preview in
    front of the user (or reproduce it and get explicit approval) before
    adding `-y` — don't skip straight to `-y` because it's "obviously" what
@@ -283,6 +288,40 @@ Read all of these before running any command from the "Write" list above.
       `bo apps --include STARTED --format csv -o started.csv` followed by
       `bo restage-apps --apps started.csv -y`. The name-pattern argument
       becomes optional in this mode (default `*`).
+14. **`create-roles`/`update-roles`/`delete-roles` and
+    `create-role-collections`/`update-role-collections`/
+    `delete-role-collections` take a `--roles`/`--role-collections <file>` —
+    a JSON/TOON document in the exact `regions -> orgs -> roles` /
+    `regions -> orgs -> roleCollections` shape that `bo roles` /
+    `bo role-collections` write (get one via `bo roles --format json -o
+    roles.json`, edit it, then pass it back).** Always get that export, show
+    the user the exact entries that will be created/updated/deleted (its
+    `regions`/`orgs`/`role`(`Collection`) breakdown), and have them confirm
+    before running the write command — don't hand-author one of these files
+    from memory. A few specifics:
+    - `create-*` silently skips (no error) a role/role collection that
+      already exists (HTTP 409) rather than failing the whole run.
+    - `update-*` warns and skips (doesn't fail the run) a role/role
+      collection that doesn't exist (HTTP 404) — tell the user to run the
+      matching `create-*` first if that happens unexpectedly.
+    - **`update-role-collections` fully replaces each collection's
+      `roleReferences`** with exactly what the file specifies — a role
+      reference that's on the server but missing from the file is removed,
+      not left alone. Confirm the file's `roleReferences` list for each
+      collection is complete, not just the roles the user wants to add.
+    - `delete-roles`/`delete-role-collections` work two ways: a required
+      `<name_pattern>` that discovers roles/collections across the normal
+      org/space scope (same glob/substring/`!`-negation as
+      `delete-service-keys`), or `--roles`/`--role-collections <file>` which
+      instead targets *exactly* the orgs/entries the file lists — ignoring
+      `--org`/`--orgs`/`--excludeOrgs`/`--regions`/the `bo orgs` default
+      scope entirely — with the name pattern becoming optional (default
+      `*`) in that mode. Confirm with the user which of the two modes they
+      mean; a bare pattern with no `--roles`/`--role-collections` can match
+      far more than intended, the same caution as `delete-service-keys`.
+    - These commands exist because they modify who has administrative
+      access to a subaccount — treat every call as security-sensitive, not
+      just "another bulk write."
 
 ## Handling commands that output secrets
 

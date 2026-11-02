@@ -14,6 +14,28 @@
   bo restart-apps --apps started-apps.csv --strategy rolling -y
   ```
 
+- **`roles`, `create-roles`, `update-roles`, `delete-roles` — manage XSUAA roles**
+
+  `roles` exports roles, including their `attributeList`, from the XSUAA Authorization API across accessible orgs (same discovery/scope flags as `role-collections`/`users`). `create-roles --roles <file>` and `update-roles --roles <file>` take a JSON/TOON document in the same `regions -> orgs -> roles` shape `roles` writes (or hand-authored) and create or update each role — `create-roles` skips a role that already exists (HTTP 409); `update-roles` warns and skips a role that doesn't exist (HTTP 404). `delete-roles <role_name_pattern>` deletes by discovering roles across orgs in scope, same pattern syntax as `delete-service-keys`; passing `--roles <file>` instead targets exactly the orgs/roles the file lists (bypassing `--org`/`--orgs`/`--excludeOrgs`/`--regions`/the `bo orgs` default scope) and makes the name pattern optional. All three mutating commands show a TOON preview and require `[y/N]` confirmation unless `-y` is given.
+
+  ```bash
+  bo roles --org <org-guid> --format json -o roles.json
+  bo create-roles --roles roles.json -y
+  bo update-roles --roles roles.json -y
+  bo delete-roles "Custom_*" -y
+  ```
+
+- **`create-role-collections`, `update-role-collections`, `delete-role-collections` — manage XSUAA role collections**
+
+  Companions to the existing `role-collections` export: `create-role-collections --role-collections <file>` and `update-role-collections --role-collections <file>` take a JSON/TOON document in the same `regions -> orgs -> roleCollections` shape `role-collections` writes (its `roles` field, if present, is ignored) and create or update each role collection (full replace of `roleReferences` on update) — same 409/404-skip behavior as the roles commands above. `delete-role-collections <role_collection_name_pattern>` deletes by discovery (same pattern syntax), or targets exactly a `--role-collections <file>`'s contents with an optional name pattern. All three show a TOON preview and require `[y/N]` confirmation unless `-y` is given.
+
+  ```bash
+  bo role-collections --org <org-guid> --format json -o role-collections.json
+  bo create-role-collections --role-collections role-collections.json -y
+  bo update-role-collections --role-collections role-collections.json -y
+  bo delete-role-collections "Temp_*" -y
+  ```
+
 ### Changed
 
 - **`orgs` — `--output` skips the picker and dumps the accessible org list directly**
@@ -24,6 +46,10 @@
   bo orgs --output my-orgs.csv --format csv
   bo orgs --include prod --format csv -o prod-orgs.csv
   ```
+
+- **Upgraded `toon-format/toon-go` to v1.0.1**
+
+  The previous pinned commit's TOON decoder failed to parse its own encoder's output for any array nested two or more levels deep inside a list item (e.g. `regions -> orgs -> roles`, or an org's own nested `roleCollections -> roleReferences`) — exactly the shape of most of this CLI's own TOON output. v1.0.1 fixes this, which `create-roles`/`update-roles`/`delete-roles --roles` and `create-role-collections`/`update-role-collections`/`delete-role-collections --role-collections` (above) rely on to accept `--format toon` input, not just JSON.
 
 ## v0.19.0 — 2026-10-27
 
