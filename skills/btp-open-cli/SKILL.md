@@ -275,6 +275,14 @@ Read all of these before running any command from the "Write" list above.
       something to retry blindly.
     - Loose patterns (e.g. `*`) can match far more apps than intended, same
       caution as `delete-service-instances`/`delete-service-keys`.
+    - All four also accept `--apps <file>` to target exact apps by GUID from
+      a CSV (same columns as `bo apps --format csv`: `region_id`, `org_name`,
+      `space_id`, `space_name`, `app_id`, `app_name`), bypassing all
+      org/space scope flags and the `bo orgs` default scope entirely — useful
+      for "restart/restage only the apps that were already running", e.g.
+      `bo apps --include STARTED --format csv -o started.csv` followed by
+      `bo restage-apps --apps started.csv -y`. The name-pattern argument
+      becomes optional in this mode (default `*`).
 
 ## Handling commands that output secrets
 

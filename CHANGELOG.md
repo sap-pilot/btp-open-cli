@@ -2,6 +2,18 @@
 
 ## v0.20.0 — 2026-10-28
 
+### Added
+
+- **`start-apps`/`stop-apps`/`restart-apps`/`restage-apps` — `--apps <file>` to target specific apps directly**
+
+  An optional `--apps <file>` flag targets exact apps by GUID instead of discovering them via org/space scanning: `<file>` is a CSV with the columns `region_id`, `org_name`, `space_id`, `space_name`, `app_id`, `app_name` — exactly what `bo apps --format csv` writes, so the natural way to build one is `bo apps --include STARTED --format csv -o apps.csv` (or any other `--include`/`--exclude` filter) and reuse its output here. When `--apps` is given, the previously-required `<app_name_patterns>` positional argument becomes optional (defaulting to `*`, every CSV row) and still further narrows the CSV's rows by `app_name`; `--org`, `--orgs`, `--excludeOrgs`, `--spaces`, `--space`, `--regions`, and the default org scope selected via `bo orgs` are all ignored in this mode (with a warning on stderr if any of them were also passed), since each CSV row already names its own exact region/org/space/app. The primary use case is restarting/restaging only apps that were already running — snapshot them first, then act on exactly that snapshot:
+
+  ```bash
+  bo apps --include STARTED --format csv -o started-apps.csv
+  bo restage-apps --apps started-apps.csv -y
+  bo restart-apps --apps started-apps.csv --strategy rolling -y
+  ```
+
 ### Changed
 
 - **`orgs` — `--output` skips the picker and dumps the accessible org list directly**

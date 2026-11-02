@@ -1573,10 +1573,10 @@ This cannot be undone. Proceed? [y/N]
 Start every app whose name matches a comma-separated list of patterns, across target orgs and spaces.
 
 ```
-bo start-apps <app_name_patterns> [flags]
+bo start-apps [app_name_patterns] [flags]
 ```
 
-If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<app_name_patterns>` is a required, comma-separated list of patterns, e.g. `web-*,worker-*` or `*` (matches every app name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it, same as [`delete-service-keys`](#delete-service-keys).
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<app_name_patterns>` is a comma-separated list of patterns, e.g. `web-*,worker-*` or `*` (matches every app name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it, same as [`delete-service-keys`](#delete-service-keys). It's required unless `--apps` is given (see below), in which case it defaults to `*`.
 
 ```bash
 # Start every app named "web-*" or "worker-*" in the default org scope
@@ -1587,6 +1587,19 @@ bo start-apps "web-*" --orgs target-orgs.csv --spaces prod
 
 # Non-interactive (for scripts)
 bo start-apps "web-*" -y
+```
+
+**`--apps <file>` targets specific apps directly, bypassing org/space discovery entirely.** `<file>` is a CSV with the columns `region_id`, `org_name`, `space_id`, `space_name`, `app_id`, `app_name` — exactly what [`bo apps --format csv`](#apps) writes, so the straightforward way to build one is to run that command with whatever `--include`/`--exclude` filter picks out the apps you want and reuse its output here. When `--apps` is given, `<app_name_patterns>` becomes optional (default `*`, every CSV row) and still further narrows the CSV's rows by `app_name`; `--org`, `--orgs`, `--excludeOrgs`, `--spaces`, `--space`, `--regions`, and the default org scope selected via `bo orgs` are all ignored (with a warning on stderr if any of the flags among them were also passed), since each CSV row already names its own exact region/org/space/app.
+
+```bash
+# Snapshot every currently-STARTED app account-wide, then restart exactly
+# those apps later (e.g. after a maintenance window) — see restart-apps/
+# restage-apps below for the matching use case
+bo apps --include STARTED --format csv -o started-apps.csv
+bo start-apps --apps started-apps.csv -y
+
+# Further narrow the CSV to just the FI-* apps within it
+bo start-apps "FI-*" --apps started-apps.csv -y
 ```
 
 Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state) and a plain `Proceed? [y/N]` confirmation is required:
@@ -1609,10 +1622,10 @@ Proceed? [y/N]
 
 ### `stop-apps`
 
-Stop every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), just in reverse.
+Stop every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags (including `--apps <file>` to target specific apps directly instead), pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), just in reverse.
 
 ```
-bo stop-apps <app_name_patterns> [flags]
+bo stop-apps [app_name_patterns] [flags]
 ```
 
 ```bash
@@ -1628,10 +1641,10 @@ bo stop-apps "web-*" -y
 
 ### `restart-apps`
 
-Restart every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+Restart every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags (including `--apps <file>` to target specific apps directly instead), pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
 
 ```
-bo restart-apps <app_name_patterns> [flags]
+bo restart-apps [app_name_patterns] [flags]
 ```
 
 By default (`--strategy null`, or omitting the flag) a restart is an immediate stop+start via CF's classic "restart" action — it causes downtime. `--strategy rolling` or `--strategy canary` instead restarts with zero downtime, by creating a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) of the app's current droplet with that strategy; canary is marked experimental by CF itself and requires a reasonably recent CF API version.
@@ -1645,14 +1658,19 @@ bo restart-apps "web-*" --strategy rolling
 
 # Narrow to specific orgs and a specific space, non-interactive
 bo restart-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy rolling -y
+
+# Restart only the apps that were already STARTED (e.g. after a planned
+# downtime window), targeted directly from a bo-apps-produced CSV
+bo apps --include STARTED --format csv -o started-apps.csv
+bo restart-apps --apps started-apps.csv --strategy rolling -y
 ```
 
 ### `restage-apps`
 
-Restage every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+Restage every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags (including `--apps <file>` to target specific apps directly instead), pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
 
 ```
-bo restage-apps <app_name_patterns> [flags]
+bo restage-apps [app_name_patterns] [flags]
 ```
 
 By default (`--strategy null`, or omitting the flag) a restage rebuilds a droplet from the app's current package and redeploys it via CF's classic "restage" action — it causes downtime. `--strategy rolling` or `--strategy canary` builds the new droplet the same way but rolls it out with zero downtime instead: it fetches the app's current package, creates a [build](https://v3-apidocs.cloudfoundry.org/#builds), polls it until staging finishes, then deploys the resulting droplet via a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) with that strategy — canary is marked experimental by CF itself and requires a reasonably recent CF API version. CF's v3 API has no single-call equivalent of the classic restage action once a strategy is involved, so this takes noticeably longer per app than the other bulk app commands (it waits for a real build to finish staging).
@@ -1666,6 +1684,11 @@ bo restage-apps "web-*" --strategy rolling
 
 # Narrow to specific orgs and a specific space, non-interactive
 bo restage-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy canary -y
+
+# Restage only the apps that were already STARTED beforehand, targeted
+# directly from a bo-apps-produced CSV
+bo apps --include STARTED --format csv -o started-apps.csv
+bo restage-apps --apps started-apps.csv -y
 ```
 
 ### `reorg-wiki-attachments`

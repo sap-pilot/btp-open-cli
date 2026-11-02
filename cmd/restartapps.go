@@ -9,7 +9,7 @@ import (
 )
 
 var restartAppsCmd = &cobra.Command{
-	Use:   "restart-apps <app_name_patterns>",
+	Use:   "restart-apps [app_name_patterns]",
 	Short: "Restart apps matching name patterns, across orgs and spaces",
 	Long: `Restart every app whose name matches <app_name_patterns> — a comma-separated
 list of patterns, e.g. 'web-*,worker-*' or '*' (matches every app name).
@@ -29,13 +29,26 @@ If neither --org nor --orgs is given, the default org scope selected via
 (comma-separated, exact, case-insensitive) within each target org; if
 omitted, every accessible space in scope is searched.
 
+Pass --apps <file> to target specific apps directly instead, skipping all
+org/space discovery: <file> is a CSV with the columns region_id, org_name,
+space_id, space_name, app_id, app_name — exactly what
+'bo apps --format csv' writes, so the straightforward way to build one is
+'bo apps --include STARTED --format csv -o apps.csv' (any --include/
+--exclude filter works) and reuse its output here — e.g. to restart only
+apps that were already running before some change. When --apps is given,
+<app_name_patterns> becomes optional (default '*', every CSV row) and
+still further narrows the CSV's rows by app_name; --org, --orgs,
+--excludeOrgs, --spaces, --space, --regions, and the default org scope
+selected via 'bo orgs' are all ignored, since each CSV row already names
+its own exact region/org/space/app.
+
 Without -y, every matched app is listed in a TOON preview (org -> space ->
 apps, including each app's current state) and a "Proceed? [y/N]"
 confirmation is required — declining aborts the whole command without
 restarting anything. -y skips this confirmation.
 
 If --regions is omitted the regions from the last login are used.`,
-	Args: cobra.ExactArgs(1),
+	Args: sawAppPatternArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		strategy, err := parseAppStrategy(cmd)
 		if err != nil {
@@ -62,5 +75,6 @@ func init() {
 	restartAppsCmd.Flags().String("spaces", "", "Only include these comma-separated, exact (case-insensitive) space names; default is every accessible space in scope")
 	restartAppsCmd.Flags().String("space", "", "Equivalent to --spaces with a single name (combined with --spaces if both are given)")
 	restartAppsCmd.Flags().String("strategy", "null", "Deployment strategy for a zero-downtime restart: canary, rolling, or null (default — classic, downtime-causing restart)")
+	restartAppsCmd.Flags().String("apps", "", "Path to CSV of apps to target directly (columns: region_id,org_name,space_id,space_name,app_id,app_name — as produced by 'bo apps --format csv'); bypasses --org/--orgs/--excludeOrgs/--spaces/--space/--regions and the 'bo orgs' default scope")
 	restartAppsCmd.Flags().BoolP("yes", "y", false, "Skip the confirmation prompt")
 }
