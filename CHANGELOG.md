@@ -4,6 +4,17 @@
 
 ### Added
 
+- **`apps --include-env` and new `update-apps-env` — export and replay apps' user-provided environment variables**
+
+  `apps --include-env` fetches and includes each app's own user-provided environment variables (the ones `cf set-env` manages — not `VCAP_SERVICES` or any other derived/system environment) as a new `app_env` field (object in JSON/TOON, a JSON-encoded string in the CSV column of the same name), via one extra API call per app; a per-app fetch failure is reported as a warning on stderr rather than aborting the command. Secret/password/key-named variables are included in full, never masked or skipped, since they're exactly what `update-apps-env` needs to recreate on a target app; the only variable always excluded is `DEPLOY_ATTRIBUTES` (deploy-tooling noise, not meaningful to replay onto another org/space). This is sensitive output — treat it the same as `service-credentials`.
+
+  `update-apps-env <apps-env-file>` reads a JSON/TOON file in that same shape (typically `bo apps --include-env`'s own output) and creates/updates each app's environment variables — a key-level merge via the CF API, so existing keys not present in the file are left untouched. The target space and app are located by exact name (case-insensitive) within the target org — never by the file's own `app_id`/`space_id`/`org_id` — since the **source org/space recorded in the file and the target org this command writes to are not necessarily the same**: same cross-subaccount retargeting as `update-roles`/`update-role-collections` — a default org scope selected via `bo orgs` retargets every app in the file onto those org(s), discarding the file's own org assignment entirely; with no default scope, each app's own org is used. Without `-y`, a preview table is shown and `[y/N]` confirmation is required; any environment variable whose name ends in `KEY`, `SECRET`, `PASSWORD`, or `PASSWD` has its value masked as `********` in that preview, never shown in plain text.
+
+  ```bash
+  bo apps --org <org-guid> --include-env --format json -o apps-env.json
+  bo update-apps-env apps-env.json -y
+  ```
+
 - **`start-apps`/`stop-apps`/`restart-apps`/`restage-apps` — `--apps <file>` to target specific apps directly**
 
   An optional `--apps <file>` flag targets exact apps by GUID instead of discovering them via org/space scanning: `<file>` is a CSV with the columns `region_id`, `org_name`, `space_id`, `space_name`, `app_id`, `app_name` — exactly what `bo apps --format csv` writes, so the natural way to build one is `bo apps --include STARTED --format csv -o apps.csv` (or any other `--include`/`--exclude` filter) and reuse its output here. When `--apps` is given, the previously-required `<app_name_patterns>` positional argument becomes optional (defaulting to `*`, every CSV row) and still further narrows the CSV's rows by `app_name`; `--org`, `--orgs`, `--excludeOrgs`, `--spaces`, `--space`, `--regions`, and the default org scope selected via `bo orgs` are all ignored in this mode (with a warning on stderr if any of them were also passed), since each CSV row already names its own exact region/org/space/app. The primary use case is restarting/restaging only apps that were already running — snapshot them first, then act on exactly that snapshot:

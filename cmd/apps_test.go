@@ -248,6 +248,57 @@ func TestApps_ExplicitFormatOverridesOutputExtension(t *testing.T) {
 	}
 }
 
+func TestApps_IncludeEnv(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+		"/v3/apps/app1/environment_variables": mustJSONStr(map[string]interface{}{"var": map[string]string{
+			"FOO":               "bar",
+			"MY_SECRET":         "s3cr3t",
+			"DEPLOY_ATTRIBUTES": "{\"foo\":\"bar\"}",
+		}}),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-env", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps --include-env failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"app_env"`) || !strings.Contains(stdout, `"FOO": "bar"`) {
+		t.Errorf("expected app_env with FOO=bar in output, got: %q", stdout)
+	}
+	// Secret-named variables must be included in full, never masked.
+	if !strings.Contains(stdout, `"MY_SECRET": "s3cr3t"`) {
+		t.Errorf("expected MY_SECRET's real value in output (never masked), got: %q", stdout)
+	}
+	// DEPLOY_ATTRIBUTES is deploy-tooling noise and must be excluded.
+	if strings.Contains(stdout, "DEPLOY_ATTRIBUTES") {
+		t.Errorf("expected DEPLOY_ATTRIBUTES to be skipped, got: %q", stdout)
+	}
+}
+
+func TestApps_WithoutIncludeEnv_NoEnvField(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "apps", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps failed: %v", err)
+	}
+	if strings.Contains(stdout, "app_env") {
+		t.Errorf("expected no app_env field without --include-env, got: %q", stdout)
+	}
+}
+
 func TestApps_OrgFilter(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": mustJSONStr(map[string]interface{}{

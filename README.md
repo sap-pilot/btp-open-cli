@@ -103,6 +103,7 @@ mv bo ~/.local/bin/   # optional
 | [`create-org-space-users`](#create-org-space-users) | Add users with org and space roles from a CSV file |
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
+| [`update-apps-env`](#update-apps-env) | Create/update apps' user-provided environment variables from a `bo apps --include-env` export |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 | [`service-instances`](#service-instances) | List service instances across orgs and spaces, optionally including user-provided credentials |
@@ -1449,6 +1450,10 @@ bo apps --output apps.csv
 
 # Likewise, .json is auto-detected as --format json
 bo apps --output apps.json
+
+# Also fetch each app's own user-provided environment variables (app_env) —
+# feed the result straight into `bo update-apps-env` to replay it elsewhere
+bo apps --include-env --format json -o apps-env.json
 ```
 
 `--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json` — pass `--format` explicitly to override.
@@ -1475,9 +1480,33 @@ regions:
                 process_disk_in_mb: 1024
 ```
 
-CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
+CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb,app_env`
 
 The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+
+`--include-env` adds an `app_env` field (object in JSON/TOON, a JSON-encoded string in the `app_env` CSV column) with each app's own user-provided environment variables — the ones `cf set-env`/`bo update-apps-env` manage, not `VCAP_SERVICES` or any other derived/system environment. It costs one extra API call per app and requires at least Space Developer access to each app's space; a per-app failure is reported as a warning on stderr rather than aborting the command, and that app is simply left without `app_env`. Secret/password/key-named variables are included in full, never masked or skipped — they're exactly what `bo update-apps-env` needs to recreate on a target app. The only variable always excluded is `DEPLOY_ATTRIBUTES`, injected by deploy tooling rather than set by a user and not meaningful to replay onto another org/space. This is sensitive output — see "Handling commands that output secrets" in the skill doc, and treat it the same as `service-credentials`' output below.
+
+### `update-apps-env`
+
+Create/update apps' own user-provided environment variables (the ones `cf set-env` manages) from a JSON or TOON file in the same `regions -> orgs -> spaces -> apps` shape `bo apps --include-env` writes (or hand-authored with the same shape and an `app_env` object per app).
+
+```bash
+bo update-apps-env apps-env.json [-y]
+```
+
+```bash
+# Export, edit app_env as needed, then replay
+bo apps --org <org-guid> --include-env --format json -o apps-env.json
+bo update-apps-env apps-env.json -y
+```
+
+For every app that has an `app_env`, the target space is located by exact name (case-insensitive) within the target org, and the target app is then located by exact name (case-insensitive) within that space — never by the file's own `app_id`/`space_id`/`org_id`, which belong to wherever the file was exported from and would almost certainly be wrong for a different org. The update itself is a key-level merge via the CF API: existing environment variable keys not present in the file's `app_env` are left untouched. `DEPLOY_ATTRIBUTES`, if present in the file, is always skipped (same as `bo apps --include-env` itself never including it) rather than written to the target app. An app whose target org has no matching space, or whose target space has no matching app, is skipped with a warning on stderr rather than aborting the run.
+
+As with `update-roles`/`update-role-collections`, the **source org/space recorded in the file and the target org this command writes to are not necessarily the same**: if a default org scope is currently selected via [`bo orgs`](#orgs), every app in the file is retargeted onto those org(s) instead of the file's own, discarding the file's own org assignment entirely. If no default org scope is selected, each app's own org (exactly as specified in the file) is used.
+
+Without `-y`, a preview table (region, org, space, app, env) is shown and `[y/N]` confirmation is required before anything is changed. Any environment variable whose name (case-insensitive) ends in `KEY`, `SECRET`, `PASSWORD`, or `PASSWD` has its value masked as `********` in that preview — never shown in plain text — though the real value is always what's actually sent to the CF API.
+
+Updating an app's environment variables does not by itself make a running instance pick up the new values — restart or restage it afterwards (see [`restart-apps`](#restart-apps)/[`restage-apps`](#restage-apps)).
 
 ### `service-credentials`
 

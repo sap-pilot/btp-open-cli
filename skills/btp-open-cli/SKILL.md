@@ -151,7 +151,10 @@ they're logged in.
   guardrail #13 below), `create-roles`, `update-roles`, `delete-roles`,
   `create-role-collections`, `update-role-collections`,
   `delete-role-collections` (XSUAA role/role-collection management from an
-  exported file or by name pattern — see guardrail #14 below).
+  exported file or by name pattern — see guardrail #14 below),
+  `update-apps-env` (creates/updates apps' user-provided environment
+  variables from a `bo apps --include-env` export — see guardrail #15
+  below).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -179,8 +182,9 @@ Read all of these before running any command from the "Write" list above.
    `delete-users`, `create-org-space-users`, `delete-org-space-users`,
    `create-service-keys`, `delete-service-instances`, `create-roles`,
    `update-roles`, `delete-roles`, `create-role-collections`,
-   `update-role-collections`, and `delete-role-collections` print a full
-   TOON preview and ask `Proceed? [y/N]` (or the `[u/c/a]` variant, for
+   `update-role-collections`, `delete-role-collections`, and
+   `update-apps-env` print a full TOON preview and ask `Proceed? [y/N]`
+   (or the `[u/c/a]` variant, for
    `create-service-keys`) before touching anything. Get that preview in
    front of the user (or reproduce it and get explicit approval) before
    adding `-y` — don't skip straight to `-y` because it's "obviously" what
@@ -367,19 +371,68 @@ Read all of these before running any command from the "Write" list above.
     - These commands exist because they modify who has administrative
       access to a subaccount — treat every call as security-sensitive, not
       just "another bulk write."
+15. **`update-apps-env` reads a `bo apps --include-env` export — which is
+    just as sensitive as `service-credentials`' output — and writes app
+    environment variables (which commonly hold secrets) into whatever
+    org(s) end up targeted.** Get the export (`bo apps --org <org-guid>
+    --include-env --format json -o apps-env.json`) and show the user its
+    `app_env` entries (mask or redact actual secret values when relaying
+    them back, same as "Handling commands that output secrets" below)
+    before running the write command — don't hand-author one of these files
+    from memory. A few specifics:
+    - Like the six commands in guardrail #14, **it always targets whatever
+      org(s) are currently selected via `bo orgs`, if any are selected** —
+      retargeting every app in the file onto that selection and discarding
+      the file's own org entirely; only with no `bo orgs` selection is each
+      app's own org (as recorded in the file) used. Check the current `bo
+      orgs` selection before running this, the same as for guardrail #14.
+    - Unlike those six, there's no GUID-based identity to carry over even
+      within the *same* org: the target space and app are always re-located
+      by exact name (case-insensitive) in whatever org ends up targeted,
+      never by the file's own `app_id`/`space_id`/`org_id`. A space or app
+      that doesn't exist by that name in the target org is skipped with a
+      warning, not an error — mention this if a run comes back with fewer
+      updates than apps in the file.
+    - It's a key-level *merge*, not a replace: existing environment
+      variables on the target app that aren't in the file's `app_env` are
+      left alone, unlike `update-role-collections`' full-replace semantics
+      for `roleReferences`.
+    - `DEPLOY_ATTRIBUTES`, if present in the file, is always skipped and
+      never written to the target app — it's deploy-tooling noise, not a
+      user-set value. Every other variable, secret-named or not, is sent to
+      the target app exactly as written in the file: nothing is masked or
+      dropped from the *actual update* — masking only ever applies to the
+      confirmation preview's display, next.
+    - The confirmation preview masks any variable whose name ends in `KEY`,
+      `SECRET`, `PASSWORD`, or `PASSWD` as `********` for display only — but
+      every other variable's value is shown in plain text, so treat the full
+      preview output the same as any other secret-bearing command output
+      (don't paste it verbatim into a transcript the user didn't ask to
+      persist).
+    - Updating environment variables doesn't restart the app — a human (or
+      a follow-up `bo restart-apps`/`bo restage-apps`, itself gated by
+      guardrail #13) still needs to apply it.
 
 ## Handling commands that output secrets
 
 `service-credentials` fetches each matching app's live `VCAP_SERVICES`,
+`apps --include-env` fetches each matching app's own user-provided
+environment variables (as `app_env`) — including secret/password/key-named
+ones in full, unmasked, since that's exactly what `update-apps-env` needs
+to recreate them on a target app (the only variable it ever excludes is
+`DEPLOY_ATTRIBUTES`, deploy-tooling noise rather than a real secret) —
 `create-service-keys` creates service keys and fetches their credentials,
-and `service-instances --full` / `service-keys --full` fetch and include
-each matched (user-provided instance's or key's) existing credentials —
-passwords, client secrets, certificates, the lot — printing them as plain
-JSON/TOON/CSV. `service-credentials`, and `service-instances`/
+and `service-instances --full` /
+`service-keys --full` fetch and include each matched (user-provided
+instance's or key's) existing credentials — passwords, client secrets,
+certificates, the lot — printing them as plain JSON/TOON/CSV.
+`service-credentials`, `apps --include-env`, and `service-instances`/
 `service-keys` even with `--full`, are read-only (nothing in BTP changes),
 while `create-service-keys` is a write command that also happens to output
 secrets; the same `service-credentials.json` shape is also what `create-ups`
-later reads as input. Treat all of this as sensitive:
+later reads as input, and `apps --include-env`'s output is what
+`update-apps-env` (see guardrail #15 above) later reads as input. Treat all
+of this as sensitive:
 
 - Prefer `--output <file>` over letting it print to a transcript or chat the
   user didn't ask to persist, and tell the user where the file landed.
@@ -395,8 +448,8 @@ later reads as input. Treat all of this as sensitive:
   `--spaces`/`--service-instances` (on `create-service-keys` and
   `service-instances`), or `--spaces`/`--service-instances`/`--service-keys`
   (on `service-keys`) to the minimum needed, and only pass `--full` on
-  `service-instances`/`service-keys` when you actually need the credentials
-  — omit it for a plain metadata inventory.
+  `service-instances`/`service-keys` (or `--include-env` on `apps`) when you
+  actually need the credentials — omit it for a plain metadata inventory.
 
 ## Example workflows
 
