@@ -111,11 +111,14 @@ they're logged in.
 
 - `bo orgs` (the interactive org picker) requires a real terminal and fails
   fast otherwise. Never run it bare in an agent shell. Instead:
-  - `bo orgs --all` (optionally with `--include`/`--exclude`) selects a scope
-    without prompting, and can persist it via `--format csv -o some.csv` for
-    reuse as `--orgs some.csv` on other commands, or
+  - `bo orgs --output some.csv --format csv` (optionally with
+    `--include`/`--exclude`) skips the picker entirely — no prompting, no
+    default scope change — and dumps the full accessible org list straight to
+    the file, for reuse as `--orgs some.csv` on other commands, or
   - skip `bo orgs` entirely and pass `--org <guid-or-name>` / `--orgs <csv>`
     directly to whichever command you're running.
+  - Note: `--format` is only accepted alongside `--output`, and `--all` has no
+    effect when `--output` is given (nothing is being selected in that mode).
 - Commands with a `[y/N]` confirmation or a "press Enter to retry / type 's'
   to skip / Ctrl-C to abort" prompt read one line from stdin. On closed/EOF
   stdin they abort safely (no changes made) — but if the shell you're given
@@ -128,7 +131,7 @@ they're logged in.
 ## Core building blocks
 
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
-  `org-users`, `org-space-users`, `users`, `apps`, `role-collections`,
+  `org-users`, `org-space-users`, `users`, `apps`, `roles`, `role-collections`,
   `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
   `count-lines`, `service-credentials` (this one outputs raw secrets — see
   "Handling commands that output secrets" below before using it),
@@ -145,7 +148,13 @@ they're logged in.
   below), `delete-service-keys` (irreversibly deletes service keys — see
   guardrail #12 below), `start-apps`, `stop-apps`, `restart-apps`,
   `restage-apps` (app lifecycle actions, scoped by name pattern — see
-  guardrail #13 below).
+  guardrail #13 below), `create-roles`, `update-roles`, `delete-roles`,
+  `create-role-collections`, `update-role-collections`,
+  `delete-role-collections` (XSUAA role/role-collection management from an
+  exported file or by name pattern — see guardrail #14 below),
+  `update-apps-env` (creates/updates apps' user-provided environment
+  variables from a `bo apps --include-env` export — see guardrail #15
+  below).
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -171,8 +180,11 @@ Read all of these before running any command from the "Write" list above.
    exactly which rows/orgs will be affected before running the write command.
 2. **Never add `-y`/`--yes` on your own initiative.** `create-users`,
    `delete-users`, `create-org-space-users`, `delete-org-space-users`,
-   `create-service-keys`, and `delete-service-instances` print a full TOON
-   preview and ask `Proceed? [y/N]` (or the `[u/c/a]` variant, for
+   `create-service-keys`, `delete-service-instances`, `create-roles`,
+   `update-roles`, `delete-roles`, `create-role-collections`,
+   `update-role-collections`, `delete-role-collections`, and
+   `update-apps-env` print a full TOON preview and ask `Proceed? [y/N]`
+   (or the `[u/c/a]` variant, for
    `create-service-keys`) before touching anything. Get that preview in
    front of the user (or reproduce it and get explicit approval) before
    adding `-y` — don't skip straight to `-y` because it's "obviously" what
@@ -272,19 +284,155 @@ Read all of these before running any command from the "Write" list above.
       something to retry blindly.
     - Loose patterns (e.g. `*`) can match far more apps than intended, same
       caution as `delete-service-instances`/`delete-service-keys`.
+    - All four also accept `--apps <file>` to target exact apps by GUID from
+      a CSV (same columns as `bo apps --format csv`: `region_id`, `org_name`,
+      `space_id`, `space_name`, `app_id`, `app_name`), bypassing all
+      org/space scope flags (`--org`/`--orgs`/`--excludeOrgs`/`--spaces`/
+      `--space`/`--regions`) entirely — useful for "restart/restage only the
+      apps that were already running", e.g.
+      `bo apps --include STARTED --format csv -o started.csv` followed by
+      `bo restage-apps --apps started.csv -y`. The name-pattern argument
+      becomes optional in this mode (default `*`). **If a default org scope
+      *is* currently selected via `bo orgs`, it still always wins**: the CSV
+      is filtered down to just the rows whose org is in that selection (no
+      prompt, no `--orgs` override — only `bo orgs` matters here). Only with
+      no `bo orgs` selection is every row in the CSV used as-is. Check
+      whether the user has a `bo orgs` selection active before assuming
+      `-y` will run the CSV unmodified.
+14. **`create-roles`/`update-roles`/`delete-roles` and
+    `create-role-collections`/`update-role-collections`/
+    `delete-role-collections` take a `--roles`/`--role-collections <file>` —
+    a JSON/TOON document in the exact `regions -> orgs -> roles` /
+    `regions -> orgs -> roleCollections` shape that `bo roles` /
+    `bo role-collections` write (get one via `bo roles --format json -o
+    roles.json`, edit it, then pass it back).** Always get that export, show
+    the user the exact entries that will be created/updated/deleted (its
+    `regions`/`orgs`/`role`(`Collection`) breakdown), and have them confirm
+    before running the write command — don't hand-author one of these files
+    from memory. A few specifics:
+    - `create-*` silently skips (no error) a role/role collection that
+      already exists (HTTP 409) rather than failing the whole run.
+    - `update-*` warns and skips (doesn't fail the run) a role/role
+      collection that doesn't exist (HTTP 404) — tell the user to run the
+      matching `create-*` first if that happens unexpectedly.
+    - `create-roles`/`update-roles`/`create-role-collections`/
+      `update-role-collections` all take an optional leading
+      `[name_pattern]` argument (same glob/substring/`!`-negation syntax as
+      `delete-service-keys`) that narrows which entries of the
+      `--roles`/`--role-collections` file are acted on — omitted or `*`
+      means every entry in the file. Confirm with the user whether they
+      want the whole file applied or only a subset before adding a pattern
+      (or before letting it default to "everything").
+    - **`update-role-collections` fully replaces each collection's
+      `roleReferences`** with exactly what the file specifies — a role
+      reference that's on the server but missing from the file is removed,
+      not left alone. Confirm the file's `roleReferences` list for each
+      collection is complete, not just the roles the user wants to add.
+    - `delete-roles`/`delete-role-collections` work two ways: a required
+      `<name_pattern>` that discovers roles/collections across the normal
+      org/space scope (same glob/substring/`!`-negation as
+      `delete-service-keys`), or `--roles`/`--role-collections <file>` which
+      instead targets *exactly* the orgs/entries the file lists — ignoring
+      `--org`/`--excludeOrgs`/`--regions` entirely — with the name pattern
+      becoming optional (default `*`) in that mode. Confirm with the user
+      which of the two modes they mean; a bare pattern with no
+      `--roles`/`--role-collections` can match far more than intended, the
+      same caution as `delete-service-keys`.
+    - **All six (the three roles commands and the three role-collections
+      commands) always target whatever org(s) are currently selected via
+      `bo orgs`, if any are selected — there's no prompt, no `--orgs`
+      override, and no comparison against the file's own orgs.** With a
+      `bo orgs` selection active, every entry in the file is **retargeted**
+      onto every org in that selection, discarding the file's own org
+      assignment entirely. Only when *no* default org scope is selected is
+      each entry's own org (exactly as specified in the file) used. Unlike
+      the `--apps` case above, this is a genuine *relocation*, not a
+      filter: with a `bo orgs` selection active, these commands create (or
+      update/delete) **every** role/role-collection in the file within
+      whatever org is currently selected, even if the file was exported
+      from a completely different subaccount — that's the intended way to
+      replicate a role setup across subaccounts, but it also means a stale
+      `bo orgs` selection silently sends the file's definitions to the
+      *wrong* subaccount. **Before running any of these six commands,
+      always check (or ask) what the user's current `bo orgs` selection
+      is** and confirm that's the subaccount they actually mean to target —
+      if it's wrong, the fix is `bo orgs` to pick the right one, or `bo
+      orgs` then 'c' to clear the selection so the file's own orgs are used
+      instead (the confirmation preview, shown unless `-y`, states this).
+    - When retargeting across subaccounts (or whenever the exported value
+      doesn't match what's actually registered), each role's
+      `roleTemplateAppId` is automatically re-resolved against the target
+      org's own role templates (role-collections: against its existing
+      roles instead, since a reference names a specific role) by matching
+      the app name — everything before `!` — and `roleTemplateName` (and,
+      for role-collections, `role_name` too). This is what makes
+      cross-subaccount replication actually work, since the suffix after
+      `!` is specific to the subaccount the role was exported from.
+    - These commands exist because they modify who has administrative
+      access to a subaccount — treat every call as security-sensitive, not
+      just "another bulk write."
+15. **`update-apps-env` reads a `bo apps --include-env` export — which is
+    just as sensitive as `service-credentials`' output — and writes app
+    environment variables (which commonly hold secrets) into whatever
+    org(s) end up targeted.** Get the export (`bo apps --org <org-guid>
+    --include-env --format json -o apps-env.json`) and show the user its
+    `app_env` entries (mask or redact actual secret values when relaying
+    them back, same as "Handling commands that output secrets" below)
+    before running the write command — don't hand-author one of these files
+    from memory. A few specifics:
+    - Like the six commands in guardrail #14, **it always targets whatever
+      org(s) are currently selected via `bo orgs`, if any are selected** —
+      retargeting every app in the file onto that selection and discarding
+      the file's own org entirely; only with no `bo orgs` selection is each
+      app's own org (as recorded in the file) used. Check the current `bo
+      orgs` selection before running this, the same as for guardrail #14.
+    - Unlike those six, there's no GUID-based identity to carry over even
+      within the *same* org: the target space and app are always re-located
+      by exact name (case-insensitive) in whatever org ends up targeted,
+      never by the file's own `app_id`/`space_id`/`org_id`. A space or app
+      that doesn't exist by that name in the target org is skipped with a
+      warning, not an error — mention this if a run comes back with fewer
+      updates than apps in the file.
+    - It's a key-level *merge*, not a replace: existing environment
+      variables on the target app that aren't in the file's `app_env` are
+      left alone, unlike `update-role-collections`' full-replace semantics
+      for `roleReferences`.
+    - `DEPLOY_ATTRIBUTES`, if present in the file, is always skipped and
+      never written to the target app — it's deploy-tooling noise, not a
+      user-set value. Every other variable, secret-named or not, is sent to
+      the target app exactly as written in the file: nothing is masked or
+      dropped from the *actual update* — masking only ever applies to the
+      confirmation preview's display, next.
+    - The confirmation preview masks any variable whose name ends in `KEY`,
+      `SECRET`, `PASSWORD`, or `PASSWD` as `********` for display only — but
+      every other variable's value is shown in plain text, so treat the full
+      preview output the same as any other secret-bearing command output
+      (don't paste it verbatim into a transcript the user didn't ask to
+      persist).
+    - Updating environment variables doesn't restart the app — a human (or
+      a follow-up `bo restart-apps`/`bo restage-apps`, itself gated by
+      guardrail #13) still needs to apply it.
 
 ## Handling commands that output secrets
 
 `service-credentials` fetches each matching app's live `VCAP_SERVICES`,
+`apps --include-env` fetches each matching app's own user-provided
+environment variables (as `app_env`) — including secret/password/key-named
+ones in full, unmasked, since that's exactly what `update-apps-env` needs
+to recreate them on a target app (the only variable it ever excludes is
+`DEPLOY_ATTRIBUTES`, deploy-tooling noise rather than a real secret) —
 `create-service-keys` creates service keys and fetches their credentials,
-and `service-instances --full` / `service-keys --full` fetch and include
-each matched (user-provided instance's or key's) existing credentials —
-passwords, client secrets, certificates, the lot — printing them as plain
-JSON/TOON/CSV. `service-credentials`, and `service-instances`/
+and `service-instances --full` /
+`service-keys --full` fetch and include each matched (user-provided
+instance's or key's) existing credentials — passwords, client secrets,
+certificates, the lot — printing them as plain JSON/TOON/CSV.
+`service-credentials`, `apps --include-env`, and `service-instances`/
 `service-keys` even with `--full`, are read-only (nothing in BTP changes),
 while `create-service-keys` is a write command that also happens to output
 secrets; the same `service-credentials.json` shape is also what `create-ups`
-later reads as input. Treat all of this as sensitive:
+later reads as input, and `apps --include-env`'s output is what
+`update-apps-env` (see guardrail #15 above) later reads as input. Treat all
+of this as sensitive:
 
 - Prefer `--output <file>` over letting it print to a transcript or chat the
   user didn't ask to persist, and tell the user where the file landed.
@@ -300,16 +448,16 @@ later reads as input. Treat all of this as sensitive:
   `--spaces`/`--service-instances` (on `create-service-keys` and
   `service-instances`), or `--spaces`/`--service-instances`/`--service-keys`
   (on `service-keys`) to the minimum needed, and only pass `--full` on
-  `service-instances`/`service-keys` when you actually need the credentials
-  — omit it for a plain metadata inventory.
+  `service-instances`/`service-keys` (or `--include-env` on `apps`) when you
+  actually need the credentials — omit it for a plain metadata inventory.
 
 ## Example workflows
 
 ### Inventory / audit (read-only, safe to run freely)
 
 ```bash
-# Pick a scope non-interactively and save it for reuse
-bo orgs --all --include prod --format csv -o prod-orgs.csv
+# Dump the accessible org list non-interactively and save it for reuse
+bo orgs --include prod --format csv -o prod-orgs.csv
 
 # User Access Review export across those orgs
 bo users --orgs prod-orgs.csv --format uar.csv -o uar-export.csv

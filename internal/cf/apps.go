@@ -113,6 +113,45 @@ func (c *Client) GetAppEnv(ctx context.Context, appGUID string) (map[string][]ma
 	return resp.SystemEnvJSON.VCAPServices, nil
 }
 
+// appEnvVarsResponse mirrors the CF v3 "environment variables" resource
+// returned by (and accepted by) /v3/apps/:guid/environment_variables.
+type appEnvVarsResponse struct {
+	Var map[string]string `json:"var"`
+}
+
+// GetAppEnvVars fetches an app's own user-provided environment variables
+// (the ones 'cf set-env'/'bo update-apps-env' manage) — not VCAP_SERVICES or
+// any other derived/system environment. Requires at least Space Developer
+// access to the app's space; callers should treat a failure here as a
+// per-app warning rather than aborting a bulk operation across many apps.
+func (c *Client) GetAppEnvVars(ctx context.Context, appGUID string) (map[string]string, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s/environment_variables", c.BaseURL(), appGUID)
+	var resp appEnvVarsResponse
+	if err := c.get(ctx, url, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Var, nil
+}
+
+// UpdateAppEnvVars merges vars into an app's user-provided environment
+// variables via the CF v3 API, which performs a key-level merge — existing
+// keys not present in vars are left untouched, and a key mapped to a JSON
+// null would be removed (not used by any caller today). Returns the full,
+// updated set of environment variables. The app must be restarted/restaged
+// for a running instance to pick up the new values; this call itself does
+// not do that.
+func (c *Client) UpdateAppEnvVars(ctx context.Context, appGUID string, vars map[string]interface{}) (map[string]string, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s/environment_variables", c.BaseURL(), appGUID)
+	body := struct {
+		Var map[string]interface{} `json:"var"`
+	}{Var: vars}
+	var resp appEnvVarsResponse
+	if err := c.patch(ctx, url, body, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Var, nil
+}
+
 // ── start/stop actions ────────────────────────────────────────────────────────
 
 // StartApp starts an app via its v3 "start" action and returns its updated state.

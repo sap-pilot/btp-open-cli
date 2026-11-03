@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -180,6 +182,120 @@ func TestApps_CSV(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "my-app") {
 		t.Errorf("expected app name in CSV, got: %q", stdout)
+	}
+}
+
+func TestApps_OutputExtensionAutoDetectsFormat(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	for _, tc := range []struct {
+		ext           string
+		expectInBody  string
+		explicitFlags []string
+	}{
+		{ext: "csv", expectInBody: "app_name"},
+		{ext: "json", expectInBody: `"app_name"`},
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "apps."+tc.ext)
+
+		args := []string{"apps", "--output", path}
+		args = append(args, tc.explicitFlags...)
+		_, stderr, err := runCmd(t, args...)
+		if err != nil {
+			t.Fatalf("[.%s] apps --output failed: %v\nstderr: %s", tc.ext, err, stderr)
+		}
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("[.%s] reading output file: %v", tc.ext, readErr)
+		}
+		if !strings.Contains(string(body), tc.expectInBody) {
+			t.Errorf("[.%s] expected %q in output, got: %q", tc.ext, tc.expectInBody, string(body))
+		}
+	}
+}
+
+func TestApps_ExplicitFormatOverridesOutputExtension(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "apps.json") // extension says json...
+
+	_, stderr, err := runCmd(t, "apps", "--output", path, "--format", "csv") // ...but --format wins
+	if err != nil {
+		t.Fatalf("apps failed: %v\nstderr: %s", err, stderr)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading output file: %v", err)
+	}
+	if !strings.Contains(string(body), "app_name") || strings.Contains(string(body), `"app_name"`) {
+		t.Errorf("expected plain CSV (not JSON) despite .json extension, got: %q", string(body))
+	}
+}
+
+func TestApps_IncludeEnv(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+		"/v3/apps/app1/environment_variables": mustJSONStr(map[string]interface{}{"var": map[string]string{
+			"FOO":               "bar",
+			"MY_SECRET":         "s3cr3t",
+			"DEPLOY_ATTRIBUTES": "{\"foo\":\"bar\"}",
+		}}),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-env", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps --include-env failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"app_env"`) || !strings.Contains(stdout, `"FOO": "bar"`) {
+		t.Errorf("expected app_env with FOO=bar in output, got: %q", stdout)
+	}
+	// Secret-named variables must be included in full, never masked.
+	if !strings.Contains(stdout, `"MY_SECRET": "s3cr3t"`) {
+		t.Errorf("expected MY_SECRET's real value in output (never masked), got: %q", stdout)
+	}
+	// DEPLOY_ATTRIBUTES is deploy-tooling noise and must be excluded.
+	if strings.Contains(stdout, "DEPLOY_ATTRIBUTES") {
+		t.Errorf("expected DEPLOY_ATTRIBUTES to be skipped, got: %q", stdout)
+	}
+}
+
+func TestApps_WithoutIncludeEnv_NoEnvField(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "apps", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps failed: %v", err)
+	}
+	if strings.Contains(stdout, "app_env") {
+		t.Errorf("expected no app_env field without --include-env, got: %q", stdout)
 	}
 }
 

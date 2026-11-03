@@ -9,7 +9,7 @@ import (
 )
 
 var startAppsCmd = &cobra.Command{
-	Use:   "start-apps <app_name_patterns>",
+	Use:   "start-apps [app_name_patterns]",
 	Short: "Start apps matching name patterns, across orgs and spaces",
 	Long: `Start every app whose name matches <app_name_patterns> — a comma-separated
 list of patterns, e.g. 'web-*,worker-*' or '*' (matches every app name).
@@ -23,13 +23,29 @@ If neither --org nor --orgs is given, the default org scope selected via
 (comma-separated, exact, case-insensitive) within each target org; if
 omitted, every accessible space in scope is searched.
 
+Pass --apps <file> to target specific apps directly instead, skipping all
+org/space discovery: <file> is a CSV with the columns region_id, org_name,
+space_id, space_name, app_id, app_name — exactly what
+'bo apps --format csv' writes, so the straightforward way to build one is
+'bo apps --include STARTED --format csv -o apps.csv' (any --include/
+--exclude filter works) and reuse its output here. When --apps is given,
+<app_name_patterns> becomes optional (default '*', every CSV row) and
+still further narrows the CSV's rows by app_name; --org, --orgs,
+--excludeOrgs, --spaces, --space, and --regions are all ignored, since
+each CSV row already names its own exact region/org/space/app.
+
+The orgs actually acted on depend on whether a default org scope is
+currently selected via 'bo orgs': if one is, the CSV is filtered down to
+just the rows whose org is in that scope. If no default org scope is
+selected, every row in the CSV is used.
+
 Without -y, every matched app is listed in a TOON preview (org -> space ->
 apps, including each app's current state) and a "Proceed? [y/N]"
 confirmation is required — declining aborts the whole command without
 starting anything. -y skips this confirmation.
 
 If --regions is omitted the regions from the last login are used.`,
-	Args: cobra.ExactArgs(1),
+	Args: sawAppPatternArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runStartStopApps(cmd, args, "start", "starting", "started",
 			func(c *cf.Client, ctx context.Context, appGUID string) (*cf.App, error) {
@@ -47,5 +63,6 @@ func init() {
 	startAppsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	startAppsCmd.Flags().String("spaces", "", "Only include these comma-separated, exact (case-insensitive) space names; default is every accessible space in scope")
 	startAppsCmd.Flags().String("space", "", "Equivalent to --spaces with a single name (combined with --spaces if both are given)")
+	startAppsCmd.Flags().String("apps", "", "Path to CSV of apps to target directly (columns: region_id,org_name,space_id,space_name,app_id,app_name — as produced by 'bo apps --format csv'); bypasses --org/--orgs/--excludeOrgs/--spaces/--space/--regions, targeting the apps it lists within whatever org(s) are selected via 'bo orgs' (or, with no default org scope selected, the orgs the CSV itself specifies)")
 	startAppsCmd.Flags().BoolP("yes", "y", false, "Skip the confirmation prompt")
 }

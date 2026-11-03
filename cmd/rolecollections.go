@@ -21,15 +21,6 @@ import (
 
 // ── output types ─────────────────────────────────────────────────────────────
 
-type rcOutRole struct {
-	RoleTemplateAppID string `json:"roleTemplateAppId" toon:"roleTemplateAppId"`
-	RoleTemplateName  string `json:"roleTemplateName"  toon:"roleTemplateName"`
-	Name              string `json:"role_name"         toon:"role_name"`
-	AppName           string `json:"appName"           toon:"appName"`
-	Description       string `json:"description"       toon:"description"`
-	IsReadOnly        bool   `json:"isReadOnly"        toon:"isReadOnly"`
-}
-
 type rcOutRoleRef struct {
 	RoleTemplateAppID string `json:"roleTemplateAppId" toon:"roleTemplateAppId"`
 	RoleTemplateName  string `json:"roleTemplateName"  toon:"roleTemplateName"`
@@ -47,7 +38,6 @@ type rcOutRoleCollection struct {
 type rcOutOrg struct {
 	ID              string                `json:"org_id"          toon:"org_id"`
 	Name            string                `json:"org_name"        toon:"org_name"`
-	Roles           []rcOutRole           `json:"roles"           toon:"roles"`
 	RoleCollections []rcOutRoleCollection `json:"roleCollections" toon:"roleCollections"`
 }
 
@@ -63,10 +53,19 @@ type rcOutDoc struct {
 // ── command ───────────────────────────────────────────────────────────────────
 
 var roleCollectionsCmd = &cobra.Command{
-	Use:   "role-collections",
-	Short: "List XSUAA roles and role collections across all accessible organizations",
-	Long: `List roles and role collections from the XSUAA Authorization API across one
-or more regions and organizations.
+	Use:   "role-collections [role_collection_name_pattern]",
+	Short: "List XSUAA role collections across all accessible organizations",
+	Long: `List role collections (with their role references) from the XSUAA
+Authorization API across one or more regions and organizations. To export
+roles themselves (not role collections), use 'bo roles' instead.
+
+<role_collection_name_pattern> is optional — a comma-separated list of
+patterns, e.g. 'Custom_*,temp-*' or '*' (the default when omitted: every
+role collection). Each pattern is a glob (via filepath.Match) if it contains
+* ? [, otherwise a case-insensitive substring; a pattern prefixed with '!'
+reverses it, and a role collection is selected if any pattern — negated or
+not — matches it. Only role collections matching the pattern are included
+in the output.
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
@@ -80,10 +79,20 @@ If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
 pick one interactively, or pass --org/--orgs directly.
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected as json when --output ends in
+.json — otherwise the default toon applies.
 
 If --regions is omitted the regions from the last login are used.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		pattern := "*"
+		if len(args) > 0 {
+			pattern = strings.TrimSpace(args[0])
+			if pattern == "" {
+				return fmt.Errorf("role_collection_name_pattern cannot be empty")
+			}
+		}
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
@@ -91,6 +100,11 @@ If --regions is omitted the regions from the last login are used.`,
 		outputFile, _ := cmd.Flags().GetString("output")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json"}); auto != "" {
+				format = auto
+			}
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -169,12 +183,11 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 
-		// Phase 2: fetch roles and role collections per org in parallel.
+		// Phase 2: fetch role collections per org in parallel.
 		type orgResult struct {
 			regionName      string
 			orgGUID         string
 			orgName         string
-			roles           []xsuaa.Role
 			roleCollections []xsuaa.RoleCollection
 			err             error
 		}
@@ -185,14 +198,8 @@ If --regions is omitted the regions from the last login are used.`,
 			wg.Add(1)
 			go func(idx int, w xsuaaOrgClient) {
 				defer wg.Done()
-				slog.Debug("fetching XSUAA roles", "region", w.RegionName, "org", w.OrgName)
+				slog.Debug("fetching XSUAA role collections", "region", w.RegionName, "org", w.OrgName)
 
-				roles, err := xsuaa.ListRoles(ctx, w.APIURL, w.Token)
-				if err != nil {
-					results[idx] = orgResult{regionName: w.RegionName, orgGUID: w.OrgGUID, orgName: w.OrgName,
-						err: fmt.Errorf("listing roles: %w", err)}
-					return
-				}
 				rcs, err := xsuaa.ListRoleCollections(ctx, w.APIURL, w.Token)
 				if err != nil {
 					results[idx] = orgResult{regionName: w.RegionName, orgGUID: w.OrgGUID, orgName: w.OrgName,
@@ -203,7 +210,6 @@ If --regions is omitted the regions from the last login are used.`,
 					regionName:      w.RegionName,
 					orgGUID:         w.OrgGUID,
 					orgName:         w.OrgName,
-					roles:           roles,
 					roleCollections: rcs,
 				}
 			}(i, w)
@@ -227,26 +233,11 @@ If --regions is omitted the regions from the last login are used.`,
 				continue
 			}
 
-			var outRoles []rcOutRole
-			for _, role := range r.roles {
-				outRoles = append(outRoles, rcOutRole{
-					RoleTemplateAppID: role.RoleTemplateAppID,
-					RoleTemplateName:  role.RoleTemplateName,
-					Name:              role.Name,
-					AppName:           role.AppName,
-					Description:       role.Description,
-					IsReadOnly:        role.IsReadOnly,
-				})
-			}
-			sort.Slice(outRoles, func(i, j int) bool {
-				if outRoles[i].RoleTemplateAppID != outRoles[j].RoleTemplateAppID {
-					return outRoles[i].RoleTemplateAppID < outRoles[j].RoleTemplateAppID
-				}
-				return outRoles[i].RoleTemplateName < outRoles[j].RoleTemplateName
-			})
-
 			var outRCs []rcOutRoleCollection
 			for _, rc := range r.roleCollections {
+				if !matchesNegatablePattern(pattern, rc.Name) {
+					continue
+				}
 				var refs []rcOutRoleRef
 				for _, ref := range rc.RoleReferences {
 					refs = append(refs, rcOutRoleRef{
@@ -276,7 +267,6 @@ If --regions is omitted the regions from the last login are used.`,
 			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], rcOutOrg{
 				ID:              r.orgGUID,
 				Name:            r.orgName,
-				Roles:           outRoles,
 				RoleCollections: outRCs,
 			})
 		}
@@ -331,5 +321,5 @@ func init() {
 	roleCollectionsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	roleCollectionsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	roleCollectionsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
-	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
+	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default) or json; auto-detected as json when --output ends in .json and --format is not explicitly given")
 }

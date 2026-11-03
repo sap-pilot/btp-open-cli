@@ -1,5 +1,104 @@
 # Changelog
 
+## v0.20.0 — 2026-10-28
+
+### Added
+
+- **`apps --include-env` and new `update-apps-env` — export and replay apps' user-provided environment variables**
+
+  `apps --include-env` fetches and includes each app's own user-provided environment variables (the ones `cf set-env` manages — not `VCAP_SERVICES` or any other derived/system environment) as a new `app_env` field (object in JSON/TOON, a JSON-encoded string in the CSV column of the same name), via one extra API call per app; a per-app fetch failure is reported as a warning on stderr rather than aborting the command. Secret/password/key-named variables are included in full, never masked or skipped, since they're exactly what `update-apps-env` needs to recreate on a target app; the only variable always excluded is `DEPLOY_ATTRIBUTES` (deploy-tooling noise, not meaningful to replay onto another org/space). This is sensitive output — treat it the same as `service-credentials`.
+
+  `update-apps-env <apps-env-file>` reads a JSON/TOON file in that same shape (typically `bo apps --include-env`'s own output) and creates/updates each app's environment variables — a key-level merge via the CF API, so existing keys not present in the file are left untouched. The target space and app are located by exact name (case-insensitive) within the target org — never by the file's own `app_id`/`space_id`/`org_id` — since the **source org/space recorded in the file and the target org this command writes to are not necessarily the same**: same cross-subaccount retargeting as `update-roles`/`update-role-collections` — a default org scope selected via `bo orgs` retargets every app in the file onto those org(s), discarding the file's own org assignment entirely; with no default scope, each app's own org is used. Without `-y`, a preview table is shown and `[y/N]` confirmation is required; any environment variable whose name ends in `KEY`, `SECRET`, `PASSWORD`, or `PASSWD` has its value masked as `********` in that preview, never shown in plain text.
+
+  ```bash
+  bo apps --org <org-guid> --include-env --format json -o apps-env.json
+  bo update-apps-env apps-env.json -y
+  ```
+
+- **`start-apps`/`stop-apps`/`restart-apps`/`restage-apps` — `--apps <file>` to target specific apps directly**
+
+  An optional `--apps <file>` flag targets exact apps by GUID instead of discovering them via org/space scanning: `<file>` is a CSV with the columns `region_id`, `org_name`, `space_id`, `space_name`, `app_id`, `app_name` — exactly what `bo apps --format csv` writes, so the natural way to build one is `bo apps --include STARTED --format csv -o apps.csv` (or any other `--include`/`--exclude` filter) and reuse its output here. When `--apps` is given, the previously-required `<app_name_patterns>` positional argument becomes optional (defaulting to `*`, every CSV row) and still further narrows the CSV's rows by `app_name`; `--org`, `--orgs`, `--excludeOrgs`, `--spaces`, `--space`, `--regions`, and the default org scope selected via `bo orgs` are all ignored in this mode (with a warning on stderr if any of them were also passed), since each CSV row already names its own exact region/org/space/app. The primary use case is restarting/restaging only apps that were already running — snapshot them first, then act on exactly that snapshot:
+
+  ```bash
+  bo apps --include STARTED --format csv -o started-apps.csv
+  bo restage-apps --apps started-apps.csv -y
+  bo restart-apps --apps started-apps.csv --strategy rolling -y
+  ```
+
+- **`roles`, `create-roles`, `update-roles`, `delete-roles` — manage XSUAA roles**
+
+  `roles [role_name_pattern]` exports roles, including their `attributeList`, from the XSUAA Authorization API across accessible orgs (same discovery/scope flags as `role-collections`/`users`); the pattern is optional (same syntax as below — omitted or `*` exports every role). `create-roles [role_name_pattern] --roles <file>` and `update-roles [role_name_pattern] --roles <file>` take a JSON/TOON document in the same `regions -> orgs -> roles` shape `roles` writes (or hand-authored) and create or update each role — `create-roles` skips a role that already exists (HTTP 409); `update-roles` warns and skips a role that doesn't exist (HTTP 404). `<role_name_pattern>` is optional on every one of these three commands (same glob/substring/`!`-negation syntax as `delete-service-keys`): omitted or `*` applies to every role in the file, otherwise only roles matching the pattern are included. `delete-roles` additionally deletes by discovering roles across orgs in scope when `--roles` isn't given (there, `<role_name_pattern>` is required instead, since there's no file to default to "everything" from); passing `--roles <file>` instead matches roles from the file by name (bypassing `--org`/`--orgs`/`--excludeOrgs`/`--regions` — see the org-targeting bullet below for which org(s) end up getting touched). All three mutating commands show a TOON preview and require `[y/N]` confirmation unless `-y` is given.
+
+  ```bash
+  bo roles --org <org-guid> -o roles.json
+  bo create-roles --roles roles.json -y              # every role in the file
+  bo update-roles "Custom_*" --roles roles.json -y    # only roles matching the pattern
+  bo delete-roles "Custom_*" -y                       # discovery mode
+  ```
+
+- **`create-role-collections`, `update-role-collections`, `delete-role-collections` — manage XSUAA role collections**
+
+  Companions to the existing `role-collections` export: `create-role-collections [role_collection_name_pattern] --role-collections <file>` and `update-role-collections [role_collection_name_pattern] --role-collections <file>` take a JSON/TOON document in the same `regions -> orgs -> roleCollections` shape `role-collections` writes (its `roles` field, if present, is ignored) and create or update each role collection — same 409/404-skip behavior as the roles commands above, and the same optional `<role_collection_name_pattern>` filtering (omitted or `*` applies to every role collection in the file, otherwise only matching ones). Updating a role collection's `roleReferences` to exactly match the file (adding missing references, removing stale ones) takes one API call per changed reference, since the XSUAA API has no single full-replace call for a collection's roles. `delete-role-collections` deletes by discovery (same pattern syntax, required there since there's no file to default from) or targets exactly a `--role-collections <file>`'s contents with the pattern optional. All three show a TOON preview and require `[y/N]` confirmation unless `-y` is given.
+
+  ```bash
+  bo role-collections --org <org-guid> -o role-collections.json
+  bo create-role-collections --role-collections role-collections.json -y
+  bo update-role-collections "Custom_*" --role-collections role-collections.json -y
+  bo delete-role-collections "Temp_*" -y
+  ```
+
+- **File-targeted write commands now always target whatever org(s) are selected via `bo orgs`, if any**
+
+  `create-roles`/`update-roles`/`delete-roles --roles`, `create-role-collections`/`update-role-collections`/`delete-role-collections --role-collections`, and `start-apps`/`stop-apps`/`restart-apps`/`restage-apps --apps` all read their targets from a file rather than discovering them. Previously they ignored `--org`/`--orgs`/the `bo orgs` default scope entirely; now, whenever a default org scope *is* selected via `bo orgs`, it always wins over the file's own org assignment — there's no prompt or choice to make, and `--orgs`/`--org` are no longer consulted for this. Only when no default org scope is selected does the file's own org data (exactly as specified) get used, matching the original behavior. The two command families apply this differently, since only one of them can sensibly be "moved" to a different org:
+
+  - **`create-roles`/`update-roles`/`delete-roles` and the three `role-collections` equivalents** treat the file as a role/role-collection *template*: with a `bo orgs` selection, every entry in the file is **retargeted** onto every org in that selection, discarding the file's own org assignment entirely — this lets you replicate a role (or role collection) exported from one subaccount into a *different* one just by switching your `bo orgs` selection, with no need to hand-edit the file's `org_id`/`org_name`/`region` fields.
+  - **The four `--apps` commands** can't retarget — an app is bound to a specific org/space by GUID, so a `bo orgs` selection instead **filters** the CSV down to just the rows whose org is in that selection.
+
+  Whenever a `bo orgs` selection is in effect, the confirmation preview (skipped by `-y`) names the org(s) being targeted and explains how to redirect it: press Ctrl-C, then either run `bo orgs` to pick different org(s), or run `bo orgs` and press 'c' to clear the selection so the file's own orgs are used instead.
+
+  ```bash
+  bo orgs  # select the destination subaccount, B
+  bo roles --org <org-A-guid> -o roles.json  # exported from a different subaccount, A
+  bo create-roles --roles roles.json -y  # role from roles.json is created in B, not A
+  ```
+
+- **`create-roles`/`update-roles`/`delete-roles` and the `role-collections` equivalents re-resolve `roleTemplateAppId` across subaccounts**
+
+  An exported role's (or role reference's) `roleTemplateAppId` (e.g. `btp-dummy!t147007`) has a suffix after `!` that's specific to how that app happens to be registered in the subaccount it was exported from — the same app gets a *different* suffix in a different subaccount. Since the org-scope-mismatch prompt above now makes it easy to apply a roles/role-collections file to a different subaccount than it came from, every role create/update/delete now re-resolves the correct `roleTemplateAppId` for the target org by matching the app name (everything before `!`) plus `roleTemplateName` against that org's own role templates (`GET .../apps/roletemplates`) — and, for role collection references, against that org's existing roles (since a reference names a specific role, not just a template). If no match is found, the literal exported value is used as a fallback and the underlying API call surfaces whatever error (or success) that produces, so this never blocks a call that would otherwise have worked.
+
+### Changed
+
+- **`orgs` — `--output` skips the picker and dumps the accessible org list directly**
+
+  Passing `--output`/`-o` no longer runs the interactive picker at all: instead of waiting for input, `bo orgs` writes the full list of accessible orgs (after `--include`/`--exclude` filtering) straight to that file, and the default org scope is left untouched — `--all` has no effect in this mode, since nothing is being selected. `--format` is now only valid together with `--output`; without a file, the command's own output is the interactive picker, not a listing one of these formats could represent, so passing `--format` alone is now an error.
+
+  ```bash
+  bo orgs --output my-orgs.csv --format csv
+  bo orgs --include prod --format csv -o prod-orgs.csv
+  ```
+
+- **`apps`, `roles`, `role-collections` — `--format` auto-detected from `--output`'s extension**
+
+  When `--format` isn't explicitly given, it's now inferred from `--output`/`-o`'s file extension instead of always defaulting to `toon`: `apps --output apps.csv` picks `csv` and `apps --output apps.json` picks `json`; `roles --output roles.json` and `role-collections --output role-collections.json` pick `json`. Passing `--format` explicitly always wins over the extension.
+
+  ```bash
+  bo apps --output apps.csv            # csv, no --format needed
+  bo roles --output roles.json         # json, no --format needed
+  bo roles --output roles.json --format toon   # --format still overrides
+  ```
+
+- **`role-collections` — optional `[role_collection_name_pattern]`, and no longer outputs roles**
+
+  `role-collections` now takes an optional leading `[role_collection_name_pattern]` (same glob/substring/`!`-negation syntax as `delete-service-keys`): omitted or `*` lists every role collection as before, otherwise only matching role collections are included. The output's separate `roles` list (every role in the org, independent of any role collection) has been removed — `role-collections` now fetches and emits only role collections, one API call per org instead of two; use the new [`roles`](above) command instead to export roles themselves.
+
+  ```bash
+  bo role-collections "Custom_*"
+  ```
+
+- **Upgraded `toon-format/toon-go` to v1.0.1**
+
+  The previous pinned commit's TOON decoder failed to parse its own encoder's output for any array nested two or more levels deep inside a list item (e.g. `regions -> orgs -> roles`, or an org's own nested `roleCollections -> roleReferences`) — exactly the shape of most of this CLI's own TOON output. v1.0.1 fixes this, which `create-roles`/`update-roles`/`delete-roles --roles` and `create-role-collections`/`update-role-collections`/`delete-role-collections --role-collections` (above) rely on to accept `--format toon` input, not just JSON.
+
 ## v0.19.0 — 2026-10-27
 
 ### Added

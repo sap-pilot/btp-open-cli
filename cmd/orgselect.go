@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -283,6 +284,25 @@ func resolveOutputWriter(outputFlag string) (io.Writer, func() error, error) {
 		return nil, nil, fmt.Errorf("creating output file %s: %w", outputFlag, err)
 	}
 	return f, f.Close, nil
+}
+
+// autoFormatFromOutputExt returns the output format implied by outputFlag's
+// file extension (per extByFormat, e.g. {"json": ".json", "csv": ".csv"}),
+// or "" if outputFlag is empty or its extension isn't one of extByFormat's
+// values. Callers should apply the result only when the user did not
+// explicitly pass --format, so an explicit --format always wins over the
+// filename.
+func autoFormatFromOutputExt(outputFlag string, extByFormat map[string]string) string {
+	if outputFlag == "" {
+		return ""
+	}
+	ext := strings.ToLower(filepath.Ext(outputFlag))
+	for format, wantExt := range extByFormat {
+		if ext == wantExt {
+			return format
+		}
+	}
+	return ""
 }
 
 // resolveDefaultOrgScope returns the org scope selected via `bo orgs` for the

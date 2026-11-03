@@ -103,6 +103,7 @@ mv bo ~/.local/bin/   # optional
 | [`create-org-space-users`](#create-org-space-users) | Add users with org and space roles from a CSV file |
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
+| [`update-apps-env`](#update-apps-env) | Create/update apps' user-provided environment variables from a `bo apps --include-env` export |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 | [`service-instances`](#service-instances) | List service instances across orgs and spaces, optionally including user-provided credentials |
@@ -122,7 +123,14 @@ mv bo ~/.local/bin/   # optional
 | [`users`](#users) | List XSUAA users across all accessible CF organizations |
 | [`create-users`](#create-users) | Create XSUAA users and assign role collections |
 | [`delete-users`](#delete-users) | Delete XSUAA users across all accessible CF organizations |
-| [`role-collections`](#role-collections) | List XSUAA roles and role collections across all accessible CF organizations |
+| [`roles`](#roles) | Export XSUAA roles (with attributes) across all accessible CF organizations |
+| [`create-roles`](#create-roles) | Create XSUAA roles from an exported roles file |
+| [`update-roles`](#update-roles) | Update XSUAA roles from an exported roles file |
+| [`delete-roles`](#delete-roles) | Delete XSUAA roles by name pattern, or from an exported roles file |
+| [`role-collections`](#role-collections) | List XSUAA role collections across all accessible CF organizations |
+| [`create-role-collections`](#create-role-collections) | Create XSUAA role collections from an exported role-collections file |
+| [`update-role-collections`](#update-role-collections) | Update XSUAA role collections from an exported role-collections file |
+| [`delete-role-collections`](#delete-role-collections) | Delete XSUAA role collections by name pattern, or from an exported role-collections file |
 
 ### Destination
 
@@ -221,6 +229,15 @@ only `bo login`/`bo logoff` clear it.
 If an org-aware command is run with no `--org`/`--orgs` and no default scope has
 been set yet, it prints an error telling you to run `bo orgs` first.
 
+**`--output`/`-o` writes to a file and skips the picker entirely.** Rather than
+writing the *selected* scope, passing `--output` makes `bo orgs` print the
+full list of accessible orgs (after `--include`/`--exclude` filtering)
+straight to that file, with no prompting and no waiting for input — `--all`
+is ignored in this mode, and the default org scope is left untouched.
+`--format` is only valid together with `--output`, since without a file the
+command's output is the interactive picker itself, not a listing one of
+these formats could represent.
+
 ```bash
 # Interactively pick the default org scope for this session
 bo orgs
@@ -236,19 +253,17 @@ bo orgs --exclude sandbox,test
 # Specific regions
 bo orgs --regions us10,us20,eu10
 
-# JSON output of the orgs just selected
-bo orgs --all --format json
+# Non-interactive: dump every accessible org straight to a file, skipping
+# the picker — shell '>' doesn't work here since the interactive picker
+# also writes to stdout
+bo orgs --output my-orgs.csv --format csv
 
-# Write the selection to a file instead of stdout — shell '>' doesn't work
-# here since the interactive picker also writes to stdout
-bo orgs --format csv --output my-orgs.csv
-
-# Non-interactive: select every prod org and save as a reusable --orgs CSV
-bo orgs --all --include prod --format csv -o prod-orgs.csv
+# Narrow the dumped list to prod orgs and save as a reusable --orgs CSV
+bo orgs --include prod --format csv -o prod-orgs.csv
 bo create-org-space-users users.csv --orgs prod-orgs.csv
 ```
 
-Default TOON output (showing the orgs just selected, fields ordered to match the picker):
+Default TOON output (the full list of accessible orgs, fields ordered to match the picker):
 ```
 regions:
   - region: us10
@@ -728,9 +743,15 @@ regions:
 
 Without `-y`, the preview is shown and `Proceed with user deletion? [y/N]` is prompted before any changes are made.
 
-### `role-collections`
+### `roles`
 
-List XSUAA roles and role collections (with their role references) across all accessible CF organizations.
+Export roles, including their attribute lists, from the XSUAA Authorization API across all accessible CF organizations.
+
+```
+bo roles [role_name_pattern] [flags]
+```
+
+`<role_name_pattern>` is optional — a comma-separated, `!`-negatable glob/substring pattern list (same syntax as `delete-service-keys`); omitted or `*` includes every role, otherwise only roles matching the pattern are included in the output.
 
 For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
 
@@ -741,8 +762,154 @@ If neither `--org` nor `--orgs` is given, the default org scope selected via
 first or pass `--org`/`--orgs` directly.
 
 ```bash
-# List roles and role collections across all orgs in the default scope from `bo orgs`
+# Export roles across all orgs in the default scope from `bo orgs`
+bo roles
+
+# Only export roles whose name matches this pattern
+bo roles "Custom_*"
+
+# Fetch roles from a single org by name or GUID
+bo roles --org <org-name-or-guid>
+
+# Include only specific orgs (CSV: region,org_id,org_name)
+bo roles --orgs target-orgs.csv
+
+# JSON output
+bo roles --format json
+
+# Write output to a file, ready to feed into create-roles/update-roles/delete-roles
+# (--format json is implied here by the .json extension — see below)
+bo roles --output roles.json
+```
+
+`--format` defaults to `toon`, but is auto-detected as `json` whenever `--output`/`-o` ends in `.json` and `--format` isn't explicitly given — pass `--format` explicitly to override.
+
+Output format (TOON):
+```
+regions:
+  - region: us10
+    orgs:
+      - org_id: <org-guid>
+        org_name: my-org
+        roles:
+          - roleTemplateAppId: custom!t1
+            roleTemplateName: Custom_Role_Template
+            role_name: Custom Cost Center Viewer
+            appName: custom
+            description: Restricted to specific cost centers
+            isReadOnly: false
+            attributeList:
+              - attributeName: costcenter
+                attributeValues: ["1000", "2000"]
+```
+
+### `create-roles`
+
+Create roles in the XSUAA (Authorization and Trust Management) `apiaccess` service.
+
+```
+bo create-roles [role_name_pattern] --roles <roles.json> [-y]
+```
+
+`<roles.json>` (or `.toon`) is a JSON or TOON document in the same shape `bo roles` writes — `regions -> orgs -> roles`, each role carrying `roleTemplateAppId`, `roleTemplateName`, `role_name`, `description`, and an optional `attributeList`. It can be produced by `bo roles --format json`/`bo roles --format toon`, or hand-authored. Only the orgs referenced in the file have their XSUAA tokens resolved.
+
+`<role_name_pattern>` is optional — a comma-separated, `!`-negatable glob/substring pattern list (same syntax as `delete-service-keys`); omitted or `*` includes every role in the file, otherwise only roles matching the pattern are created.
+
+The orgs actually targeted depend on whether a default org scope is currently selected via [`bo orgs`](#orgs): if one is, every role in the file is created within those org(s) instead of the file's own — discarding the file's own org assignment entirely, so the file can double as a role template to apply against any subaccount just by changing your `bo orgs` selection. If no default org scope is selected, each role's own org (exactly as specified in the file) is used. Either way, each role's `roleTemplateAppId` is automatically re-resolved against the target org's own role templates (matching by app name, ignoring the subaccount-specific suffix after `!`, and `roleTemplateName`), since the exported `appId`'s suffix only applies to the subaccount it came from. Without `-y`, the confirmation preview names the `bo orgs` org(s) being targeted and notes that pressing Ctrl-C, then running `bo orgs` to pick different org(s) (or `bo orgs` then 'c' to clear the selection, so the file's own orgs are used instead), is how to redirect it.
+
+If a role with the same identity already exists (HTTP 409), creation is skipped for it.
+
+```bash
+# Export, edit, then create
+bo roles --org <org-guid> -o roles.json
+# ... edit roles.json to add/adjust entries ...
+bo create-roles --roles roles.json
+
+# Skip confirmation prompt
+bo create-roles --roles roles.json -y
+
+# Only create roles in the file whose name matches this pattern
+bo create-roles "Custom_*" --roles roles.json -y
+
+# Replicate a role exported from one subaccount into whichever subaccount
+# is currently selected via `bo orgs` — no need to edit roles.json's org
+# fields; -y retargets automatically and re-resolves roleTemplateAppId
+bo orgs  # select the destination subaccount
+bo create-roles --roles roles.json -y
+```
+
+Without `-y`, a TOON preview of all roles to be created is shown and `Proceed with role creation? [y/N]` is prompted before any changes are made.
+
+### `update-roles`
+
+Update roles' description and `attributeList` in the XSUAA `apiaccess` service.
+
+```
+bo update-roles [role_name_pattern] --roles <roles.json> [-y]
+```
+
+Same file shape and optional `<role_name_pattern>` as `create-roles` (omitted or `*` updates every role in the file; otherwise only matching roles), including the same [`bo orgs`](#orgs) org-targeting behavior described there. Each role is matched against the server by `roleTemplateAppId` + `roleTemplateName` + `role_name`. If a referenced role doesn't exist (HTTP 404), it is skipped with a warning — run `bo create-roles` first.
+
+```bash
+bo roles --org <org-guid> -o roles.json
+# ... edit roles.json (e.g. change an attributeList) ...
+bo update-roles --roles roles.json -y
+
+# Only update roles in the file whose name matches this pattern
+bo update-roles "Custom_*" --roles roles.json -y
+```
+
+### `delete-roles`
+
+Delete roles from the XSUAA `apiaccess` service, either by name pattern across discovered orgs, or from an exported roles file.
+
+```
+bo delete-roles <role_name_pattern> [flags]
+bo delete-roles [role_name_pattern] --roles <roles.json> [-y]
+```
+
+Without `--roles`, `<role_name_pattern>` is required and roles are discovered the same way as `bo roles` (across `--org`/`--orgs`/`--excludeOrgs` or the `bo orgs` default scope) — same glob/substring/`!`-negation pattern syntax as `delete-service-keys`. With `--roles <file>` (same shape as `create-roles`), roles are matched by name from the (filtered) file — `--org`/`--orgs`/`--excludeOrgs`/`--regions` are ignored — and `<role_name_pattern>` becomes optional (default `*`), still narrowing the file's roles by name. The orgs actually targeted depend on whether a default org scope is currently selected via [`bo orgs`](#orgs): if one is, every role in the file is deleted from those org(s) instead of the file's own — discarding the file's own org assignment entirely. If no default org scope is selected, each role's own org (exactly as specified in the file) is used. Either way, each role's `roleTemplateAppId` is automatically re-resolved against the target org's own role templates (matching by app name, ignoring the subaccount-specific suffix after `!`, and `roleTemplateName`).
+
+⚠️ This is destructive and cannot be undone.
+
+```bash
+# Discover and delete by pattern
+bo delete-roles "Custom_*" -y
+
+# Delete exactly the roles listed in an exported file
+bo roles --org <org-guid> -o roles.json
+bo delete-roles --roles roles.json -y
+
+# Delete only a subset of the file's roles
+bo delete-roles "Custom Role A" --roles roles.json -y
+```
+
+Without `-y`, a TOON preview of all roles to be deleted is shown and `This cannot be undone. Proceed? [y/N]` is prompted before any changes are made.
+
+### `role-collections`
+
+List XSUAA role collections (with their role references) across all accessible CF organizations. To export roles themselves (not role collections), use [`roles`](#roles) instead.
+
+```
+bo role-collections [role_collection_name_pattern] [flags]
+```
+
+`<role_collection_name_pattern>` is optional — a comma-separated, `!`-negatable glob/substring pattern list (same syntax as `delete-service-keys`); omitted or `*` includes every role collection, otherwise only role collections matching the pattern are included in the output.
+
+For each organization the command searches all spaces for any `xsuaa` service instance with the `apiaccess` plan and uses the first available service key to obtain an access token. If no instance or key is found, a prompt prints CF CLI instructions to create them manually; press Enter to retry, type 's' to skip the org, or Ctrl-C to abort. Use `--no-prompt` to skip silently instead.
+
+Only the access token is cached in `~/.bo/credentials.json` — service key credentials are never stored locally.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via
+[`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
+first or pass `--org`/`--orgs` directly.
+
+```bash
+# List role collections across all orgs in the default scope from `bo orgs`
 bo role-collections
+
+# Only list role collections whose name matches this pattern
+bo role-collections "Custom_*"
 
 # Skip interactive prompts for orgs with no service instance or key
 bo role-collections --no-prompt
@@ -750,7 +917,7 @@ bo role-collections --no-prompt
 # Scope to specific regions
 bo role-collections --regions us10,us20,eu10
 
-# Fetch roles and role collections from a single org by name or GUID
+# Fetch role collections from a single org by name or GUID
 bo role-collections --org <org-name-or-guid>
 
 # Include only specific orgs (CSV: region,org_id,org_name)
@@ -762,9 +929,11 @@ bo role-collections --excludeOrgs prod-orgs.csv
 # JSON output
 bo role-collections --format json
 
-# Write output to a file instead of stdout
-bo role-collections --output role-collections.json --format json
+# Write output to a file instead of stdout (--format json is implied by the .json extension)
+bo role-collections --output role-collections.json
 ```
+
+`--format` defaults to `toon`, but is auto-detected as `json` whenever `--output`/`-o` ends in `.json` and `--format` isn't explicitly given — pass `--format` explicitly to override.
 
 Output format (TOON):
 ```
@@ -773,13 +942,6 @@ regions:
     orgs:
       - org_id: <org-guid>
         org_name: my-org
-        roles:
-          - roleTemplateAppId: xsuaa!t1
-            roleTemplateName: xsuaa_admin
-            role_name: User and Role Administrator
-            appName: xsuaa
-            description: Manage authorizations, trusted identity providers, and users.
-            isReadOnly: true
         roleCollections:
           - rolecollection_name: Subaccount Administrator
             description: Administrative access to the subaccount
@@ -790,6 +952,76 @@ regions:
                 role_name: User and Role Administrator
                 description: Manage authorizations, trusted identity providers, and users.
 ```
+
+### `create-role-collections`
+
+Create role collections (with their role references) in the XSUAA `apiaccess` service.
+
+```
+bo create-role-collections [role_collection_name_pattern] --role-collections <role-collections.json> [-y]
+```
+
+`<role-collections.json>` (or `.toon`) is a JSON or TOON document in the same shape `bo role-collections` writes — `regions -> orgs -> roleCollections` (its `roles` field, if present, is ignored). It can be produced by `bo role-collections --format json`/`--format toon`, or hand-authored. Only the orgs referenced in the file have their XSUAA tokens resolved.
+
+`<role_collection_name_pattern>` is optional — a comma-separated, `!`-negatable glob/substring pattern list (same syntax as `delete-service-keys`); omitted or `*` includes every role collection in the file, otherwise only matching ones are created.
+
+The orgs actually targeted depend on whether a default org scope is currently selected via [`bo orgs`](#orgs): if one is, every role collection in the file is created within those org(s) instead of the file's own — discarding the file's own org assignment entirely, so the file can double as a template to apply against any subaccount just by changing your `bo orgs` selection. If no default org scope is selected, each role collection's own org (exactly as specified in the file) is used. Either way, each role reference's `roleTemplateAppId` is automatically re-resolved against an existing role in the target org (matching by app name, ignoring the subaccount-specific suffix after `!`, `roleTemplateName`, and `role_name`) — since a role collection can only reference a role that already exists there (create it first with `bo create-roles` if needed).
+
+If a role collection with the same name already exists (HTTP 409), creation is skipped for it.
+
+```bash
+bo role-collections --org <org-guid> -o role-collections.json
+# ... edit role-collections.json ...
+bo create-role-collections --role-collections role-collections.json -y
+
+# Only create role collections in the file whose name matches this pattern
+bo create-role-collections "Custom_*" --role-collections role-collections.json -y
+```
+
+Without `-y`, a TOON preview of all role collections to be created is shown and confirmation is required before any changes are made.
+
+### `update-role-collections`
+
+Update role collections in the XSUAA `apiaccess` service.
+
+```
+bo update-role-collections [role_collection_name_pattern] --role-collections <role-collections.json> [-y]
+```
+
+Same file shape and optional `<role_collection_name_pattern>` as `create-role-collections` (omitted or `*` updates every role collection in the file; otherwise only matching ones), including the same [`bo orgs`](#orgs) org-targeting behavior described there. Each role collection is matched by name, and the update **fully replaces** its description and `roleReferences` with what the file specifies — a role reference present on the server but absent from the file is removed. If a referenced role collection doesn't exist (HTTP 404), it is skipped with a warning — run `bo create-role-collections` first.
+
+```bash
+bo role-collections --org <org-guid> -o role-collections.json
+# ... edit role-collections.json (e.g. add/remove a roleReferences entry) ...
+bo update-role-collections --role-collections role-collections.json -y
+
+# Only update role collections in the file whose name matches this pattern
+bo update-role-collections "Custom_*" --role-collections role-collections.json -y
+```
+
+### `delete-role-collections`
+
+Delete role collections from the XSUAA `apiaccess` service, either by name pattern across discovered orgs, or from an exported role-collections file.
+
+```
+bo delete-role-collections <role_collection_name_pattern> [flags]
+bo delete-role-collections [role_collection_name_pattern] --role-collections <role-collections.json> [-y]
+```
+
+Without `--role-collections`, `<role_collection_name_pattern>` is required and role collections are discovered the same way as `bo role-collections` (across `--org`/`--orgs`/`--excludeOrgs` or the `bo orgs` default scope). With `--role-collections <file>` (same shape as `create-role-collections`), role collections are matched by name from the (filtered) file — `--org`/`--orgs`/`--excludeOrgs`/`--regions` are ignored — and the name pattern becomes optional (default `*`). The orgs actually targeted depend on whether a default org scope is currently selected via [`bo orgs`](#orgs): if one is, every role collection in the file is deleted from those org(s) instead of the file's own — discarding the file's own org assignment entirely. If no default org scope is selected, each role collection's own org (exactly as specified in the file) is used. Either way, each role reference's `roleTemplateAppId` is automatically re-resolved against an existing role in the target org (matching by app name, ignoring the subaccount-specific suffix after `!`, `roleTemplateName`, and `role_name`).
+
+⚠️ This is destructive and cannot be undone.
+
+```bash
+# Discover and delete by pattern
+bo delete-role-collections "Temp_*" -y
+
+# Delete exactly the role collections listed in an exported file
+bo role-collections --org <org-guid> -o role-collections.json
+bo delete-role-collections --role-collections role-collections.json -y
+```
+
+Without `-y`, a TOON preview of all role collections to be deleted is shown and confirmation is required before any changes are made.
 
 ### `describe-subaccount`
 
@@ -1213,9 +1445,18 @@ bo apps --exclude STOPPED
 # Combine flags
 bo apps --regions us10,us20 --orgs my-orgs.csv --format csv --include STARTED
 
-# Write output to a file instead of stdout
-bo apps --output apps.csv --format csv
+# Write output to a file instead of stdout (--format csv is implied by the .csv extension)
+bo apps --output apps.csv
+
+# Likewise, .json is auto-detected as --format json
+bo apps --output apps.json
+
+# Also fetch each app's own user-provided environment variables (app_env) —
+# feed the result straight into `bo update-apps-env` to replay it elsewhere
+bo apps --include-env --format json -o apps-env.json
 ```
+
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json` — pass `--format` explicitly to override.
 
 Output format (TOON):
 ```
@@ -1239,9 +1480,33 @@ regions:
                 process_disk_in_mb: 1024
 ```
 
-CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb`
+CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb,app_env`
 
 The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
+
+`--include-env` adds an `app_env` field (object in JSON/TOON, a JSON-encoded string in the `app_env` CSV column) with each app's own user-provided environment variables — the ones `cf set-env`/`bo update-apps-env` manage, not `VCAP_SERVICES` or any other derived/system environment. It costs one extra API call per app and requires at least Space Developer access to each app's space; a per-app failure is reported as a warning on stderr rather than aborting the command, and that app is simply left without `app_env`. Secret/password/key-named variables are included in full, never masked or skipped — they're exactly what `bo update-apps-env` needs to recreate on a target app. The only variable always excluded is `DEPLOY_ATTRIBUTES`, injected by deploy tooling rather than set by a user and not meaningful to replay onto another org/space. This is sensitive output — see "Handling commands that output secrets" in the skill doc, and treat it the same as `service-credentials`' output below.
+
+### `update-apps-env`
+
+Create/update apps' own user-provided environment variables (the ones `cf set-env` manages) from a JSON or TOON file in the same `regions -> orgs -> spaces -> apps` shape `bo apps --include-env` writes (or hand-authored with the same shape and an `app_env` object per app).
+
+```bash
+bo update-apps-env apps-env.json [-y]
+```
+
+```bash
+# Export, edit app_env as needed, then replay
+bo apps --org <org-guid> --include-env --format json -o apps-env.json
+bo update-apps-env apps-env.json -y
+```
+
+For every app that has an `app_env`, the target space is located by exact name (case-insensitive) within the target org, and the target app is then located by exact name (case-insensitive) within that space — never by the file's own `app_id`/`space_id`/`org_id`, which belong to wherever the file was exported from and would almost certainly be wrong for a different org. The update itself is a key-level merge via the CF API: existing environment variable keys not present in the file's `app_env` are left untouched. `DEPLOY_ATTRIBUTES`, if present in the file, is always skipped (same as `bo apps --include-env` itself never including it) rather than written to the target app. An app whose target org has no matching space, or whose target space has no matching app, is skipped with a warning on stderr rather than aborting the run.
+
+As with `update-roles`/`update-role-collections`, the **source org/space recorded in the file and the target org this command writes to are not necessarily the same**: if a default org scope is currently selected via [`bo orgs`](#orgs), every app in the file is retargeted onto those org(s) instead of the file's own, discarding the file's own org assignment entirely. If no default org scope is selected, each app's own org (exactly as specified in the file) is used.
+
+Without `-y`, a preview table (region, org, space, app, env) is shown and `[y/N]` confirmation is required before anything is changed. Any environment variable whose name (case-insensitive) ends in `KEY`, `SECRET`, `PASSWORD`, or `PASSWD` has its value masked as `********` in that preview — never shown in plain text — though the real value is always what's actually sent to the CF API.
+
+Updating an app's environment variables does not by itself make a running instance pick up the new values — restart or restage it afterwards (see [`restart-apps`](#restart-apps)/[`restage-apps`](#restage-apps)).
 
 ### `service-credentials`
 
@@ -1566,10 +1831,10 @@ This cannot be undone. Proceed? [y/N]
 Start every app whose name matches a comma-separated list of patterns, across target orgs and spaces.
 
 ```
-bo start-apps <app_name_patterns> [flags]
+bo start-apps [app_name_patterns] [flags]
 ```
 
-If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<app_name_patterns>` is a required, comma-separated list of patterns, e.g. `web-*,worker-*` or `*` (matches every app name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it, same as [`delete-service-keys`](#delete-service-keys).
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used, same as the other `cf-org` commands. `--spaces`/`--space` narrows to specific space names (comma-separated, exact, case-insensitive) within each target org — the two are combined if both are given; omit both to search every accessible space in scope. `<app_name_patterns>` is a comma-separated list of patterns, e.g. `web-*,worker-*` or `*` (matches every app name) — each is a glob (via `filepath.Match`) if it contains `* ? [`, otherwise a case-insensitive substring. Prefix a pattern with `!` to reverse it, same as [`delete-service-keys`](#delete-service-keys). It's required unless `--apps` is given (see below), in which case it defaults to `*`.
 
 ```bash
 # Start every app named "web-*" or "worker-*" in the default org scope
@@ -1580,6 +1845,19 @@ bo start-apps "web-*" --orgs target-orgs.csv --spaces prod
 
 # Non-interactive (for scripts)
 bo start-apps "web-*" -y
+```
+
+**`--apps <file>` targets specific apps directly, bypassing org/space discovery entirely.** `<file>` is a CSV with the columns `region_id`, `org_name`, `space_id`, `space_name`, `app_id`, `app_name` — exactly what [`bo apps --format csv`](#apps) writes, so the straightforward way to build one is to run that command with whatever `--include`/`--exclude` filter picks out the apps you want and reuse its output here. When `--apps` is given, `<app_name_patterns>` becomes optional (default `*`, every CSV row) and still further narrows the CSV's rows by `app_name`; `--org`, `--orgs`, `--excludeOrgs`, `--spaces`, `--space`, and `--regions` are all ignored (with a warning on stderr if any of them were also passed), since each CSV row already names its own exact region/org/space/app. The orgs actually acted on depend on whether a default org scope is currently selected via [`bo orgs`](#orgs): if one is, the CSV is filtered down to just the rows whose org is in that scope. If no default org scope is selected, every row in the CSV is used. Without `-y`, the confirmation preview names the `bo orgs` org(s) being used to filter and notes that pressing Ctrl-C, then running `bo orgs` to pick different org(s) (or `bo orgs` then 'c' to clear the selection, so every row in the CSV is used instead), is how to redirect it.
+
+```bash
+# Snapshot every currently-STARTED app account-wide, then restart exactly
+# those apps later (e.g. after a maintenance window) — see restart-apps/
+# restage-apps below for the matching use case
+bo apps --include STARTED --format csv -o started-apps.csv
+bo start-apps --apps started-apps.csv -y
+
+# Further narrow the CSV to just the FI-* apps within it
+bo start-apps "FI-*" --apps started-apps.csv -y
 ```
 
 Without `-y`, every matched app is shown in a TOON preview (`org -> space -> apps`, including each app's current state) and a plain `Proceed? [y/N]` confirmation is required:
@@ -1602,10 +1880,10 @@ Proceed? [y/N]
 
 ### `stop-apps`
 
-Stop every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), just in reverse.
+Stop every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags (including `--apps <file>` to target specific apps directly instead), pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), just in reverse.
 
 ```
-bo stop-apps <app_name_patterns> [flags]
+bo stop-apps [app_name_patterns] [flags]
 ```
 
 ```bash
@@ -1621,10 +1899,10 @@ bo stop-apps "web-*" -y
 
 ### `restart-apps`
 
-Restart every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+Restart every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags (including `--apps <file>` to target specific apps directly instead), pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
 
 ```
-bo restart-apps <app_name_patterns> [flags]
+bo restart-apps [app_name_patterns] [flags]
 ```
 
 By default (`--strategy null`, or omitting the flag) a restart is an immediate stop+start via CF's classic "restart" action — it causes downtime. `--strategy rolling` or `--strategy canary` instead restarts with zero downtime, by creating a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) of the app's current droplet with that strategy; canary is marked experimental by CF itself and requires a reasonably recent CF API version.
@@ -1638,14 +1916,19 @@ bo restart-apps "web-*" --strategy rolling
 
 # Narrow to specific orgs and a specific space, non-interactive
 bo restart-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy rolling -y
+
+# Restart only the apps that were already STARTED (e.g. after a planned
+# downtime window), targeted directly from a bo-apps-produced CSV
+bo apps --include STARTED --format csv -o started-apps.csv
+bo restart-apps --apps started-apps.csv --strategy rolling -y
 ```
 
 ### `restage-apps`
 
-Restage every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags, pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
+Restage every app whose name matches a comma-separated list of patterns, across target orgs and spaces. Same flags (including `--apps <file>` to target specific apps directly instead), pattern syntax (including `!`-negation), and TOON preview shape as [`start-apps`](#start-apps), plus `--strategy`.
 
 ```
-bo restage-apps <app_name_patterns> [flags]
+bo restage-apps [app_name_patterns] [flags]
 ```
 
 By default (`--strategy null`, or omitting the flag) a restage rebuilds a droplet from the app's current package and redeploys it via CF's classic "restage" action — it causes downtime. `--strategy rolling` or `--strategy canary` builds the new droplet the same way but rolls it out with zero downtime instead: it fetches the app's current package, creates a [build](https://v3-apidocs.cloudfoundry.org/#builds), polls it until staging finishes, then deploys the resulting droplet via a [CF v3 Deployment](https://v3-apidocs.cloudfoundry.org/#deployments) with that strategy — canary is marked experimental by CF itself and requires a reasonably recent CF API version. CF's v3 API has no single-call equivalent of the classic restage action once a strategy is involved, so this takes noticeably longer per app than the other bulk app commands (it waits for a real build to finish staging).
@@ -1659,6 +1942,11 @@ bo restage-apps "web-*" --strategy rolling
 
 # Narrow to specific orgs and a specific space, non-interactive
 bo restage-apps "web-*" --orgs target-orgs.csv --spaces prod --strategy canary -y
+
+# Restage only the apps that were already STARTED beforehand, targeted
+# directly from a bo-apps-produced CSV
+bo apps --include STARTED --format csv -o started-apps.csv
+bo restage-apps --apps started-apps.csv -y
 ```
 
 ### `reorg-wiki-attachments`

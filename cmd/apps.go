@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,16 +23,21 @@ import (
 // ── output types ──────────────────────────────────────────────────────────────
 
 type appsOutApp struct {
-	MtaID      string `json:"mta_id"               toon:"mta_id"`
-	ID         string `json:"app_id"               toon:"app_id"`
-	Name       string `json:"app_name"             toon:"app_name"`
-	State      string `json:"app_state"            toon:"app_state"`
-	CreatedAt  string `json:"app_created_at"       toon:"app_created_at"`
-	UpdatedAt  string `json:"app_updated_at"       toon:"app_updated_at"`
-	Instances     int `json:"process_instances"     toon:"process_instances"`
-	MemoryInMB    int `json:"process_memory_in_mb"  toon:"process_memory_in_mb"`
-	DiskInMB      int `json:"process_disk_in_mb"    toon:"process_disk_in_mb"`
-	TotalMemoryMB int `json:"app_total_memory_mb"   toon:"app_total_memory_mb"`
+	MtaID         string `json:"mta_id"               toon:"mta_id"`
+	ID            string `json:"app_id"               toon:"app_id"`
+	Name          string `json:"app_name"             toon:"app_name"`
+	State         string `json:"app_state"            toon:"app_state"`
+	CreatedAt     string `json:"app_created_at"       toon:"app_created_at"`
+	UpdatedAt     string `json:"app_updated_at"       toon:"app_updated_at"`
+	Instances     int    `json:"process_instances"     toon:"process_instances"`
+	MemoryInMB    int    `json:"process_memory_in_mb"  toon:"process_memory_in_mb"`
+	DiskInMB      int    `json:"process_disk_in_mb"    toon:"process_disk_in_mb"`
+	TotalMemoryMB int    `json:"app_total_memory_mb"   toon:"app_total_memory_mb"`
+
+	// Env holds the app's own user-provided environment variables (not
+	// VCAP_SERVICES or any other derived/system environment) — populated
+	// only when --include-env is given, and otherwise omitted entirely.
+	Env map[string]string `json:"app_env,omitempty" toon:"app_env,omitempty"`
 }
 
 type appsOutSpace struct {
@@ -59,11 +65,30 @@ type appsOutDoc struct {
 
 type appsRegionResult struct {
 	Region string
+	Client *cf.Client // non-nil whenever a token was found, even on a later error
 	Orgs   []cf.Organization
 	Spaces []cf.Space
 	Apps   []cf.App
 	Procs  map[string]cf.Process // appGUID → web process
 	Err    error
+}
+
+// appsEnvConcurrency bounds how many /v3/apps/:guid/environment_variables
+// calls run at once across the whole matched app set when --include-env is
+// given, so a large result set doesn't open hundreds of simultaneous
+// requests against the CF API.
+const appsEnvConcurrency = 8
+
+// appsSkippedEnvKeys holds env var names (matched case-insensitively)
+// excluded from --include-env output. DEPLOY_ATTRIBUTES is injected by
+// deploy tooling (not something a user set), is specific to the
+// app/environment it was deployed from, and isn't meant to be replayed onto
+// another org/space via 'bo update-apps-env'. This is the only filtering
+// applied: secret/password/key-named variables are deliberately included in
+// full, unmasked — they're exactly the values 'bo update-apps-env' needs to
+// recreate on a target app.
+var appsSkippedEnvKeys = map[string]bool{
+	"DEPLOY_ATTRIBUTES": true,
 }
 
 // ── command ───────────────────────────────────────────────────────────────────
@@ -90,7 +115,24 @@ comma-separated list of keywords, and an app matches if mta_id, app_id,
 app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb
 contains any of them (case-insensitive).
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv — otherwise (including no --output)
+the default toon applies.
+
+Use --include-env to also fetch each app's own user-provided environment
+variables (as "app_env" — not VCAP_SERVICES or any other derived/system
+environment) via one extra API call per app; fetching it requires at least
+Space Developer access to the app's space, and a per-app failure is reported
+as a warning on stderr rather than aborting the whole command. Secret/
+password/key-named variables are included in full, never masked or
+skipped — they're exactly what 'bo update-apps-env' needs to recreate on a
+target app. The only variable excluded is DEPLOY_ATTRIBUTES, injected by
+deploy tooling rather than set by a user and not meaningful to replay onto
+another org/space. The written file (JSON or TOON) can be fed straight into
+'bo update-apps-env' to replay those same values onto a different
+org/space. This is sensitive output — treat it the same as
+'bo service-credentials'.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -100,6 +142,11 @@ If --regions is omitted the regions from the last login are used.`,
 		orgGUID, _ := cmd.Flags().GetString("org")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv"}); auto != "" {
+				format = auto
+			}
+		}
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 
@@ -168,7 +215,7 @@ If --regions is omitted the regions from the last login are used.`,
 				// Step 1: orgs.
 				orgs, err := client.ListOrganizations(ctx)
 				if err != nil {
-					results[idx] = appsRegionResult{Region: regionName,
+					results[idx] = appsRegionResult{Region: regionName, Client: client,
 						Err: fmt.Errorf("listing orgs: %w", err)}
 					return
 				}
@@ -188,7 +235,7 @@ If --regions is omitted the regions from the last login are used.`,
 					filteredOrgs = append(filteredOrgs, org)
 				}
 				if len(filteredOrgs) == 0 {
-					results[idx] = appsRegionResult{Region: regionName}
+					results[idx] = appsRegionResult{Region: regionName, Client: client}
 					return
 				}
 				slog.Debug("orgs filtered", "region", regionName, "count", len(filteredOrgs))
@@ -200,14 +247,14 @@ If --regions is omitted the regions from the last login are used.`,
 				}
 				spaces, err := client.ListSpacesByOrgs(ctx, orgGUIDs)
 				if err != nil {
-					results[idx] = appsRegionResult{Region: regionName,
+					results[idx] = appsRegionResult{Region: regionName, Client: client,
 						Err: fmt.Errorf("listing spaces: %w", err)}
 					return
 				}
 				slog.Debug("spaces fetched", "region", regionName, "count", len(spaces))
 
 				if len(spaces) == 0 {
-					results[idx] = appsRegionResult{Region: regionName, Orgs: filteredOrgs}
+					results[idx] = appsRegionResult{Region: regionName, Client: client, Orgs: filteredOrgs}
 					return
 				}
 
@@ -234,12 +281,12 @@ If --regions is omitted the regions from the last login are used.`,
 				innerWg.Wait()
 
 				if appsErr != nil {
-					results[idx] = appsRegionResult{Region: regionName,
+					results[idx] = appsRegionResult{Region: regionName, Client: client,
 						Err: fmt.Errorf("listing apps: %w", appsErr)}
 					return
 				}
 				if procsErr != nil {
-					results[idx] = appsRegionResult{Region: regionName,
+					results[idx] = appsRegionResult{Region: regionName, Client: client,
 						Err: fmt.Errorf("listing processes: %w", procsErr)}
 					return
 				}
@@ -248,6 +295,7 @@ If --regions is omitted the regions from the last login are used.`,
 
 				results[idx] = appsRegionResult{
 					Region: regionName,
+					Client: client,
 					Orgs:   filteredOrgs,
 					Spaces: spaces,
 					Apps:   apps,
@@ -256,6 +304,15 @@ If --regions is omitted the regions from the last login are used.`,
 			}(i, apiURL)
 		}
 		wg.Wait()
+
+		doc, errs := buildAppsDoc(results, includePattern, excludePattern)
+		for _, e := range errs {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+		}
+
+		if includeEnv, _ := cmd.Flags().GetBool("include-env"); includeEnv {
+			enrichAppsDocWithEnv(ctx, &doc, results)
+		}
 
 		out, closeOut, err := resolveOutputWriter(outputFile)
 		if err != nil {
@@ -267,13 +324,64 @@ If --regions is omitted the regions from the last login are used.`,
 
 		switch strings.ToLower(format) {
 		case "json":
-			return writeAppsJSON(out, results, includePattern, excludePattern)
+			return renderAppsJSON(out, doc)
 		case "csv":
-			return writeAppsCSV(out, results, includePattern, excludePattern, color)
+			return renderAppsCSV(out, doc, color)
 		default:
-			return writeAppsToon(out, results, includePattern, excludePattern, color)
+			return renderAppsToon(out, doc, color)
 		}
 	},
+}
+
+// enrichAppsDocWithEnv fetches each app's own user-provided environment
+// variables (bounded concurrency across the whole doc) and populates its
+// Env field in place. results supplies the already-authenticated client for
+// each region; an app whose region has no client (e.g. a region-level error)
+// is left without Env. A per-app fetch failure is reported as a warning on
+// stderr and that app is simply left without Env, rather than aborting the
+// whole command — fetching environment requires at least Space Developer
+// access, which isn't guaranteed for every app in scope.
+func enrichAppsDocWithEnv(ctx context.Context, doc *appsOutDoc, results []appsRegionResult) {
+	clientByRegion := make(map[string]*cf.Client, len(results))
+	for _, r := range results {
+		if r.Client != nil {
+			clientByRegion[r.Region] = r.Client
+		}
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, appsEnvConcurrency)
+	for ri := range doc.Regions {
+		client := clientByRegion[doc.Regions[ri].ID]
+		if client == nil {
+			continue
+		}
+		for oi := range doc.Regions[ri].Orgs {
+			for si := range doc.Regions[ri].Orgs[oi].Spaces {
+				for ai := range doc.Regions[ri].Orgs[oi].Spaces[si].Apps {
+					app := &doc.Regions[ri].Orgs[oi].Spaces[si].Apps[ai]
+					wg.Add(1)
+					sem <- struct{}{}
+					go func(app *appsOutApp) {
+						defer wg.Done()
+						defer func() { <-sem }()
+						env, err := client.GetAppEnvVars(ctx, app.ID)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "warning: app %q: fetching environment variables: %v\n", app.Name, err)
+							return
+						}
+						for k := range env {
+							if appsSkippedEnvKeys[strings.ToUpper(k)] {
+								delete(env, k)
+							}
+						}
+						app.Env = env
+					}(app)
+				}
+			}
+		}
+	}
+	wg.Wait()
 }
 
 // ── output builders ───────────────────────────────────────────────────────────
@@ -338,11 +446,7 @@ func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern str
 	return doc, errs
 }
 
-func writeAppsToon(w io.Writer, results []appsRegionResult, includePattern, excludePattern string, color bool) error {
-	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
+func renderAppsToon(w io.Writer, doc appsOutDoc, color bool) error {
 	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
@@ -355,11 +459,7 @@ func writeAppsToon(w io.Writer, results []appsRegionResult, includePattern, excl
 	return err
 }
 
-func writeAppsJSON(w io.Writer, results []appsRegionResult, includePattern, excludePattern string) error {
-	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
+func renderAppsJSON(w io.Writer, doc appsOutDoc) error {
 	out, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
@@ -368,12 +468,7 @@ func writeAppsJSON(w io.Writer, results []appsRegionResult, includePattern, excl
 	return nil
 }
 
-func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, excludePattern string, color bool) error {
-	doc, errs := buildAppsDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-
+func renderAppsCSV(w io.Writer, doc appsOutDoc, color bool) error {
 	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
@@ -383,6 +478,7 @@ func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, exclu
 		"app_mta_id", "app_id", "app_name", "app_state",
 		"app_created_at", "app_updated_at",
 		"process_instances", "process_memory_in_mb", "process_disk_in_mb", "app_total_memory_mb",
+		"app_env",
 	}); err != nil {
 		return err
 	}
@@ -391,6 +487,14 @@ func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, exclu
 		for _, o := range r.Orgs {
 			for _, sp := range o.Spaces {
 				for _, a := range sp.Apps {
+					var envCol string
+					if len(a.Env) > 0 {
+						envJSON, err := json.Marshal(a.Env)
+						if err != nil {
+							return fmt.Errorf("encoding app_env for %q: %w", a.Name, err)
+						}
+						envCol = string(envJSON)
+					}
 					if err := csvW.Write([]string{
 						r.ID, o.ID, o.Name,
 						sp.ID, sp.Name,
@@ -400,6 +504,7 @@ func writeAppsCSV(w io.Writer, results []appsRegionResult, includePattern, exclu
 						strconv.Itoa(a.MemoryInMB),
 						strconv.Itoa(a.DiskInMB),
 						strconv.Itoa(a.TotalMemoryMB),
+						envCol,
 					}); err != nil {
 						return err
 					}
@@ -435,7 +540,8 @@ func init() {
 	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	appsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
-	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json or .csv) when --format is not explicitly given")
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
+	appsCmd.Flags().Bool("include-env", false, "Also fetch and include each app's own user-provided environment variables (app_env) — requires Space Developer access per app; this is sensitive output, see README")
 }

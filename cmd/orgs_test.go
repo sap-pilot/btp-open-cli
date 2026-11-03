@@ -61,14 +61,18 @@ func TestOrgs_JSON(t *testing.T) {
 	})
 	setupTestEnv(t, srv.URL)
 
-	stdout, _, err := runCmd(t, "orgs", "--all", "--format", "json")
-	if err != nil {
+	outPath := filepath.Join(t.TempDir(), "orgs.json")
+	if _, _, err := runCmd(t, "orgs", "--format", "json", "--output", outPath); err != nil {
 		t.Fatalf("orgs --format json failed: %v", err)
+	}
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("reading output file: %v", readErr)
 	}
 
 	var doc orgsOutDoc
-	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
-		t.Fatalf("output is not valid JSON: %v\nOutput: %s", err, stdout)
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nOutput: %s", err, data)
 	}
 	if len(doc.Regions) == 0 {
 		t.Fatal("expected at least one region in JSON output")
@@ -87,11 +91,15 @@ func TestOrgs_CSV(t *testing.T) {
 	})
 	setupTestEnv(t, srv.URL)
 
-	stdout, _, err := runCmd(t, "orgs", "--all", "--format", "csv")
-	if err != nil {
+	outPath := filepath.Join(t.TempDir(), "orgs.csv")
+	if _, _, err := runCmd(t, "orgs", "--format", "csv", "--output", outPath); err != nil {
 		t.Fatalf("orgs --format csv failed: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("reading output file: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected at least 2 lines (header + data), got %d", len(lines))
 	}
@@ -112,15 +120,19 @@ func TestOrgs_MultipleRegions(t *testing.T) {
 	})
 	setupTestEnv(t, srv1.URL, srv2.URL)
 
-	stdout, _, err := runCmd(t, "orgs", "--all", "--format", "csv")
-	if err != nil {
+	outPath := filepath.Join(t.TempDir(), "orgs.csv")
+	if _, _, err := runCmd(t, "orgs", "--format", "csv", "--output", outPath); err != nil {
 		t.Fatalf("orgs with multiple regions failed: %v", err)
 	}
-	if !strings.Contains(stdout, "org-region1") {
-		t.Errorf("expected org-region1 in output, got: %q", stdout)
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("reading output file: %v", readErr)
 	}
-	if !strings.Contains(stdout, "org-region2") {
-		t.Errorf("expected org-region2 in output, got: %q", stdout)
+	if !strings.Contains(string(data), "org-region1") {
+		t.Errorf("expected org-region1 in output, got: %q", data)
+	}
+	if !strings.Contains(string(data), "org-region2") {
+		t.Errorf("expected org-region2 in output, got: %q", data)
 	}
 }
 
@@ -247,8 +259,8 @@ func TestOrgs_SetsDefaultScope(t *testing.T) {
 	}
 }
 
-// TestOrgs_OutputFlag verifies --output writes the selected-orgs listing to
-// a file instead of stdout.
+// TestOrgs_OutputFlag verifies --output writes the accessible-orgs listing
+// to a file instead of stdout.
 func TestOrgs_OutputFlag(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": singleOrgPage("g1", "my-org"),
@@ -269,6 +281,54 @@ func TestOrgs_OutputFlag(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "my-org") {
 		t.Errorf("expected my-org in output file, got: %q", string(data))
+	}
+}
+
+// TestOrgs_FormatWithoutOutputErrors verifies that --format is rejected when
+// --output is not also given, since without a file the command's own output
+// is the interactive picker, not a listing in one of these formats.
+func TestOrgs_FormatWithoutOutputErrors(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("g1", "my-org"),
+	})
+	setupTestEnv(t, srv.URL)
+
+	_, _, err := runCmd(t, "orgs", "--all", "--format", "json")
+	if err == nil {
+		t.Fatal("expected error when --format is given without --output")
+	}
+	if !strings.Contains(err.Error(), "--format") || !strings.Contains(err.Error(), "--output") {
+		t.Errorf("expected error to mention --format and --output, got: %v", err)
+	}
+}
+
+// TestOrgs_OutputSkipsPickerWithoutAll verifies that --output alone (no
+// --all, no TTY) dumps the accessible org list directly without running the
+// interactive picker, and leaves the default org scope untouched.
+func TestOrgs_OutputSkipsPickerWithoutAll(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("g1", "my-org"),
+	})
+	setupTestEnv(t, srv.URL)
+
+	outPath := filepath.Join(t.TempDir(), "orgs.csv")
+	if _, _, err := runCmd(t, "orgs", "--format", "csv", "--output", outPath); err != nil {
+		t.Fatalf("orgs --output without --all failed: %v", err)
+	}
+	data, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		t.Fatalf("reading output file: %v", readErr)
+	}
+	if !strings.Contains(string(data), "my-org") {
+		t.Errorf("expected my-org in output file, got: %q", data)
+	}
+
+	creds, err := store.Load()
+	if err != nil {
+		t.Fatalf("loading creds: %v", err)
+	}
+	if len(creds.DefaultOrgScope) != 0 {
+		t.Errorf("expected default org scope to remain untouched, got: %+v", creds.DefaultOrgScope)
 	}
 }
 
