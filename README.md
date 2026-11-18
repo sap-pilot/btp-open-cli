@@ -104,6 +104,7 @@ mv bo ~/.local/bin/   # optional
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`update-apps-env`](#update-apps-env) | Create/update apps' user-provided environment variables from a `bo apps --include-env` export |
+| [`html5-apps`](#html5-apps) | List HTML5 application metadata from HTML5 Application Repository service instances |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 | [`service-instances`](#service-instances) | List service instances across orgs and spaces, optionally including user-provided credentials |
@@ -1507,6 +1508,51 @@ As with `update-roles`/`update-role-collections`, the **source org/space recorde
 Without `-y`, a preview table (region, org, space, app, env) is shown and `[y/N]` confirmation is required before anything is changed. Any environment variable whose name (case-insensitive) ends in `KEY`, `SECRET`, `PASSWORD`, or `PASSWD` has its value masked as `********` in that preview — never shown in plain text — though the real value is always what's actually sent to the CF API.
 
 Updating an app's environment variables does not by itself make a running instance pick up the new values — restart or restage it afterwards (see [`restart-apps`](#restart-apps)/[`restage-apps`](#restage-apps)).
+
+### `html5-apps`
+
+List the applications stored in every accessible HTML5 Application Repository Service (`html5-apps-repo`) app-runtime service instance, across one or more regions and organizations.
+
+For each matching service instance, an OAuth2 client_credentials token is obtained from its service key (creating one interactively if none exists, following the same flow as the [SAP/cf-html5-apps-repo-cli-plugin](https://github.com/SAP/cf-html5-apps-repo-cli-plugin) CF CLI plugin) and `GET {uri}/applications/metadata` is called to list its applications. The result is a flat list, one row per application.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used. Use `--spaces` to further narrow to specific space names or GUIDs.
+
+```bash
+# List applications across the default org scope (TOON output)
+bo html5-apps
+
+# JSON / CSV output
+bo html5-apps --format json
+bo html5-apps --format csv
+
+# Scope to specific regions/orgs/spaces
+bo html5-apps --regions us10,eu10
+bo html5-apps --org <org-guid-or-name>
+bo html5-apps --orgs target-orgs.csv
+bo html5-apps --spaces dev,qa
+
+# Only include rows where any listed field contains any of these keywords
+bo html5-apps --include myapp
+
+# Write output to a file (--format auto-detected from the extension)
+bo html5-apps --output html5-apps.csv
+
+# Skip interactive "create a service key" prompts (CI/non-interactive use)
+bo html5-apps --no-prompt
+
+# Discover applications via destinations instead of service instance keys:
+# scans subaccount- and instance-level destinations in the targeted orgs/
+# spaces for ones carrying both an "app_host_id" and a "sap.cloud.service"
+# property, and uses each matching destination's own OAuth2 client
+# credentials to fetch that app host's metadata directly
+bo html5-apps --from-destinations --org <org-guid-or-name>
+```
+
+CSV columns: `region,org_id,org_name,space_id,space_name,app_host_service_instance_name,app_host_service_instance_id,application_name,application_version,changed_on,created_on,is_default,public`
+
+The `--include`/`--exclude` flags match case-insensitively against: `org_name`, `space_name`, `app_host_service_instance_name`, `application_name`, and `application_version`.
+
+With `--from-destinations`, `app_host_service_instance_name` and `app_host_service_instance_id` come from the matching destination's own `Name` and `app_host_id` properties instead of a CF service instance, since no service instance key is involved in that path; `--excludeOrgs` is ignored (destination discovery is per-org, not per-filtered-org-list) — use `--org`/`--orgs` to scope it instead.
 
 ### `service-credentials`
 

@@ -133,7 +133,7 @@ they're logged in.
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
   `org-users`, `org-space-users`, `users`, `apps`, `roles`, `role-collections`,
   `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
-  `count-lines`, `service-credentials` (this one outputs raw secrets — see
+  `html5-apps`, `count-lines`, `service-credentials` (this one outputs raw secrets — see
   "Handling commands that output secrets" below before using it),
   `service-instances`, `service-keys` (both are read-only by default, but
   `--full` fetches and prints live credentials on each — see "Handling
