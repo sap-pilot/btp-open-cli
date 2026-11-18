@@ -452,13 +452,23 @@ func html5RowsFromDestination(ctx context.Context, cmd *cobra.Command, dest map[
 	}
 
 	name := destPropCI(dest, "Name")
-	uri := destPropCI(dest, "URL")
+	// "uri" is the actual html5-apps-repo runtime service endpoint (e.g.
+	// https://html5-apps-repo-rt.<landscape>) and is what must be called for
+	// /applications/metadata. "URL" is the destination's advertised target —
+	// for an html5 app-hosting destination that's often a placeholder like
+	// "https://sap.com/DUMMY_URL" (the real content is served via the
+	// approuter, not this URL directly), so it's only a fallback for a
+	// destination that happens not to carry "uri".
+	uri := destPropCI(dest, "uri")
+	if uri == "" {
+		uri = destPropCI(dest, "URL")
+	}
 	clientID := destPropCI(dest, "clientId")
 	clientSecret := destPropCI(dest, "clientSecret")
 	tokenURL := destPropCI(dest, "tokenServiceURL")
 	if uri == "" || clientID == "" || clientSecret == "" || tokenURL == "" {
 		fmt.Fprintf(cmd.ErrOrStderr(),
-			"warning: destination %q has app_host_id/sap.cloud.service but is missing URL/clientId/clientSecret/tokenServiceURL — skipping\n", name)
+			"warning: destination %q has app_host_id/sap.cloud.service but is missing uri/URL/clientId/clientSecret/tokenServiceURL — skipping\n", name)
 		return nil
 	}
 
@@ -649,10 +659,13 @@ Use --from-destinations to discover applications via destinations instead of
 service instance keys: subaccount-level and instance-level destinations in
 the targeted orgs/spaces are scanned for ones carrying both an "app_host_id"
 and a "sap.cloud.service" property, and each such destination's own OAuth2
-client credentials (clientId/clientSecret/tokenServiceURL/URL) are used to
-fetch that one app host's metadata directly — app_host_service_instance_name
-and app_host_service_instance_id are then the destination's own Name and
-app_host_id, since no CF service instance is involved in this path.
+client credentials (clientId/clientSecret/tokenServiceURL, and its "uri" —
+not "URL", which for an html5 app-hosting destination is often just a
+placeholder like https://sap.com/DUMMY_URL — falling back to "URL" only if
+"uri" is absent) are used to fetch that one app host's metadata directly —
+app_host_service_instance_name and app_host_service_instance_id are then
+the destination's own Name and app_host_id, since no CF service instance
+is involved in this path.
 destination_name is always the destination's own Name; for an
 instance-level destination, destination_instance_name/id additionally
 identify the destination service instance it was found in, while a
