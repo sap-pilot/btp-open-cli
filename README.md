@@ -237,7 +237,10 @@ straight to that file, with no prompting and no waiting for input — `--all`
 is ignored in this mode, and the default org scope is left untouched.
 `--format` is only valid together with `--output`, since without a file the
 command's output is the interactive picker itself, not a listing one of
-these formats could represent.
+these formats could represent. If `--format` is not explicitly given, it is
+auto-detected from `--output`'s extension: `.json` selects `json`, `.csv`
+selects `csv`, `.toon` selects `toon` — otherwise the default `toon` applies.
+Pass `--format` explicitly to override the extension.
 
 ```bash
 # Interactively pick the default org scope for this session
@@ -256,7 +259,8 @@ bo orgs --regions us10,us20,eu10
 
 # Non-interactive: dump every accessible org straight to a file, skipping
 # the picker — shell '>' doesn't work here since the interactive picker
-# also writes to stdout
+# also writes to stdout. --format is auto-detected from the .csv extension
+# here, so it could also be omitted
 bo orgs --output my-orgs.csv --format csv
 
 # Narrow the dumped list to prod orgs and save as a reusable --orgs CSV
@@ -339,8 +343,10 @@ bo spaces --orgs target-orgs.csv
 bo spaces --include prod,staging
 bo spaces --exclude sandbox,test
 
-# Write output to a file instead of stdout
-bo spaces --format csv -o spaces.csv
+# Write output to a file instead of stdout; --format is auto-detected from
+# -o's extension (.json, .csv, .toon) when not explicitly given — this
+# writes CSV without needing --format csv
+bo spaces -o spaces.csv
 ```
 
 TOON output format (same shape as `org-spaces`):
@@ -393,7 +399,8 @@ bo org-users --orgs target-orgs.csv
 # Specific regions
 bo org-users --regions us10,us20,eu10
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon) when not explicitly given
 bo org-users --output org-users.csv
 ```
 
@@ -437,7 +444,9 @@ bo org-space-users --orgs target-orgs.csv
 # Specific regions
 bo org-space-users --regions us10,us20,eu10
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon — uar.csv is never auto-detected, pass
+# --format uar.csv explicitly) when not explicitly given
 bo org-space-users --output org-space-users.csv
 ```
 
@@ -603,7 +612,9 @@ bo users --excludeFields lastLogonTime,groups
 # Combine filtering and field selection
 bo users --include "sap.ids" --excludeFields groups --regions us10,us20
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon — uar.csv is never auto-detected, pass
+# --format uar.csv explicitly) when not explicitly given
 bo users --output users.csv
 ```
 
@@ -783,7 +794,7 @@ bo roles --format json
 bo roles --output roles.json
 ```
 
-`--format` defaults to `toon`, but is auto-detected as `json` whenever `--output`/`-o` ends in `.json` and `--format` isn't explicitly given — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
 
 Output format (TOON):
 ```
@@ -934,7 +945,7 @@ bo role-collections --format json
 bo role-collections --output role-collections.json
 ```
 
-`--format` defaults to `toon`, but is auto-detected as `json` whenever `--output`/`-o` ends in `.json` and `--format` isn't explicitly given — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
 
 Output format (TOON):
 ```
@@ -1063,7 +1074,8 @@ bo describe-subaccount --org my-org-name --regions us10,us20,eu10
 # Describe every org in the default scope selected via `bo orgs`
 bo describe-subaccount
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the .json extension here, so --format json could be omitted
 bo describe-subaccount --org my-org-name --output subaccount.json --format json
 ```
 
@@ -1284,7 +1296,8 @@ bo subaccount-destinations --org <org-guid-or-name> --regions us10,us20,eu10
 # Include specific orgs (CSV: region,org_id,org_name)
 bo subaccount-destinations --orgs target-orgs.csv
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# -o's extension (.json, .csv, .toon) when not explicitly given
 bo subaccount-destinations --org <org-guid-or-name> --output dests.json --format json
 ```
 
@@ -1457,7 +1470,7 @@ bo apps --output apps.json
 bo apps --include-env --format json -o apps-env.json
 ```
 
-`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json` — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
 
 Output format (TOON):
 ```
@@ -1667,11 +1680,12 @@ bo service-instances
 # Narrow to specific orgs, a specific space, and instance names
 bo service-instances --orgs target-orgs.csv --spaces prod --service-instances "*-hdi,*-db"
 
-# Include user-provided instances' credentials, writing to a file instead of stdout
+# Include user-provided instances' credentials, writing to a file instead of stdout;
+# --format is auto-detected from the .json extension here, so --format json could be omitted
 bo service-instances --full -o instances.json --format json
 ```
 
-Output formats (`--format`):
+Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv`, `.toon`) when `--format` isn't explicitly given:
 
 | Format | Description |
 |---|---|
@@ -1709,11 +1723,12 @@ bo service-keys
 # Narrow to specific orgs, a specific space, and key names
 bo service-keys --orgs target-orgs.csv --spaces prod --service-keys "btp*"
 
-# Include credentials, writing to a file instead of stdout
+# Include credentials, writing to a file instead of stdout;
+# --format is auto-detected from the .json extension here, so --format json could be omitted
 bo service-keys --full -o keys.json --format json
 ```
 
-Output formats (`--format`):
+Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv`, `.toon`) when `--format` isn't explicitly given:
 
 | Format | Description |
 |---|---|

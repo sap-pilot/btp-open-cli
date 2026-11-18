@@ -284,7 +284,10 @@ pick one interactively, or pass --org/--orgs directly. With more than one
 target org, --format json/toon returns a list of per-org results instead of
 a single object.
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies. Pass --format explicitly to override the extension.
 
 The access token is cached locally and reused until it expires or 'bo logoff' is run.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -297,6 +300,11 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		outputFile, _ := cmd.Flags().GetString("output")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -670,7 +678,7 @@ func init() {
 	subaccountDestinationsCmd.Flags().String("org", "", "Org GUID or name substring to target")
 	subaccountDestinationsCmd.Flags().String("orgs", "", "Path to CSV of orgs to target (columns: region,org_id,org_name)")
 	subaccountDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
-	subaccountDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
+	subaccountDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full); auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	subaccountDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
 	subaccountDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	subaccountDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")

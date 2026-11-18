@@ -130,7 +130,10 @@ Use --include/--exclude to narrow results further: each accepts a
 comma-separated list of keywords, and a user matches if id, name, origin, or
 roles contains any of them (case-insensitive).
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies. Pass --format explicitly to override the extension.
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -141,6 +144,11 @@ If --regions is omitted, the regions from the last login are used.`,
 		orgGUID, _ := cmd.Flags().GetString("org")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		outputFile, _ := cmd.Flags().GetString("output")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -332,7 +340,7 @@ func init() {
 	orgUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgUsersCmd)
 	orgUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	orgUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	orgUsersCmd.Flags().String("include", "", "Only include users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgUsersCmd.Flags().String("exclude", "", "Exclude users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")

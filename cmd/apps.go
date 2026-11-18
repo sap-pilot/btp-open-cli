@@ -117,8 +117,9 @@ contains any of them (case-insensitive).
 
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
-.json selects json, .csv selects csv — otherwise (including no --output)
-the default toon applies.
+.json selects json, .csv selects csv, .toon selects toon — otherwise
+(including no --output) the default toon applies. Pass --format explicitly
+to override the extension.
 
 Use --include-env to also fetch each app's own user-provided environment
 variables (as "app_env" — not VCAP_SERVICES or any other derived/system
@@ -143,7 +144,7 @@ If --regions is omitted the regions from the last login are used.`,
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
 		if !cmd.Flags().Changed("format") {
-			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv"}); auto != "" {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
 				format = auto
 			}
 		}
@@ -540,7 +541,7 @@ func init() {
 	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	appsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
-	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json or .csv) when --format is not explicitly given")
+	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().Bool("include-env", false, "Also fetch and include each app's own user-provided environment variables (app_env) — requires Space Developer access per app; this is sensitive output, see README")

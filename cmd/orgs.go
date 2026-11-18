@@ -110,6 +110,11 @@ formats could represent:
         command's --orgs/--excludeOrgs file (column order is not significant
         when read back — only the column names are)
 
+If --format is not explicitly given, it is auto-detected from --output's
+extension: .json selects json, .csv selects csv, .toon selects toon —
+otherwise the default toon applies. Pass --format explicitly to override
+the extension.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -121,6 +126,11 @@ If --regions is omitted the regions from the last login are used.`,
 
 		if outputFile == "" && cmd.Flags().Changed("format") {
 			return fmt.Errorf("--format can only be used together with --output")
+		}
+		if outputFile != "" && !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
 		}
 
 		creds, err := store.Load()
@@ -278,7 +288,7 @@ func init() {
 	orgsCmd.GroupID = "common"
 	rootCmd.AddCommand(orgsCmd)
 	orgsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv — only valid together with --output")
+	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv — only valid together with --output; auto-detected from --output's extension (.json, .csv, .toon) when not explicitly given")
 	orgsCmd.Flags().String("include", "", "Only show/select orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().Bool("all", false, "Select every matching org without prompting for interactive selection")

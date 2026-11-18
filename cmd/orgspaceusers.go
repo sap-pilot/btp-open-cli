@@ -145,7 +145,11 @@ Use --include/--exclude to narrow results further: each accepts a
 comma-separated list of keywords, and a user matches if id, name, origin, or
 roles contains any of them (case-insensitive).
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies (uar.csv is never auto-detected — pass --format
+uar.csv explicitly). Pass --format explicitly to override the extension.
 
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -156,6 +160,11 @@ If --regions is omitted, the regions from the last login are used.`,
 		orgGUID, _ := cmd.Flags().GetString("org")
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		outputFile, _ := cmd.Flags().GetString("output")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -429,7 +438,7 @@ func init() {
 	orgSpaceUsersCmd.GroupID = "cf-org"
 	rootCmd.AddCommand(orgSpaceUsersCmd)
 	orgSpaceUsersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv")
+	orgSpaceUsersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv; auto-detected from --output's extension (.json, .csv, or .toon — uar.csv is never auto-detected) when --format is not explicitly given")
 	orgSpaceUsersCmd.Flags().String("include", "", "Only include users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgSpaceUsersCmd.Flags().String("exclude", "", "Exclude users where id, name, origin, or roles contain any of these comma-separated, case-insensitive keywords")
 	orgSpaceUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")

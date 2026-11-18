@@ -641,8 +641,9 @@ them (case-insensitive).
 
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
-.json selects json, .csv selects csv — otherwise (including no --output)
-the default toon applies.
+.json selects json, .csv selects csv, .toon selects toon — otherwise
+(including no --output) the default toon applies. Pass --format explicitly
+to override the extension.
 
 Use --from-destinations to discover applications via destinations instead of
 service instance keys: subaccount-level and instance-level destinations in
@@ -683,7 +684,7 @@ If --regions is omitted the regions from the last login are used.`,
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
 		if !cmd.Flags().Changed("format") {
-			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv"}); auto != "" {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
 				format = auto
 			}
 		}
@@ -826,7 +827,7 @@ func init() {
 	html5AppsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name) — ignored with --from-destinations")
 	html5AppsCmd.Flags().String("spaces", "", "Comma-separated space names or GUIDs to narrow down to (default: every space in scope)")
 	html5AppsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
-	html5AppsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json or .csv) when --format is not explicitly given")
+	html5AppsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	html5AppsCmd.Flags().String("include", "", "Only include rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().Bool("from-destinations", false, "Discover applications via subaccount/instance destinations carrying app_host_id + sap.cloud.service, instead of via service instance keys")

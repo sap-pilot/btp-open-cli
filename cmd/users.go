@@ -93,7 +93,11 @@ Use --include/--exclude to narrow results further: each accepts a
 comma-separated list of keywords, and a user matches if any user field
 contains any of them (case-insensitive).
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies (uar.csv is never auto-detected — pass --format
+uar.csv explicitly). Pass --format explicitly to override the extension.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -103,6 +107,11 @@ If --regions is omitted the regions from the last login are used.`,
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgGUID, _ := cmd.Flags().GetString("org")
 		outputFile, _ := cmd.Flags().GetString("output")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
@@ -444,7 +453,7 @@ func init() {
 	usersCmd.GroupID = "xsuaa"
 	rootCmd.AddCommand(usersCmd)
 	usersCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	usersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv")
+	usersCmd.Flags().String("format", "toon", "Output format: toon (default), json, csv, or uar.csv; auto-detected from --output's extension (.json, .csv, or .toon — uar.csv is never auto-detected) when --format is not explicitly given")
 	usersCmd.Flags().String("org", "", "Org GUID to target; only users from this org will be fetched")
 	usersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	usersCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")

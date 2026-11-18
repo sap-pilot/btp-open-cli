@@ -80,8 +80,9 @@ If neither --org nor --orgs is given, the default org scope selected via
 pick one interactively, or pass --org/--orgs directly.
 
 Use --output/-o to write the result to a file instead of stdout. If --format
-is not explicitly given, it is auto-detected as json when --output ends in
-.json — otherwise the default toon applies.
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .toon selects toon — otherwise the default toon
+applies. Pass --format explicitly to override the extension.
 
 If --regions is omitted the regions from the last login are used.`,
 	Args: cobra.MaximumNArgs(1),
@@ -101,7 +102,7 @@ If --regions is omitted the regions from the last login are used.`,
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		format, _ := cmd.Flags().GetString("format")
 		if !cmd.Flags().Changed("format") {
-			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json"}); auto != "" {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "toon": ".toon"}); auto != "" {
 				format = auto
 			}
 		}
@@ -321,5 +322,5 @@ func init() {
 	roleCollectionsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
 	roleCollectionsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	roleCollectionsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
-	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default) or json; auto-detected as json when --output ends in .json and --format is not explicitly given")
+	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default) or json; auto-detected from --output's extension (.json or .toon) when --format is not explicitly given")
 }

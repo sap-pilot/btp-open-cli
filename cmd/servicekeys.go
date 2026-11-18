@@ -125,7 +125,10 @@ Output formats (--format):
   json  JSON document
   csv   Flat CSV rows, one per service key (credentials as a JSON column with --full)
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies. Pass --format explicitly to override the extension.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -140,6 +143,11 @@ If --regions is omitted the regions from the last login are used.`,
 		fullFlag, _ := cmd.Flags().GetBool("full")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 
 		if spaceFlag != "" {
 			if spacesFlag != "" {
@@ -577,5 +585,5 @@ func init() {
 	serviceKeysCmd.Flags().String("service-keys", "", "Only include service keys whose name matches any of these comma-separated patterns (glob, e.g. 'btp*,temp*', or substring); default is every service key in scope")
 	serviceKeysCmd.Flags().Bool("full", false, "Also fetch and include each service key's credentials (live secrets)")
 	serviceKeysCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
-	serviceKeysCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	serviceKeysCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 }
