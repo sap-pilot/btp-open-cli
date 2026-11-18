@@ -15,7 +15,29 @@ import (
 	"time"
 )
 
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+// httpClient pins any redirect it follows to the original request's scheme
+// and host. Some html5-apps-repo-rt backends 301/302 a bare
+// "/applications/metadata" to "/applications/metadata/" using an absolute
+// Location built from their own internal address (http, container port
+// 8080) rather than the public https route — that address isn't reachable
+// from outside the CF network, so blindly following it just hangs until the
+// client timeout. Requesting the trailing-slash path directly (see
+// ListApplicationsMetadata) avoids the redirect in the first place; this is
+// a second line of defense for any other redirect of the same kind.
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		orig := via[0].URL
+		if req.URL.Scheme != orig.Scheme || req.URL.Host != orig.Host {
+			req.URL.Scheme = orig.Scheme
+			req.URL.Host = orig.Host
+		}
+		return nil
+	},
+}
 
 type tokenResponse struct {
 	AccessToken string `json:"access_token"`
@@ -70,9 +92,13 @@ type Application struct {
 // ListApplicationsMetadata fetches application metadata from an HTML5
 // Application Repository runtime (app-runtime plan) service instance, or
 // from a destination pointing at one.
-// GET {uri}/applications/metadata
+// GET {uri}/applications/metadata/
+//
+// The trailing slash is deliberate: some backends 301/302 the bare path to
+// this one using a broken absolute Location (see httpClient's
+// CheckRedirect) — requesting it directly avoids that redirect entirely.
 func ListApplicationsMetadata(ctx context.Context, uri, accessToken string) ([]Application, error) {
-	u := strings.TrimRight(uri, "/") + "/applications/metadata"
+	u := strings.TrimRight(uri, "/") + "/applications/metadata/"
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err
