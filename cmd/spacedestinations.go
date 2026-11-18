@@ -5,11 +5,13 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	toonenc "github.com/toon-format/toon-go"
@@ -23,16 +25,39 @@ import (
 
 // ── output types ──────────────────────────────────────────────────────────────
 
-type sdDestSvcInstance struct {
-	ID           string              `json:"destination_service_id"   toon:"destination_service_id"`
-	Name         string              `json:"destination_service_name" toon:"destination_service_name"`
-	Destinations []map[string]string `json:"destinations"             toon:"destinations"`
+// sdSpaceDoc is one space's instance-level destinations, flattened across
+// every destination service instance found in it — each destination's own
+// map carries its originating "destination_service_id"/
+// "destination_service_name" (see sdTagDestInstance), so that grouping is
+// not lost by the flattening.
+type sdSpaceDoc struct {
+	SpaceID      string              `json:"space_id"      toon:"space_id"`
+	SpaceName    string              `json:"space_name"    toon:"space_name"`
+	Destinations []map[string]string `json:"destinations"  toon:"destinations"`
 }
 
-type sdSpaceDoc struct {
-	SpaceID   string              `json:"space_id"                      toon:"space_id"`
-	SpaceName string              `json:"space_name"                    toon:"space_name"`
-	Instances []sdDestSvcInstance `json:"destination_service_instances" toon:"destination_service_instances"`
+// sdOrgDoc is one org's spaces (each with its own flattened destinations),
+// the result shape for 'bo space-destinations' once --space is omitted and
+// every accessible space is in scope — or, with --space given, a single org
+// with a single space.
+type sdOrgDoc struct {
+	OrgID   string       `json:"org_id"   toon:"org_id"`
+	OrgName string       `json:"org_name" toon:"org_name"`
+	Spaces  []sdSpaceDoc `json:"spaces"   toon:"spaces"`
+}
+
+// sdTagDestInstance returns a copy of dest with "destination_service_id"
+// and "destination_service_name" set to instGUID/instName, so a destination
+// still carries which destination service instance it came from after
+// sdSpaceDoc.Destinations flattens away the per-instance grouping.
+func sdTagDestInstance(dest map[string]string, instGUID, instName string) map[string]string {
+	tagged := make(map[string]string, len(dest)+2)
+	for k, v := range dest {
+		tagged[k] = v
+	}
+	tagged["destination_service_id"] = instGUID
+	tagged["destination_service_name"] = instName
+	return tagged
 }
 
 // sdMinimalDest returns a copy of the destination map containing only the
@@ -140,22 +165,49 @@ func resolveSpaceDestClients(
 	}
 	spaceName = spaceObj.Name
 
+	clients, err = resolveSpaceDestClientsFor(ctx, cmd, cfClient, spaceGUID, spaceName, creds)
+	saveDestCache(cmd, creds)
+	if err == nil && len(clients) == 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: no destination service instances found in space %s (%s)\n", spaceName, spaceGUID)
+	}
+	return spaceName, clients, err
+}
+
+// resolveSpaceDestClientsFor is resolveSpaceDestClients' second half, for a
+// caller that has already found the space's own CF client (e.g. while
+// scanning every space in an org, where the same client is reused across
+// many spaces instead of re-searching for each one across every region) —
+// it looks up the destination/lite plan and delegates to
+// resolveSpaceDestClientsForPlan. Unlike resolveSpaceDestClients, it does
+// NOT persist the token cache itself; callers that invoke it directly
+// (rather than through resolveSpaceDestClients) must call saveDestCache
+// once after they're done, rather than once per space.
+func resolveSpaceDestClientsFor(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID, spaceName string, creds *store.Credentials) ([]sdDestClient, error) {
 	destPlan, planErr := cfClient.FindServicePlan(ctx, "destination", "lite")
 	if planErr != nil {
-		return spaceName, nil, fmt.Errorf("looking up destination service plan: %w", planErr)
+		return nil, fmt.Errorf("looking up destination service plan: %w", planErr)
 	}
 	if destPlan == nil {
-		return spaceName, nil, fmt.Errorf("destination service plan 'lite' not found in region %s", store.APIURLToRegion(cfClient.BaseURL()))
+		return nil, fmt.Errorf("destination service plan 'lite' not found in region %s", store.APIURLToRegion(cfClient.BaseURL()))
 	}
+	return resolveSpaceDestClientsForPlan(ctx, cmd, cfClient, spaceGUID, spaceName, destPlan.GUID, creds)
+}
 
+// resolveSpaceDestClientsForPlan is resolveSpaceDestClientsFor's core, for a
+// caller that has also already resolved the destination/lite plan GUID once
+// (e.g. per region, rather than refetching it for every space scanned in
+// that region). Discovers destination service instances in the space and
+// resolves/caches an OAuth token for each, same prompt/skip/abort behavior
+// as resolveSpaceDestClients. Does not persist the cache — see
+// resolveSpaceDestClientsFor.
+func resolveSpaceDestClientsForPlan(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID, spaceName, destPlanGUID string, creds *store.Credentials) ([]sdDestClient, error) {
 	// ── find destination service instances in the space ───────────────────────
-	instances, instErr := cfClient.ListServiceInstancesInSpace(ctx, spaceGUID, destPlan.GUID)
+	instances, instErr := cfClient.ListServiceInstancesInSpace(ctx, spaceGUID, destPlanGUID)
 	if instErr != nil {
-		return spaceName, nil, fmt.Errorf("listing destination instances in space: %w", instErr)
+		return nil, fmt.Errorf("listing destination instances in space: %w", instErr)
 	}
 	if len(instances) == 0 {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: no destination service instances found in space %s (%s)\n", spaceName, spaceGUID)
-		return spaceName, nil, nil
+		return nil, nil
 	}
 
 	// ── ensure cache map exists ───────────────────────────────────────────────
@@ -166,6 +218,7 @@ func resolveSpaceDestClients(
 		creds.SpaceDestServices[spaceGUID] = make(map[string]*store.DestInstanceCache)
 	}
 	spaceCache := creds.SpaceDestServices[spaceGUID]
+	var clients []sdDestClient
 
 	// ── per-instance: refresh token if needed, fetching key from CF each time ─
 	// Client ID and client secret are intentionally NOT cached locally.
@@ -180,21 +233,21 @@ func resolveSpaceDestClients(
 			// Always fetch the service key from CF to get credentials.
 			key, keyErr := cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
 			if keyErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: finding service key for %q: %v\n", inst.Name, keyErr)
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [space %s] finding service key for %q: %v\n", spaceName, inst.Name, keyErr)
 				continue
 			}
 			if key == nil {
 				// No key — warn and offer an interactive prompt to create one.
 				for key == nil {
 					fmt.Fprintf(cmd.ErrOrStderr(),
-						"\nWARNING: No service key found for destination service instance %q (%s)\n"+
+						"\nWARNING: No service key found for destination service instance %q (%s, space %s)\n"+
 							"  Create one manually, e.g. via CF CLI:\n"+
 							"    cf create-service-key %s bo-dest-key\n"+
 							"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
-						inst.Name, inst.GUID, inst.Name)
+						inst.Name, inst.GUID, spaceName, inst.Name)
 					retry, skip := promptRetryOrSkip(ctx)
 					if !retry && !skip {
-						return spaceName, nil, errAborted
+						return nil, errAborted
 					}
 					if skip {
 						break
@@ -253,11 +306,8 @@ func resolveSpaceDestClients(
 		})
 	}
 
-	// ── persist updated cache ─────────────────────────────────────────────────
 	creds.SpaceDestServices[spaceGUID] = spaceCache
-	saveDestCache(cmd, creds)
-
-	return spaceName, clients, nil
+	return clients, nil
 }
 
 // saveDestCache reloads credentials from disk before saving so that any CF
@@ -334,11 +384,270 @@ func printActionResults(cmd *cobra.Command, action string, names []string, items
 
 // ── space-destinations ────────────────────────────────────────────────────────
 
+// resolveSpaceOrgInfo looks up the org GUID and name that spaceGUID belongs
+// to, searching across apiURLs the same way resolveSpaceDestClients finds
+// the space itself.
+func resolveSpaceOrgInfo(ctx context.Context, creds *store.Credentials, apiURLs []string, spaceGUID string) (orgGUID, orgName string, err error) {
+	for _, apiURL := range apiURLs {
+		tok, ok := creds.Tokens[apiURL]
+		if !ok {
+			continue
+		}
+		c := cf.NewClient(apiURL, tok.AccessToken)
+		c.SetTokenRefresher(makeTokenRefresher(apiURL, tok.AccessToken))
+		s, findErr := c.FindSpaceByGUID(ctx, spaceGUID)
+		if findErr != nil || s == nil {
+			continue
+		}
+		orgGUID = s.Relationships.Organization.Data.GUID
+		if orgs, orgErr := c.ListOrganizations(ctx); orgErr == nil {
+			for _, o := range orgs {
+				if o.GUID == orgGUID {
+					orgName = o.Name
+					break
+				}
+			}
+		}
+		return orgGUID, orgName, nil
+	}
+	return "", "", fmt.Errorf("space %q not found in any active region — check --regions", spaceGUID)
+}
+
+// sdRegionOrgsSpaces holds one region's orgs/spaces plus the destination/lite
+// plan GUID found in that region (empty if the plan isn't offered there),
+// gathered once up front so fetchAllSpaceDestinations doesn't re-resolve the
+// plan or re-search for each space individually.
+type sdRegionOrgsSpaces struct {
+	Region   string
+	Client   *cf.Client
+	Orgs     []cf.Organization
+	Spaces   []cf.Space
+	PlanGUID string
+	Err      error
+}
+
+// resolveAllOrgsSpacesForDest lists every org and space across apiURLs, in
+// parallel per region, along with that region's destination/lite service
+// plan GUID.
+func resolveAllOrgsSpacesForDest(ctx context.Context, creds *store.Credentials, apiURLs []string) []sdRegionOrgsSpaces {
+	results := make([]sdRegionOrgsSpaces, len(apiURLs))
+	var wg sync.WaitGroup
+	for i, apiURL := range apiURLs {
+		wg.Add(1)
+		go func(idx int, url string) {
+			defer wg.Done()
+			regionName := store.APIURLToRegion(url)
+
+			tok, ok := creds.Tokens[url]
+			if !ok {
+				results[idx] = sdRegionOrgsSpaces{Region: regionName,
+					Err: fmt.Errorf("no token — run: bo login --regions %s", regionName)}
+				return
+			}
+			client := cf.NewClient(url, tok.AccessToken)
+			client.SetTokenRefresher(makeTokenRefresher(url, tok.AccessToken))
+
+			orgs, err := client.ListOrganizations(ctx)
+			if err != nil {
+				results[idx] = sdRegionOrgsSpaces{Region: regionName, Client: client,
+					Err: fmt.Errorf("listing orgs: %w", err)}
+				return
+			}
+			if len(orgs) == 0 {
+				results[idx] = sdRegionOrgsSpaces{Region: regionName, Client: client}
+				return
+			}
+
+			orgGUIDs := make([]string, len(orgs))
+			for i, o := range orgs {
+				orgGUIDs[i] = o.GUID
+			}
+			spaces, err := client.ListSpacesByOrgs(ctx, orgGUIDs)
+			if err != nil {
+				results[idx] = sdRegionOrgsSpaces{Region: regionName, Client: client,
+					Err: fmt.Errorf("listing spaces: %w", err)}
+				return
+			}
+
+			var planGUID string
+			if plan, planErr := client.FindServicePlan(ctx, "destination", "lite"); planErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: [%s] looking up destination service plan: %v\n", regionName, planErr)
+			} else if plan != nil {
+				planGUID = plan.GUID
+			}
+
+			results[idx] = sdRegionOrgsSpaces{
+				Region: regionName, Client: client,
+				Orgs: orgs, Spaces: spaces, PlanGUID: planGUID,
+			}
+		}(i, apiURL)
+	}
+	wg.Wait()
+	return results
+}
+
+// fetchAllSpaceDestinations is the --space-omitted discovery path: every
+// accessible org/space is scanned for destination service instances and
+// their instance-level destinations, flattened per space (see sdSpaceDoc).
+// Orgs/spaces with no matching destinations are omitted from the result
+// entirely, unlike the single --space path which always returns its one
+// target space even when empty.
+func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, full bool, includePattern, excludePattern string) ([]sdOrgDoc, error) {
+	regionResults := resolveAllOrgsSpacesForDest(ctx, creds, apiURLs)
+
+	fetchFn := destination.ListInstanceDestinations
+	if full {
+		fetchFn = destination.ListInstanceDestinationsFull
+	}
+
+	var docs []sdOrgDoc
+	for _, rr := range regionResults {
+		if rr.Err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %v\n", rr.Region, rr.Err)
+			continue
+		}
+		if rr.Client == nil || rr.PlanGUID == "" || len(rr.Spaces) == 0 {
+			continue
+		}
+
+		spacesByOrg := make(map[string][]cf.Space)
+		for _, sp := range rr.Spaces {
+			orgGUID := sp.Relationships.Organization.Data.GUID
+			spacesByOrg[orgGUID] = append(spacesByOrg[orgGUID], sp)
+		}
+
+		for _, org := range rr.Orgs {
+			var spaceDocs []sdSpaceDoc
+			for _, sp := range spacesByOrg[org.GUID] {
+				clients, resolveErr := resolveSpaceDestClientsForPlan(ctx, cmd, rr.Client, sp.GUID, sp.Name, rr.PlanGUID, creds)
+				if resolveErr != nil {
+					if resolveErr == errAborted {
+						saveDestCache(cmd, creds)
+						return docs, errAborted
+					}
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s/%s] %v\n", org.Name, sp.Name, resolveErr)
+					continue
+				}
+
+				var dests []map[string]string
+				for _, c := range clients {
+					rawDests, fetchErr := fetchFn(ctx, c.URI, c.Token)
+					if fetchErr != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s/%s] instance %q: listing destinations: %v\n",
+							org.Name, sp.Name, c.InstanceName, fetchErr)
+						continue
+					}
+					for _, raw := range rawDests {
+						if includePattern != "" && !sdMatchesAnyKeyword(includePattern, raw) {
+							continue
+						}
+						if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
+							continue
+						}
+						d := raw
+						if !full {
+							d = sdMinimalDest(raw)
+						}
+						dests = append(dests, sdTagDestInstance(d, c.InstanceGUID, c.InstanceName))
+					}
+				}
+				if len(dests) == 0 {
+					continue
+				}
+				sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
+				spaceDocs = append(spaceDocs, sdSpaceDoc{SpaceID: sp.GUID, SpaceName: sp.Name, Destinations: dests})
+			}
+			if len(spaceDocs) == 0 {
+				continue
+			}
+			docs = append(docs, sdOrgDoc{OrgID: org.GUID, OrgName: org.Name, Spaces: spaceDocs})
+		}
+	}
+
+	saveDestCache(cmd, creds)
+	return docs, nil
+}
+
+// ── rendering ────────────────────────────────────────────────────────────────
+
+// Single-org results marshal as a single object (matching the pre---output
+// shape); more than one — or zero — marshal as a list, same convention as
+// subaccount-destinations.
+
+func renderSpaceDestinationsJSON(w io.Writer, docs []sdOrgDoc) error {
+	var out []byte
+	var err error
+	if len(docs) == 1 {
+		out, err = json.MarshalIndent(docs[0], "", "  ")
+	} else {
+		out, err = json.MarshalIndent(docs, "", "  ")
+	}
+	if err != nil {
+		return fmt.Errorf("encoding JSON: %w", err)
+	}
+	fmt.Fprintln(w, string(out))
+	return nil
+}
+
+func renderSpaceDestinationsToon(w io.Writer, docs []sdOrgDoc) error {
+	var out []byte
+	var err error
+	if len(docs) == 1 {
+		out, err = toonenc.Marshal(docs[0], toonenc.WithIndent(2))
+	} else {
+		out, err = toonenc.Marshal(struct {
+			Orgs []sdOrgDoc `json:"orgs" toon:"orgs"`
+		}{docs}, toonenc.WithIndent(2))
+	}
+	if err != nil {
+		return fmt.Errorf("encoding TOON: %w", err)
+	}
+	fmt.Fprintln(w, string(out))
+	return nil
+}
+
+func renderSpaceDestinationsCSV(w io.Writer, docs []sdOrgDoc) error {
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+	if err := cw.Write([]string{
+		"org_id", "org_name", "space_id", "space_name",
+		"destination_service_name", "destination_name", "destination_url", "destination_sap_client",
+	}); err != nil {
+		return err
+	}
+	for _, org := range docs {
+		for _, sp := range org.Spaces {
+			for _, d := range sp.Destinations {
+				if err := cw.Write([]string{
+					org.OrgID, org.OrgName, sp.SpaceID, sp.SpaceName,
+					d["destination_service_name"], d["Name"], d["URL"], d["sap-client"],
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ── command ───────────────────────────────────────────────────────────────────
+
 var spaceDestinationsCmd = &cobra.Command{
 	Use:   "space-destinations",
-	Short: "List instance-level destinations across all destination service instances in a CF space",
+	Short: "List instance-level destinations across destination service instances in CF spaces",
 	Long: `Retrieves all instance-level destinations from every destination service instance
-found in the given CF space (identified by --space GUID).
+found in the given CF space (--space GUID).
+
+If --space is omitted, every accessible space (across every org in scope) is
+scanned instead — destinations are then grouped as
+org_id/org_name -> spaces[space_id/space_name] -> destinations, each
+destination carrying its own "destination_service_id"/
+"destination_service_name" (the destination service instance it was found
+in). Orgs/spaces with no matching destinations are left out of this
+all-spaces result entirely; with --space given, that one target space is
+always included, even if empty. With more than one org in the result,
+--format json/toon returns a list of per-org results instead of a single
+object.
 
 Without --full: only Name, URL, and sap-client are included per destination.
 With --full: all destination properties are returned as a flat object exactly as
@@ -351,7 +660,12 @@ as a glob pattern (e.g. API*PP) if a keyword contains * ? [, otherwise as a
 case-insensitive substring.
 
 Use --format csv (without --full) to get a flat CSV with columns:
-  space_name,destination_service_name,destination_name,destination_url,destination_sap_client`,
+  org_id,org_name,space_id,space_name,destination_service_name,destination_name,destination_url,destination_sap_client
+
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies. Pass --format explicitly to override the extension.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		spaceGUID, _ := cmd.Flags().GetString("space")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -359,6 +673,12 @@ Use --format csv (without --full) to get a flat CSV with columns:
 		full, _ := cmd.Flags().GetBool("full")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
+		outputFile, _ := cmd.Flags().GetString("output")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -372,94 +692,77 @@ Use --format csv (without --full) to get a flat CSV with columns:
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs)
-		if err != nil {
-			return err
-		}
+		var docs []sdOrgDoc
+		if spaceGUID != "" {
+			orgGUID, orgName, orgErr := resolveSpaceOrgInfo(ctx, creds, apiURLs, spaceGUID)
+			if orgErr != nil {
+				return orgErr
+			}
+			spaceName, clients, resolveErr := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs)
+			if resolveErr != nil {
+				return resolveErr
+			}
 
-		// Fetch instance destinations from each client.
-		// For --full, include sensitive properties (password, clientSecret, etc.).
-		fetchFn := destination.ListInstanceDestinations
-		if full {
-			fetchFn = destination.ListInstanceDestinationsFull
-		}
-
-		var instDocs []sdDestSvcInstance
-		for _, c := range clients {
-			rawDests, fetchErr := fetchFn(ctx, c.URI, c.Token)
-			if fetchErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing instance destinations: %v\n", c.InstanceName, fetchErr)
-				instDocs = append(instDocs, sdDestSvcInstance{ID: c.InstanceGUID, Name: c.InstanceName})
-				continue
+			fetchFn := destination.ListInstanceDestinations
+			if full {
+				fetchFn = destination.ListInstanceDestinationsFull
 			}
 			var dests []map[string]string
-			for _, raw := range rawDests {
-				// Apply --include/--exclude against the full property set (before any trimming).
-				if includePattern != "" && !sdMatchesAnyKeyword(includePattern, raw) {
+			for _, c := range clients {
+				rawDests, fetchErr := fetchFn(ctx, c.URI, c.Token)
+				if fetchErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing instance destinations: %v\n", c.InstanceName, fetchErr)
 					continue
 				}
-				if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
-					continue
-				}
-				if full {
-					dests = append(dests, raw)
-				} else {
-					dests = append(dests, sdMinimalDest(raw))
+				for _, raw := range rawDests {
+					if includePattern != "" && !sdMatchesAnyKeyword(includePattern, raw) {
+						continue
+					}
+					if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
+						continue
+					}
+					d := raw
+					if !full {
+						d = sdMinimalDest(raw)
+					}
+					dests = append(dests, sdTagDestInstance(d, c.InstanceGUID, c.InstanceName))
 				}
 			}
 			sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
-			instDocs = append(instDocs, sdDestSvcInstance{
-				ID:           c.InstanceGUID,
-				Name:         c.InstanceName,
-				Destinations: dests,
-			})
+
+			docs = []sdOrgDoc{{
+				OrgID:   orgGUID,
+				OrgName: orgName,
+				Spaces: []sdSpaceDoc{{
+					SpaceID:      spaceGUID,
+					SpaceName:    spaceName,
+					Destinations: dests,
+				}},
+			}}
+		} else {
+			docs, err = fetchAllSpaceDestinations(ctx, cmd, creds, apiURLs, full, includePattern, excludePattern)
+			if err != nil {
+				return err
+			}
 		}
 
-		doc := sdSpaceDoc{
-			SpaceID:   spaceGUID,
-			SpaceName: spaceName,
-			Instances: instDocs,
+		out, closeOut, err := resolveOutputWriter(outputFile)
+		if err != nil {
+			return err
 		}
+		defer closeOut()
 
 		switch strings.ToLower(format) {
 		case "json":
-			out, err := json.MarshalIndent(doc, "", "  ")
-			if err != nil {
-				return fmt.Errorf("encoding JSON: %w", err)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
-
+			return renderSpaceDestinationsJSON(out, docs)
 		case "csv":
 			if full {
 				return fmt.Errorf("--format csv is not supported with --full; use --format json or toon instead")
 			}
-			w := csv.NewWriter(cmd.OutOrStdout())
-			defer w.Flush()
-			if err := w.Write([]string{
-				"space_name", "destination_service_name",
-				"destination_name", "destination_url", "destination_sap_client",
-			}); err != nil {
-				return err
-			}
-			for _, inst := range instDocs {
-				for _, d := range inst.Destinations {
-					if err := w.Write([]string{
-						doc.SpaceName, inst.Name,
-						d["Name"], d["URL"], d["sap-client"],
-					}); err != nil {
-						return err
-					}
-				}
-			}
-
-		default: // toon
-			out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
-			if err != nil {
-				return fmt.Errorf("encoding TOON: %w", err)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(out))
+			return renderSpaceDestinationsCSV(out, docs)
+		default:
+			return renderSpaceDestinationsToon(out, docs)
 		}
-		return nil
 	},
 }
 
@@ -650,13 +953,13 @@ func activeAPIURLs(creds *store.Credentials, regionsFlag string) []string {
 
 func init() {
 	// space-destinations
-	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID (required)")
+	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID; if omitted, every accessible space is scanned instead")
 	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
-	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full)")
+	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full); auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	spaceDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
 	spaceDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	spaceDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
-	_ = spaceDestinationsCmd.MarkFlagRequired("space")
+	spaceDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	spaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(spaceDestinationsCmd)
 

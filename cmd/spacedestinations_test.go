@@ -38,15 +38,6 @@ func newDestServer(t *testing.T, instanceDests, subaccountDests string) *httptes
 	return srv
 }
 
-func TestSpaceDests_MissingSpaceFlag(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	setupTestEnv(t, "http://fake-cf.example.com")
-	_, _, err := runCmd(t, "space-destinations")
-	if err == nil {
-		t.Fatal("expected error when --space is not provided")
-	}
-}
-
 func TestSpaceDests_NotLoggedIn(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	_, _, err := runCmd(t, "space-destinations", "--space", "sp1")
@@ -106,6 +97,72 @@ func TestSpaceDests_Default(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "my-destination") {
 		t.Errorf("expected destination name in output, got: %q", stdout)
+	}
+}
+
+func TestSpaceDests_AllSpaces(t *testing.T) {
+	const orgGUID = "org1"
+	const spaceGUID = "sp1"
+	const instanceGUID = "inst1"
+
+	destSrv := newDestServer(t,
+		destinationsJSON("my-destination"),
+		destinationsJSON(),
+	)
+
+	// CF server responds to: ListOrganizations, ListSpacesByOrgs, FindServicePlan,
+	// ListServiceInstancesInSpace.
+	cfSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v3/organizations":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources":  []map[string]string{{"guid": orgGUID, "name": "my-org"}},
+			})))
+		case r.URL.Path == "/v3/spaces" && strings.Contains(r.URL.RawQuery, "organization_guids="):
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources": []map[string]interface{}{
+					{
+						"guid": spaceGUID,
+						"name": "dev",
+						"relationships": map[string]interface{}{
+							"organization": map[string]interface{}{"data": map[string]string{"guid": orgGUID}},
+						},
+					},
+				},
+			})))
+		case r.URL.Path == "/v3/service_plans":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources":  []map[string]string{{"guid": "plan1", "name": "lite"}},
+			})))
+		case r.URL.Path == "/v3/service_instances":
+			w.Write([]byte(mustJSONStr(map[string]interface{}{ //nolint:errcheck
+				"pagination": map[string]interface{}{"total_pages": 1},
+				"resources":  []map[string]string{{"guid": instanceGUID, "name": "dest-instance"}},
+			})))
+		default:
+			http.Error(w, "no route: "+r.URL.Path+"?"+r.URL.RawQuery, 404)
+		}
+	}))
+	defer cfSrv.Close()
+
+	setupTestEnvWithDestCache(t, cfSrv.URL, spaceGUID, instanceGUID, destSrv.URL)
+
+	stdout, stderr, err := runCmd(t, "space-destinations")
+	if err != nil {
+		t.Fatalf("space-destinations (no --space) failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "my-destination") {
+		t.Errorf("expected destination name in output, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "my-org") {
+		t.Errorf("expected org_name in output, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, "dev") {
+		t.Errorf("expected space_name in output, got: %q", stdout)
 	}
 }
 

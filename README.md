@@ -141,7 +141,7 @@ mv bo ~/.local/bin/   # optional
 | [`create-subaccount-destinations`](#create-subaccount-destinations) | Create subaccount-level destinations via the destination service |
 | [`update-subaccount-destinations`](#update-subaccount-destinations) | Update subaccount-level destinations via the destination service |
 | [`delete-subaccount-destinations`](#delete-subaccount-destinations) | Delete subaccount-level destinations via the destination service |
-| [`space-destinations`](#space-destinations) | List instance-level destinations across all destination service instances in a CF space |
+| [`space-destinations`](#space-destinations) | List instance-level destinations for a CF space, or every accessible space if `--space` is omitted |
 | [`create-space-destinations`](#create-space-destinations) | Create instance-level destinations in all destination service instances of a CF space |
 | [`update-space-destinations`](#update-space-destinations) | Update instance-level destinations in all destination service instances of a CF space |
 | [`delete-space-destinations`](#delete-space-destinations) | Delete named instance-level destinations from all destination service instances of a CF space |
@@ -1129,18 +1129,22 @@ rolecollections:
 
 ### `space-destinations`
 
-List all instance-level destinations across every destination service instance found in a given CF space.
+List all instance-level destinations across every destination service instance found in a given CF space — or, with `--space` omitted, across **every accessible space**.
 
 The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry, type 's' to skip that instance, or Ctrl-C to abort.
 
 ```bash
-# List destinations — default output: Name, URL, sap-client (TOON)
+# List destinations for one space — default output: Name, URL, sap-client (TOON)
 bo space-destinations --space <space-guid>
+
+# Omit --space to scan every accessible space across every org instead
+bo space-destinations
 
 # JSON output (Name, URL, sap-client)
 bo space-destinations --space <space-guid> --format json
 
-# CSV output (space_name, destination_service_name, destination_name, destination_url, destination_sap_client)
+# CSV output (org_id, org_name, space_id, space_name, destination_service_name,
+# destination_name, destination_url, destination_sap_client)
 bo space-destinations --space <space-guid> --format csv
 
 # All destination properties as a flat object (TOON or JSON)
@@ -1163,32 +1167,44 @@ bo space-destinations --space <space-guid> --full --include "API*PP"
 
 # Scope region search
 bo space-destinations --space <space-guid> --regions us10,us20,eu10
+
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon) when not explicitly given
+bo space-destinations -o all-space-destinations.csv
 ```
 
-Default TOON output (without `--full`):
+Default TOON output (without `--full`) — `org_id`/`org_name` identify the space's org, and each destination carries its own `destination_service_id`/`destination_service_name` since destinations are flattened directly under their space rather than grouped by instance:
 ```
-space_id: <space-guid>
-space_name: dev
-destination_service_instances:
-  - destination_service_id: <instance-guid>
-    destination_service_name: my-dest-service
+org_id: <org-guid>
+org_name: my-org
+spaces:
+  - space_id: <space-guid>
+    space_name: dev
     destinations:
       - Name: API_S4_HTTP_PP
         URL: http://qr1:443
         sap-client: "100"
+        destination_service_id: <instance-guid>
+        destination_service_name: my-dest-service
       - Name: API_MDG_HTTP_PP
         URL: http://qrg:443
         sap-client: "100"
+        destination_service_id: <instance-guid>
+        destination_service_name: my-dest-service
 ```
 
-CSV output (`--format csv`, without `--full`) — columns: `space_name,destination_service_name,destination_name,destination_url,destination_sap_client`:
+With `--space` omitted and more than one org turns up a result, `--format json` returns a plain JSON array of these per-org objects instead of a single one, and `--format toon` wraps them as `{orgs: [...]}` — same convention as [`subaccount-destinations`](#subaccount-destinations). Orgs/spaces with no matching destinations are left out of this all-spaces result entirely; with `--space` given, that one target space is always included in the result, even when it has no destinations.
+
+CSV output (`--format csv`, without `--full`) — columns: `org_id,org_name,space_id,space_name,destination_service_name,destination_name,destination_url,destination_sap_client`:
 ```
-space_name,destination_service_name,destination_name,destination_url,destination_sap_client
-dev,my-dest-service,API_S4_HTTP_PP,http://qr1:443,100
-dev,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
+org_id,org_name,space_id,space_name,destination_service_name,destination_name,destination_url,destination_sap_client
+<org-guid>,my-org,<space-guid>,dev,my-dest-service,API_S4_HTTP_PP,http://qr1:443,100
+<org-guid>,my-org,<space-guid>,dev,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
 ```
 
-With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
+With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is (plus the same `destination_service_id`/`destination_service_name`) — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
+
+⚠️ **Omitting `--space` scans every accessible space across every org** — on a large foundation this can be slow and will interactively prompt (once per instance, see above) for every destination service instance with no service key, unless you narrow scope with `--regions` or target a specific space with `--space`.
 
 ### `create-space-destinations`
 
