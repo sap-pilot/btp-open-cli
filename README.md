@@ -1548,11 +1548,13 @@ bo html5-apps --no-prompt
 bo html5-apps --from-destinations --org <org-guid-or-name>
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name,app_host_service_instance_name,app_host_service_instance_id,application_name,application_version,changed_on,created_on,is_default,public`
+CSV columns: `region,org_id,org_name,space_id,space_name,app_host_service_instance_name,app_host_service_instance_id,destination_instance_name,destination_instance_id,destination_name,application_name,application_version,changed_on,created_on,is_default,public`
 
-The `--include`/`--exclude` flags match case-insensitively against: `org_name`, `space_name`, `app_host_service_instance_name`, `application_name`, and `application_version`.
+The `--include`/`--exclude` flags match case-insensitively against: `org_name`, `space_name`, `app_host_service_instance_name`, `destination_instance_name`, `destination_name`, `application_name`, and `application_version`.
 
 With `--from-destinations`, `app_host_service_instance_name` and `app_host_service_instance_id` come from the matching destination's own `Name` and `app_host_id` properties instead of a CF service instance, since no service instance key is involved in that path; `--excludeOrgs` is ignored (destination discovery is per-org, not per-filtered-org-list) — use `--org`/`--orgs` to scope it instead.
+
+`--from-destinations` also populates three destination-identifying columns, empty otherwise: `destination_name` is always the matching destination's own `Name`; `destination_instance_name`/`destination_instance_id` additionally identify the destination service instance it was found in when the destination is instance-level — a subaccount-level destination leaves both empty, since there's no single instance to attribute it to.
 
 ### `service-credentials`
 

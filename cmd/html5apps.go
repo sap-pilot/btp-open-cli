@@ -33,12 +33,22 @@ type html5AppRow struct {
 	SpaceName                  string `json:"space_name"                     toon:"space_name"`
 	AppHostServiceInstanceName string `json:"app_host_service_instance_name" toon:"app_host_service_instance_name"`
 	AppHostServiceInstanceID   string `json:"app_host_service_instance_id"   toon:"app_host_service_instance_id"`
-	ApplicationName            string `json:"application_name"               toon:"application_name"`
-	ApplicationVersion         string `json:"application_version"            toon:"application_version"`
-	ChangedOn                  string `json:"changed_on"                     toon:"changed_on"`
-	CreatedOn                  string `json:"created_on"                     toon:"created_on"`
-	IsDefault                  bool   `json:"is_default"                     toon:"is_default"`
-	Public                     bool   `json:"public"                         toon:"public"`
+
+	// The following three are only populated with --from-destinations: the
+	// destination record itself (DestinationName) and, when it was found at
+	// instance level, the destination service instance that hosts it.
+	// DestinationInstanceName/ID are left empty for a subaccount-level
+	// destination, since there is no single instance to attribute it to.
+	DestinationInstanceName string `json:"destination_instance_name,omitempty" toon:"destination_instance_name,omitempty"`
+	DestinationInstanceID   string `json:"destination_instance_id,omitempty"   toon:"destination_instance_id,omitempty"`
+	DestinationName         string `json:"destination_name,omitempty"          toon:"destination_name,omitempty"`
+
+	ApplicationName    string `json:"application_name"               toon:"application_name"`
+	ApplicationVersion string `json:"application_version"            toon:"application_version"`
+	ChangedOn          string `json:"changed_on"                     toon:"changed_on"`
+	CreatedOn          string `json:"created_on"                     toon:"created_on"`
+	IsDefault          bool   `json:"is_default"                     toon:"is_default"`
+	Public             bool   `json:"public"                         toon:"public"`
 }
 
 type html5AppsDoc struct {
@@ -377,8 +387,10 @@ func findOrgAndSpaces(ctx context.Context, cmd *cobra.Command, orgFlag string, c
 // destination exposing one app host's content), uses its OAuth2 client
 // credentials to fetch and return that app host's application metadata.
 // Returns nil if the destination doesn't match or the fetch fails (a warning
-// is printed in the latter case).
-func html5RowsFromDestination(ctx context.Context, cmd *cobra.Command, dest map[string]string, region, orgID, orgName, spaceID, spaceName string) []html5AppRow {
+// is printed in the latter case). destInstanceName/destInstanceID identify
+// the destination service instance the destination was found in — pass ""
+// for both when dest is a subaccount-level destination.
+func html5RowsFromDestination(ctx context.Context, cmd *cobra.Command, dest map[string]string, region, orgID, orgName, spaceID, spaceName, destInstanceName, destInstanceID string) []html5AppRow {
 	appHostID := destPropCI(dest, "app_host_id")
 	cloudService := destPropCI(dest, "sap.cloud.service")
 	if appHostID == "" || cloudService == "" {
@@ -413,6 +425,7 @@ func html5RowsFromDestination(ctx context.Context, cmd *cobra.Command, dest map[
 			Region: region, OrgID: orgID, OrgName: orgName,
 			SpaceID: spaceID, SpaceName: spaceName,
 			AppHostServiceInstanceName: name, AppHostServiceInstanceID: appHostID,
+			DestinationInstanceName: destInstanceName, DestinationInstanceID: destInstanceID, DestinationName: name,
 			ApplicationName: a.ApplicationName, ApplicationVersion: a.ApplicationVersion,
 			ChangedOn: a.ChangedOn, CreatedOn: a.CreatedOn,
 			IsDefault: a.IsDefault, Public: a.Public,
@@ -449,7 +462,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
 			} else {
 				for _, raw := range rawDests {
-					rows = append(rows, html5RowsFromDestination(ctx, cmd, raw, region, orgGUID, orgName, "", "")...)
+					rows = append(rows, html5RowsFromDestination(ctx, cmd, raw, region, orgGUID, orgName, "", "", "", "")...)
 				}
 			}
 		}
@@ -475,7 +488,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 					continue
 				}
 				for _, raw := range rawDests {
-					rows = append(rows, html5RowsFromDestination(ctx, cmd, raw, region, orgGUID, orgName, sp.GUID, sp.Name)...)
+					rows = append(rows, html5RowsFromDestination(ctx, cmd, raw, region, orgGUID, orgName, sp.GUID, sp.Name, c.InstanceName, c.InstanceGUID)...)
 				}
 			}
 		}
@@ -514,6 +527,7 @@ func renderHTML5AppsCSV(w io.Writer, doc html5AppsDoc, color bool) error {
 	if err := csvW.Write([]string{
 		"region", "org_id", "org_name", "space_id", "space_name",
 		"app_host_service_instance_name", "app_host_service_instance_id",
+		"destination_instance_name", "destination_instance_id", "destination_name",
 		"application_name", "application_version",
 		"changed_on", "created_on", "is_default", "public",
 	}); err != nil {
@@ -523,6 +537,7 @@ func renderHTML5AppsCSV(w io.Writer, doc html5AppsDoc, color bool) error {
 		if err := csvW.Write([]string{
 			a.Region, a.OrgID, a.OrgName, a.SpaceID, a.SpaceName,
 			a.AppHostServiceInstanceName, a.AppHostServiceInstanceID,
+			a.DestinationInstanceName, a.DestinationInstanceID, a.DestinationName,
 			a.ApplicationName, a.ApplicationVersion,
 			a.ChangedOn, a.CreatedOn, fmt.Sprintf("%t", a.IsDefault), fmt.Sprintf("%t", a.Public),
 		}); err != nil {
@@ -549,8 +564,11 @@ applications.
 
 The result is a flat list, one row per application, with columns: region,
 org_id, org_name, space_id, space_name, app_host_service_instance_name,
-app_host_service_instance_id, application_name, application_version,
-changed_on, created_on, is_default, public.
+app_host_service_instance_id, destination_instance_name,
+destination_instance_id, destination_name, application_name,
+application_version, changed_on, created_on, is_default, public. The
+destination_* columns are only populated with --from-destinations (see
+below).
 
 Output formats (--format):
   toon  Token-Oriented Object Notation — compact, human-readable (default)
@@ -563,8 +581,9 @@ GUIDs (comma-separated, case-insensitive).
 
 Use --include/--exclude to narrow results further: each accepts a
 comma-separated list of keywords, and a row matches if org_name, space_name,
-app_host_service_instance_name, application_name, or application_version
-contains any of them (case-insensitive).
+app_host_service_instance_name, destination_instance_name,
+destination_name, application_name, or application_version contains any of
+them (case-insensitive).
 
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
@@ -579,6 +598,11 @@ client credentials (clientId/clientSecret/tokenServiceURL/URL) are used to
 fetch that one app host's metadata directly — app_host_service_instance_name
 and app_host_service_instance_id are then the destination's own Name and
 app_host_id, since no CF service instance is involved in this path.
+destination_name is always the destination's own Name; for an
+instance-level destination, destination_instance_name/id additionally
+identify the destination service instance it was found in, while a
+subaccount-level destination leaves both empty (there is no single
+instance to attribute it to).
 
 --no-prompt skips interactive "create a service key" / destination-resolution
 prompts, warning and skipping instead — useful for non-interactive/CI runs.
@@ -671,7 +695,11 @@ If --regions is omitted the regions from the last login are used.`,
 
 		filtered := make([]html5AppRow, 0, len(rows))
 		for _, r := range rows {
-			fields := []string{r.OrgName, r.SpaceName, r.AppHostServiceInstanceName, r.ApplicationName, r.ApplicationVersion}
+			fields := []string{
+				r.OrgName, r.SpaceName, r.AppHostServiceInstanceName,
+				r.DestinationInstanceName, r.DestinationName,
+				r.ApplicationName, r.ApplicationVersion,
+			}
 			if includePattern != "" && !skipMatches(includePattern, fields...) {
 				continue
 			}
@@ -728,8 +756,8 @@ func init() {
 	html5AppsCmd.Flags().String("spaces", "", "Comma-separated space names or GUIDs to narrow down to (default: every space in scope)")
 	html5AppsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	html5AppsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json or .csv) when --format is not explicitly given")
-	html5AppsCmd.Flags().String("include", "", "Only include rows where org_name, space_name, app_host_service_instance_name, application_name, or application_version contain any of these comma-separated keywords")
-	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where org_name, space_name, app_host_service_instance_name, application_name, or application_version contain any of these comma-separated keywords")
+	html5AppsCmd.Flags().String("include", "", "Only include rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
+	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().Bool("from-destinations", false, "Discover applications via subaccount/instance destinations carrying app_host_id + sap.cloud.service, instead of via service instance keys")
 	html5AppsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — warn and skip instead of prompting to create a missing service key")
 }
