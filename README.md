@@ -1537,8 +1537,11 @@ bo html5-apps --include myapp
 # Write output to a file (--format auto-detected from the extension)
 bo html5-apps --output html5-apps.csv
 
-# Skip interactive "create a service key" prompts (CI/non-interactive use)
-bo html5-apps --no-prompt
+# Apply one choice to every html5-apps-repo instance missing a service key,
+# instead of an interactive retry/skip/abort prompt per instance
+bo html5-apps --no-key-option skip     # warn and move on
+bo html5-apps --no-key-option create   # auto-create 'bo-html5-key' on each
+bo html5-apps --no-key-option abort    # stop the command on the first one
 
 # Discover applications via destinations instead of service instance keys:
 # scans subaccount- and instance-level destinations in the targeted orgs/
@@ -1546,6 +1549,9 @@ bo html5-apps --no-prompt
 # property, and uses each matching destination's own OAuth2 client
 # credentials to fetch that app host's metadata directly
 bo html5-apps --from-destinations --org <org-guid-or-name>
+
+# Skip interactive destination-resolution prompts under --from-destinations
+bo html5-apps --from-destinations --org <org-guid-or-name> --no-prompt
 ```
 
 CSV columns: `region,org_id,org_name,space_id,space_name,app_host_service_instance_name,app_host_service_instance_id,destination_instance_name,destination_instance_id,destination_name,application_name,application_version,changed_on,created_on,is_default,public`
@@ -1555,6 +1561,8 @@ The `--include`/`--exclude` flags match case-insensitively against: `org_name`, 
 With `--from-destinations`, `app_host_service_instance_name` and `app_host_service_instance_id` come from the matching destination's own `Name` and `app_host_id` properties instead of a CF service instance, since no service instance key is involved in that path; `--excludeOrgs` is ignored (destination discovery is per-org, not per-filtered-org-list) — use `--org`/`--orgs` to scope it instead.
 
 `--from-destinations` also populates three destination-identifying columns, empty otherwise: `destination_name` is always the matching destination's own `Name`; `destination_instance_name`/`destination_instance_id` additionally identify the destination service instance it was found in when the destination is instance-level — a subaccount-level destination leaves both empty, since there's no single instance to attribute it to.
+
+By default, an html5-apps-repo/app-runtime instance found with no service key triggers an interactive "create one manually (`cf create-service-key <instance> bo-html5-key`), then press Enter to retry / 's' to skip / Ctrl-C to abort" prompt — once per such instance. `--no-key-option <s/skip|c/create|a/abort>` applies one choice to every instance hitting this during the run instead: `skip` warns and moves on, `create` automatically creates a `bo-html5-key` service key on the instance (the same thing the manual instruction does), and `abort` stops the whole command the first time it happens. This only governs the html5-apps-repo service-key decision in the default (non `--from-destinations`) path; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (there, only skip-or-prompt is supported, not create/abort).
 
 ### `service-credentials`
 

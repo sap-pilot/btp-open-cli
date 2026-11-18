@@ -143,14 +143,49 @@ func resolveHTML5OrgsSpaces(ctx context.Context, creds *store.Credentials, apiUR
 	return results
 }
 
+// html5AutoKeyName is the service key name used both in the manual "cf
+// create-service-key" instructions shown interactively and by
+// --no-key-option=create's automatic creation, so the two stay in sync.
+const html5AutoKeyName = "bo-html5-key"
+
+// html5KeyOption is the normalized value of --no-key-option, governing what
+// happens for every html5-apps-repo/app-runtime instance found with no
+// service key during one run (see normalizeHTML5KeyOption).
+type html5KeyOption string
+
+const (
+	html5KeyOptionPrompt html5KeyOption = ""       // interactive retry/skip/abort prompt (default)
+	html5KeyOptionSkip   html5KeyOption = "skip"   // warn and skip, no prompt
+	html5KeyOptionCreate html5KeyOption = "create" // create a service key automatically
+	html5KeyOptionAbort  html5KeyOption = "abort"  // stop the whole command immediately
+)
+
+// normalizeHTML5KeyOption validates and normalizes --no-key-option's raw
+// value (accepting both the short and long form of each option).
+func normalizeHTML5KeyOption(raw string) (html5KeyOption, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return html5KeyOptionPrompt, nil
+	case "s", "skip":
+		return html5KeyOptionSkip, nil
+	case "c", "create":
+		return html5KeyOptionCreate, nil
+	case "a", "abort":
+		return html5KeyOptionAbort, nil
+	default:
+		return "", fmt.Errorf("invalid --no-key-option %q: must be one of s/skip, c/create, a/abort", raw)
+	}
+}
+
 // resolveHTML5InstanceToken obtains (or reuses a cached) OAuth token for one
 // html5-apps-repo/app-runtime service instance, following the same
 // find-service-key / fetch-credentials / get-token flow as
 // resolveSpaceDestClients, cached under creds.SpaceHTML5Services. Returns
 // ok=false (with a warning already printed) when the instance has to be
-// skipped, or err=errAborted if the user cancelled an interactive retry
-// prompt.
-func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID string, inst cf.ServiceInstance, creds *store.Credentials, noPrompt bool) (sdDestClient, bool, error) {
+// skipped, or a non-nil error if the whole command must stop — either the
+// user cancelled an interactive retry prompt (errAborted) or chose
+// --no-key-option=abort.
+func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID string, inst cf.ServiceInstance, creds *store.Credentials, keyOption html5KeyOption) (sdDestClient, bool, error) {
 	if creds.SpaceHTML5Services == nil {
 		creds.SpaceHTML5Services = make(map[string]map[string]*store.DestInstanceCache)
 	}
@@ -169,28 +204,46 @@ func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient
 			return sdDestClient{}, false, nil
 		}
 		if key == nil {
-			if noPrompt {
+			switch keyOption {
+			case html5KeyOptionSkip:
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: no service key for html5-apps-repo instance %q — skipping\n", inst.Name)
 				return sdDestClient{}, false, nil
-			}
-			for key == nil {
-				fmt.Fprintf(cmd.ErrOrStderr(),
-					"\nWARNING: No service key found for html5-apps-repo/app-runtime instance %q (%s)\n"+
-						"  Create one manually, e.g. via CF CLI:\n"+
-						"    cf create-service-key %s bo-html5-key\n"+
-						"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
-					inst.Name, inst.GUID, inst.Name)
-				retry, skip := promptRetryOrSkip(ctx)
-				if !retry && !skip {
-					return sdDestClient{}, false, errAborted
-				}
-				if skip {
+
+			case html5KeyOptionAbort:
+				return sdDestClient{}, false, fmt.Errorf(
+					"no service key for html5-apps-repo instance %q (%s) — aborting (--no-key-option=abort)",
+					inst.Name, inst.GUID)
+
+			case html5KeyOptionCreate:
+				fmt.Fprintf(cmd.ErrOrStderr(), "creating service key %q for html5-apps-repo instance %q...\n", html5AutoKeyName, inst.Name)
+				bindingGUID, createErr := cfClient.CreateServiceCredentialBinding(ctx, html5AutoKeyName, inst.GUID)
+				if createErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: creating service key for %q: %v — skipping\n", inst.Name, createErr)
 					return sdDestClient{}, false, nil
 				}
-				key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-				if keyErr != nil || key == nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
-					key = nil
+				key = &cf.ServiceCredentialBinding{GUID: bindingGUID, Name: html5AutoKeyName}
+
+			default: // html5KeyOptionPrompt
+				for key == nil {
+					fmt.Fprintf(cmd.ErrOrStderr(),
+						"\nWARNING: No service key found for html5-apps-repo/app-runtime instance %q (%s)\n"+
+							"  Create one manually, e.g. via CF CLI:\n"+
+							"    cf create-service-key %s %s\n"+
+							"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n"+
+							"  (Pass --no-key-option=skip/create/abort to apply one choice to every instance instead.)\n",
+						inst.Name, inst.GUID, inst.Name, html5AutoKeyName)
+					retry, skip := promptRetryOrSkip(ctx)
+					if !retry && !skip {
+						return sdDestClient{}, false, errAborted
+					}
+					if skip {
+						return sdDestClient{}, false, nil
+					}
+					key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
+					if keyErr != nil || key == nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
+						key = nil
+					}
 				}
 			}
 		}
@@ -282,9 +335,10 @@ func matchesSpaceFilter(filter map[string]bool, sp cf.Space) bool {
 
 // fetchHTML5ViaServiceInstances is the default discovery path: for every org/
 // space in scope, find html5-apps-repo/app-runtime service instances, obtain
-// a service-key-derived OAuth token for each (prompting to create a missing
-// key unless noPrompt), and fetch GET /applications/metadata from each.
-func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgGUID string, includeOrgs, excludeOrgs cosOrgSet, spacesFilter map[string]bool, noPrompt bool) ([]html5AppRow, error) {
+// a service-key-derived OAuth token for each (per keyOption when none
+// exists — see resolveHTML5InstanceToken), and fetch
+// GET /applications/metadata from each.
+func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgGUID string, includeOrgs, excludeOrgs cosOrgSet, spacesFilter map[string]bool, keyOption html5KeyOption) ([]html5AppRow, error) {
 	regionResults := resolveHTML5OrgsSpaces(ctx, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs)
 
 	var rows []html5AppRow
@@ -320,7 +374,7 @@ func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, cred
 				continue
 			}
 			for _, inst := range instances {
-				c, ok, resolveErr := resolveHTML5InstanceToken(ctx, cmd, rr.Client, sp.GUID, inst, creds, noPrompt)
+				c, ok, resolveErr := resolveHTML5InstanceToken(ctx, cmd, rr.Client, sp.GUID, inst, creds, keyOption)
 				if resolveErr != nil {
 					saveHTML5Cache(cmd, creds)
 					return rows, resolveErr
@@ -604,8 +658,20 @@ identify the destination service instance it was found in, while a
 subaccount-level destination leaves both empty (there is no single
 instance to attribute it to).
 
---no-prompt skips interactive "create a service key" / destination-resolution
-prompts, warning and skipping instead — useful for non-interactive/CI runs.
+--no-key-option <s/skip|c/create|a/abort> applies one choice to every
+html5-apps-repo/app-runtime instance found with no service key during this
+run, instead of prompting interactively for each one: skip warns and moves
+on, create automatically runs the equivalent of
+'cf create-service-key <instance> bo-html5-key', and abort stops the whole
+command the first time it happens. Omit it to keep the interactive
+retry/skip/abort prompt (the default). This only governs the service-key
+decision for html5-apps-repo instances (the default, non
+--from-destinations path) — --no-prompt below is the equivalent for
+destination-resolution prompts under --from-destinations.
+
+--no-prompt skips interactive destination-resolution prompts encountered
+under --from-destinations, warning and skipping instead — useful for
+non-interactive/CI runs.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -625,6 +691,11 @@ If --regions is omitted the regions from the last login are used.`,
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		fromDestinations, _ := cmd.Flags().GetBool("from-destinations")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
+		keyOptionFlag, _ := cmd.Flags().GetString("no-key-option")
+		keyOption, err := normalizeHTML5KeyOption(keyOptionFlag)
+		if err != nil {
+			return err
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -684,7 +755,7 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 			rows, err = fetchHTML5ViaDestinations(ctx, cmd, creds, apiURLs, orgTargets, spacesFilter, noPrompt)
 		} else {
-			rows, err = fetchHTML5ViaServiceInstances(ctx, cmd, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs, spacesFilter, noPrompt)
+			rows, err = fetchHTML5ViaServiceInstances(ctx, cmd, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs, spacesFilter, keyOption)
 		}
 		if err != nil {
 			if errors.Is(err, errAborted) {
@@ -759,5 +830,6 @@ func init() {
 	html5AppsCmd.Flags().String("include", "", "Only include rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().Bool("from-destinations", false, "Discover applications via subaccount/instance destinations carrying app_host_id + sap.cloud.service, instead of via service instance keys")
-	html5AppsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — warn and skip instead of prompting to create a missing service key")
+	html5AppsCmd.Flags().String("no-key-option", "", "Apply one choice to every html5-apps-repo instance found with no service key, instead of prompting per instance: s/skip, c/create (auto-create one), or a/abort (stop the command); omit for the interactive prompt")
+	html5AppsCmd.Flags().Bool("no-prompt", false, "Skip interactive destination-resolution prompts under --from-destinations — warn and skip instead of prompting to create a missing destination service key")
 }
