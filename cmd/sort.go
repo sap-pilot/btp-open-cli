@@ -177,6 +177,26 @@ func sortRowsByKeys(rows []map[string]interface{}, keys []sortByKey) {
 	})
 }
 
+// defaultSortKeys builds the implicit sort-key list used when --by is
+// omitted: fields' own order, if --fields was given — once you've already
+// narrowed down to specific columns, sorting by exactly those is normally
+// what you want, and it's what keeps two separately-sorted files comparable
+// (naturalOrder, below, often starts with columns --fields would have
+// dropped anyway, e.g. a CSV's leading GUID columns) — otherwise
+// naturalOrder (a CSV's header order, or a JSON file's alphabetical leaf
+// field order; see readSortCSV/jsonLeafFields).
+func defaultSortKeys(fields, naturalOrder []string) []sortByKey {
+	order := naturalOrder
+	if len(fields) > 0 {
+		order = fields
+	}
+	keys := make([]sortByKey, len(order))
+	for i, f := range order {
+		keys[i] = sortByKey{Field: f}
+	}
+	return keys
+}
+
 // ── CSV ──────────────────────────────────────────────────────────────────────
 
 // readSortCSV reads path's header row and data rows, returning each data row
@@ -404,10 +424,7 @@ func prepareSortedFile(path string, byKeys []sortByKey, fields []string) (*sorte
 		}
 		keys := byKeys
 		if len(keys) == 0 {
-			keys = make([]sortByKey, len(header))
-			for i, h := range header {
-				keys[i] = sortByKey{Field: h}
-			}
+			keys = defaultSortKeys(fields, header)
 		}
 		sortRowsByKeys(rows, keys)
 		outHeader := header
@@ -444,10 +461,7 @@ func prepareSortedFile(path string, byKeys []sortByKey, fields []string) (*sorte
 		leafOrder, isLeaf := jsonLeafFields(rows)
 		keys := byKeys
 		if len(keys) == 0 {
-			keys = make([]sortByKey, len(leafOrder))
-			for i, f := range leafOrder {
-				keys[i] = sortByKey{Field: f}
-			}
+			keys = defaultSortKeys(fields, leafOrder)
 		}
 		sortedRows := append([]map[string]interface{}{}, rows...)
 		sortRowsByKeys(sortedRows, keys)
@@ -523,12 +537,15 @@ order (ties on the first are broken by the next, and so on); suffix a field
 with ":desc" for descending (":asc" is the default). Field names are matched
 exactly (case-sensitive) and aren't validated — a field absent from one
 file's data just compares as empty there, with no error, so one invocation
-can cover several files with different columns/fields. Omit --by to sort by
-every available field, ascending, in that format's natural order: a CSV
-file's header order, or — since JSON object keys carry no reliable order
-once decoded — alphabetical for JSON (the same convention 'bo' already uses
-elsewhere for dynamic, schema-less rows). Each field's values are compared
-numerically when both sides parse as a number, otherwise as plain text.
+can cover several files with different columns/fields. Omit --by to sort
+implicitly instead: by --fields' own fields, in the order given, if --fields
+was also given (narrowing down to specific columns and then sorting by
+exactly those is the common case) — otherwise by every available field,
+ascending, in that format's natural order: a CSV file's header order, or —
+since JSON object keys carry no reliable order once decoded — alphabetical
+for JSON (the same convention 'bo' already uses elsewhere for dynamic,
+schema-less rows). Each field's values are compared numerically when both
+sides parse as a number, otherwise as plain text.
 
 Use --fields/-f <field,...> to keep only those leaf fields in the output,
 dropping every other leaf field. For CSV, every column is a leaf field, so
@@ -615,7 +632,7 @@ unambiguous which file the output came from).`,
 
 func init() {
 	rootCmd.AddCommand(sortCmd)
-	sortCmd.Flags().StringP("by", "b", "", "Comma-separated fields to sort by, in priority order, each optionally suffixed with \":desc\" (default \":asc\"); omit to sort by every available field, in order")
+	sortCmd.Flags().StringP("by", "b", "", "Comma-separated fields to sort by, in priority order, each optionally suffixed with \":desc\" (default \":asc\"); omit to sort by --fields' own fields if given, else every available field, in order")
 	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); omit to keep every field")
 	sortCmd.Flags().StringP("output", "o", "", "Write the sorted result to this file instead of overwriting the input (only valid with exactly one matching file)")
 	sortCmd.Flags().BoolP("yes", "y", false, "Skip the overwrite confirmation prompt")

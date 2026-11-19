@@ -166,13 +166,25 @@ they're logged in.
   `update-apps-env` (creates/updates apps' user-provided environment
   variables from a `bo apps --include-env` export — see guardrail #15
   below).
+- **`sort`** is not a BTP command at all — it never talks to BTP/CF, it just
+  sorts/narrows a CSV or JSON file already on disk (e.g. one a `bo` command
+  wrote with `--output`), in place or to a new file. Safe to run freely; see
+  "Compare two orgs/subaccounts to find differences" below for its main use
+  here.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
   `org-space-users`), `--output`/`-o <file>`, and `--include <kw1,kw2,...>` /
   `--exclude <kw1,kw2,...>` — comma-separated, case-insensitive, OR-matched
   substrings (the destination commands also accept a glob per keyword, e.g.
-  `API*PP`).
+  `API*PP`). `apps`, `users`, `role-collections`, `roles`, `html5-apps`,
+  `destinations`, `subaccount-destinations`, `space-destinations`,
+  `service-keys`, `org-users`, `org-space-users`, `org-spaces`, and `spaces`
+  additionally share `--fields <col1,col2,...>` (narrow/reorder output
+  columns) and `--sort-by <col1,col2:desc,...>` (sort rows by one or more of
+  them) — their `--help` lists these under a "Common Flags:" section. See
+  "Compare two orgs/subaccounts to find differences" below for the main
+  reason to reach for them together.
 - **Global `--color auto|always|never` flag (default `auto`).** In `auto`
   mode, `toon`/`csv` output on `spaces`, `apps`, `service-instances`,
   `service-keys`, `role-collections`, `users`, `org-users`, and
@@ -486,6 +498,30 @@ bo subaccount-destinations --orgs prod-orgs.csv --include "API*PP" --format csv 
 # Extract hana credentials for *-srv apps in the prod space, to a file —
 # see "Handling service-credentials output" above before running this
 bo service-credentials --orgs prod-orgs.csv --spaces prod --apps "*-srv" --services hana -o hana-creds.json
+```
+
+### Compare two orgs/subaccounts to find differences (read-only, safe to run freely)
+
+Export the same `--fields`/`--sort-by` selection from each org/subaccount, then
+`diff` the two files — any line only on one side is missing from the other.
+Works for `html5-apps`, `apps`, `destinations` (or
+`subaccount-destinations`/`space-destinations`), `users`, `role-collections`,
+and `roles` — any command with `--fields`/`--sort-by` (see "Common flags"
+above). `bo sort` is for re-sorting/narrowing a file you already have (e.g.
+one that wasn't exported with a matching `--sort-by`) — prefer exporting both
+sides with the same `--fields`/`--sort-by` to begin with when you can.
+
+```bash
+# Which HTML5 apps exist in org A but not org B, or vice versa?
+bo html5-apps --org <org-A> --fields organization_name,space_name,application_name --sort-by application_name --format csv -o a.csv
+bo html5-apps --org <org-B> --fields organization_name,space_name,application_name --sort-by application_name --format csv -o b.csv
+diff a.csv b.csv   # lines starting with "<" are only in A, ">" only in B
+
+# Same idea for destinations — --fields also keeps credentials out, see
+# "Handling commands that output secrets" above
+bo destinations --org <org-A> --fields org_name,space_name,instance_name --sort-by Name --format csv -o a.csv
+bo destinations --org <org-B> --fields org_name,space_name,instance_name --sort-by Name --format csv -o b.csv
+diff a.csv b.csv
 ```
 
 ### Bulk-create users (guarded)

@@ -220,8 +220,10 @@ Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
 Controls: up/down to move the highlight, space to toggle the highlighted org,
 type an org's number to jump to and toggle it directly, `a` to select every
 org, `c` to clear the selection, enter to confirm — or just confirm the
-highlighted org if nothing was checked — and Esc (or Ctrl-C) to abort without
-changing any previously saved selection. When the list is longer than fits on
+highlighted org if nothing was checked — and Esc, `q`, or Ctrl-C to abort.
+Aborting doesn't change anything: whatever default org scope was already in
+effect is reported the same way a confirmed selection would be (same
+`--format`), rather than an error. When the list is longer than fits on
 screen, it scrolls to fit the terminal's actual height instead of leaving
 duplicate rows behind — PageUp/PageDown (besides up/down past either edge of
 what's visible) scroll a full screen at a time, and a status line reports
@@ -2321,7 +2323,8 @@ bo sort "exports/*.csv" -y
 # Sort by one or more fields, in priority order ("desc" for descending)
 bo sort orgs.json --by region,org_name:desc
 
-# Keep only these fields in the output, dropping every other leaf field
+# Keep only these fields, dropping every other leaf field — also sorts by
+# them (org_id, then org_name), since no --by was given
 bo sort orgs.json --fields org_id,org_name
 
 # Write the sorted result to a different file instead of overwriting the input
@@ -2329,7 +2332,7 @@ bo sort orgs.json --fields org_id,org_name
 bo sort orgs.csv -o orgs.sorted.csv
 ```
 
-Use `--by`/`-b <field[:desc],...>` to sort by one or more fields, in priority order (ties on the first are broken by the next, and so on); suffix a field with `:desc` for descending (`:asc` is the default). Field names are matched exactly (case-sensitive) and aren't validated — a field absent from one file's data just compares as empty there, with no error, so one invocation can cover several files with different columns/fields. Omit `--by` to sort by every available field, ascending, in that format's natural order: a CSV file's header order, or — since JSON object keys carry no reliable order once decoded — alphabetical for JSON (the same convention `bo` already uses elsewhere for dynamic, schema-less rows, e.g. [`destinations`](#destinations)). Each field's values are compared numerically when both sides parse as a number, otherwise as plain text.
+Use `--by`/`-b <field[:desc],...>` to sort by one or more fields, in priority order (ties on the first are broken by the next, and so on); suffix a field with `:desc` for descending (`:asc` is the default). Field names are matched exactly (case-sensitive) and aren't validated — a field absent from one file's data just compares as empty there, with no error, so one invocation can cover several files with different columns/fields. Omit `--by` to sort implicitly instead: by `--fields`' own fields, in the order given, if `--fields` was also given (narrowing down to specific columns and then sorting by exactly those is the common case) — otherwise by every available field, ascending, in that format's natural order: a CSV file's header order, or — since JSON object keys carry no reliable order once decoded — alphabetical for JSON (the same convention `bo` already uses elsewhere for dynamic, schema-less rows, e.g. [`destinations`](#destinations)). Each field's values are compared numerically when both sides parse as a number, otherwise as plain text.
 
 Use `--fields`/`-f <field,...>` to keep only those leaf fields in the output, dropping every other leaf field. For CSV, every column is a leaf field, so this is a plain column selector. For JSON, a "leaf" field is one that only ever holds a plain value (string/number/bool/null) across the rows read — a nested object or array is never a leaf field and is always kept regardless of `--fields`, since `--fields` only ever selects among leaf fields. A CSV column `--fields` names that a row doesn't actually have renders as an empty cell; for JSON, naming a field that doesn't exist (or isn't a leaf) in a given row simply has no effect on that row. Omit `--fields` to keep every field. `--fields`' given order is only honored by CSV output (its header is exactly the fields given, in that order) — a JSON object's keys always come out alphabetical, since `encoding/json` doesn't preserve (or accept) any other key order for a map; this is unrelated to `--by`, which sorts rows (not fields) and is unaffected by `--fields` either way.
 

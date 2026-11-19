@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,13 @@ import (
 	"btp-open-cli/internal/cf"
 	"btp-open-cli/internal/store"
 )
+
+// errOrgPickerAborted is returned by selectOrgsInteractive when the user
+// cancels the picker (Esc, 'q'/'Q', or Ctrl-C) instead of confirming a
+// selection. Callers should treat this as "nothing changed" rather than a
+// real failure — see 'orgs' command's own handling, which reports whatever
+// default org scope was already in effect instead of erroring out.
+var errOrgPickerAborted = errors.New("org selection aborted")
 
 // orgChoice is one selectable org in the interactive multi-select prompt.
 type orgChoice struct {
@@ -106,10 +114,10 @@ func orgNumWidth(n int) int {
 // navigate with the up/down arrow keys (or PageUp/PageDown to move a full
 // screen at a time), toggle the highlighted entry with space, type an org's
 // number to jump to and toggle it directly, press 'a' to select every org or
-// 'c' to clear the selection, confirm with enter, or press Esc (or Ctrl-C) to
-// abort — returning an error and leaving any previously saved selection
-// untouched. If enter is pressed with nothing checked, the currently
-// highlighted entry is selected. Numbers
+// 'c' to clear the selection, confirm with enter, or press Esc, 'q'/'Q', or
+// Ctrl-C to abort — returning errOrgPickerAborted and leaving any previously
+// saved selection untouched. If enter is pressed with nothing checked, the
+// currently highlighted entry is selected. Numbers
 // are zero-padded to a fixed width (1 digit for fewer than 10 orgs, 2 for
 // fewer than 100, 3 otherwise) so a digit sequence of that width
 // unambiguously identifies one entry. preselectedIDs (keyed by org ID)
@@ -198,7 +206,7 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselected
 			moveKeys = "up/down/PageUp/PageDown move"
 		}
 		fmt.Fprintf(os.Stdout, "Select orgs — %s, digits jump, space toggle, a=all, c=clear\r\n", moveKeys)
-		fmt.Fprint(os.Stdout, "Enter to confirm (confirms the highlighted org if none are checked), Esc to abort:\r\n")
+		fmt.Fprint(os.Stdout, "Enter to confirm (confirms the highlighted org if none are checked), Esc/q to abort:\r\n")
 		for i := scrollOffset; i < scrollOffset+effectiveRows; i++ {
 			c := choices[i]
 			mark := " "
@@ -273,11 +281,13 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselected
 	for {
 		b, err := readByte()
 		if err != nil {
-			return nil, fmt.Errorf("aborted")
+			return nil, errOrgPickerAborted
 		}
 		switch {
 		case b == 3: // Ctrl-C
-			return nil, fmt.Errorf("aborted")
+			return nil, errOrgPickerAborted
+		case b == 'q' || b == 'Q':
+			return nil, errOrgPickerAborted
 		case b == '\r' || b == '\n':
 			var result []orgChoice
 			for i, sel := range selected {
@@ -322,11 +332,11 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselected
 			digitBuf = digitBuf[:0]
 			b2, ok, err := readByteTimeout(escSequenceTimeout)
 			if err != nil {
-				return nil, fmt.Errorf("aborted")
+				return nil, errOrgPickerAborted
 			}
 			if !ok {
 				// Nothing followed within the timeout — a lone Esc keypress.
-				return nil, fmt.Errorf("aborted")
+				return nil, errOrgPickerAborted
 			}
 			if b2 != '[' {
 				continue

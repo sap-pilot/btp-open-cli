@@ -26,7 +26,7 @@ The target app binds to the **user-provided service** created in its own subacco
 ## Step 1 — log in to the region(s) involved
 
 ```bash
-bo login --regions='us10,us20'
+bo login --regions='us10,us20' --sso
 ```
 
 Log in to every region that has either the source or the target subaccount. If source and target are both in the same region, one region is enough — pass a comma-separated list when they're not.
