@@ -233,30 +233,23 @@ func TestUsers_Fields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("users --fields failed: %v", err)
 	}
-	// The CSV header is always all columns; --fields only blanks-out DATA row values.
-	// Verify the data row: user_id (col 3) should be empty, user_name (col 6) should be set.
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
 	if len(lines) < 2 {
 		t.Fatalf("expected at least 2 CSV lines, got %d\nOutput: %s", len(lines), stdout)
 	}
-	cols := strings.Split(lines[1], ",")
-	if len(cols) < 7 {
-		t.Fatalf("expected at least 7 CSV columns in data row, got %d: %q", len(cols), lines[1])
+	if lines[0] != "user_name,user_origin" {
+		t.Errorf("expected CSV header to be exactly the given --fields, got: %q", lines[0])
 	}
-	// col 3 = user_id — must be blank when not in --fields
-	if cols[3] != "" {
-		t.Errorf("user_id (col 3) should be blank when not in --fields, got: %q", cols[3])
-	}
-	// col 6 = user_name — must be populated
-	if cols[6] != "alice@example.com" {
-		t.Errorf("user_name (col 6) should be alice@example.com, got: %q", cols[6])
+	if lines[1] != "alice@example.com,sap.ids" {
+		t.Errorf("expected data row to match --fields order, got: %q", lines[1])
 	}
 }
 
-func TestUsers_ExcludeFields(t *testing.T) {
+func TestUsers_SortBy(t *testing.T) {
 	const orgGUID = "org1"
 	xsuaaSrv := newXsuaaServer(t,
-		xsuaaUser("u1", "alice@example.com", "sap.ids"),
+		xsuaaUser("u1", "bob@example.com", "uaa"),
+		xsuaaUser("u2", "alice@example.com", "sap.ids"),
 	)
 	cfSrv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": singleOrgPage(orgGUID, "my-org"),
@@ -264,62 +257,13 @@ func TestUsers_ExcludeFields(t *testing.T) {
 	setupTestEnvWithXsuaa(t, cfSrv.URL, orgGUID, xsuaaSrv.URL)
 	setDefaultOrgScope(t, cfSrv.URL, orgGUID, "my-org")
 
-	// Exclude user_id and user_externalId — both have non-empty values so the
-	// absence is unambiguous (unlike lastLogonTime which is "" when zero anyway).
-	stdout, _, err := runCmd(t, "users", "--format", "csv", "--excludeFields", "user_id,user_externalId", "--no-prompt")
+	stdout, _, err := runCmd(t, "users", "--format", "csv", "--fields", "email", "--sort-by", "email", "--no-prompt")
 	if err != nil {
-		t.Fatalf("users --excludeFields failed: %v", err)
+		t.Fatalf("users --sort-by failed: %v", err)
 	}
-	// The CSV header always lists all columns; check DATA row values instead.
 	lines := strings.Split(strings.TrimSpace(stdout), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected at least 2 CSV lines, got %d\nOutput: %s", len(lines), stdout)
-	}
-	cols := strings.Split(lines[1], ",")
-	if len(cols) < 7 {
-		t.Fatalf("expected at least 7 CSV columns in data row, got %d: %q", len(cols), lines[1])
-	}
-	// col 3 = user_id — must be blank when excluded
-	if cols[3] != "" {
-		t.Errorf("user_id (col 3) should be blank when excluded, got: %q", cols[3])
-	}
-	// col 4 = user_externalId — must be blank when excluded
-	if cols[4] != "" {
-		t.Errorf("user_externalId (col 4) should be blank when excluded, got: %q", cols[4])
-	}
-	// col 6 = userName — must still be populated
-	if cols[6] != "alice@example.com" {
-		t.Errorf("userName (col 6) should be alice@example.com, got: %q", cols[6])
-	}
-}
-
-// TestUsrFieldSet_All verifies that nil fieldset includes all fields.
-func TestUsrFieldSet_All(t *testing.T) {
-	fs := buildUsrFieldSet("", "")
-	if fs != nil {
-		t.Error("expected nil fieldset for no args (all fields active)")
-	}
-}
-
-// TestUsrFieldSet_Include verifies that --fields limits the active set.
-func TestUsrFieldSet_Include(t *testing.T) {
-	fs := buildUsrFieldSet("user_name,email", "")
-	if !fs.active("user_name") {
-		t.Error("user_name should be active")
-	}
-	if fs.active("user_id") {
-		t.Error("user_id should not be active")
-	}
-}
-
-// TestUsrFieldSet_Exclude verifies that --excludeFields removes from default set.
-func TestUsrFieldSet_Exclude(t *testing.T) {
-	fs := buildUsrFieldSet("", "lastLogonTime")
-	if fs.active("lastLogonTime") {
-		t.Error("lastLogonTime should not be active after exclusion")
-	}
-	if !fs.active("user_name") {
-		t.Error("user_name should still be active")
+	if len(lines) != 3 || lines[1] != "alice@example.com" || lines[2] != "bob@example.com" {
+		t.Errorf("expected alice before bob (ascending email sort), got: %v", lines)
 	}
 }
 

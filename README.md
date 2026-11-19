@@ -302,6 +302,13 @@ bo org-spaces --include prod,staging
 
 # Exclude spaces where org_name or space_name contains any of these keywords
 bo org-spaces --exclude sandbox,test
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo org-spaces --fields org_name,space_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo org-spaces --sort-by org_name,space_name
 ```
 
 TOON output format:
@@ -318,7 +325,11 @@ regions:
             space_name: prod
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space; `region`, `org_id`, and `org_name` are repeated for every space in the same org. Orgs with no spaces are omitted from the CSV output.
+CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space; `region`, `org_id`, and `org_name` are repeated for every space in the same org. Orgs with no spaces are omitted from the CSV output. `json`/`toon` normally nest `regions`/`orgs`/`spaces` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `space_name` within each org.
 
 ### `spaces`
 
@@ -347,6 +358,13 @@ bo spaces --exclude sandbox,test
 # -o's extension (.json, .csv, .toon) when not explicitly given — this
 # writes CSV without needing --format csv
 bo spaces -o spaces.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo spaces --fields org_name,space_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo spaces --sort-by org_name,space_name
 ```
 
 TOON output format (same shape as `org-spaces`):
@@ -363,7 +381,11 @@ regions:
             space_name: prod
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name`.
+CSV columns: `region,org_id,org_name,space_id,space_name`. `json`/`toon` normally nest `regions`/`orgs`/`spaces` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `space_name` within each org.
 
 ### `org-users`
 
@@ -402,7 +424,20 @@ bo org-users --regions us10,us20,eu10
 # Write output to a file instead of stdout; --format is auto-detected from
 # the extension (.json, .csv, .toon) when not explicitly given
 bo org-users --output org-users.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo org-users --fields cfuser_name,cfuser_roles
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo org-users --sort-by cfuser_name
 ```
+
+`csv` is always a flat list, one row per user, with columns: `region,org_id,org_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles`. `json`/`toon` normally nest `regions`/`orgs`/`cfusers` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep users in their natural (API) order.
 
 ### `org-space-users`
 
@@ -448,7 +483,21 @@ bo org-space-users --regions us10,us20,eu10
 # the extension (.json, .csv, .toon — uar.csv is never auto-detected, pass
 # --format uar.csv explicitly) when not explicitly given
 bo org-space-users --output org-space-users.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too; ignored for uar.csv)
+bo org-space-users --fields space_name,cfuser_name,cfuser_roles
+
+# Sort by one or more columns, in priority order (":desc" for descending;
+# ignored for uar.csv)
+bo org-space-users --sort-by space_name,cfuser_name
 ```
+
+`csv` is always a flat list, one row per user, with columns: `region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles` (`space_id`/`space_name` are empty for org-level users). `json`/`toon` normally nest `regions`/`orgs`/`spaces` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column. Ignored for `uar.csv`, whose columns are fixed.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep users in their natural (API) order. Ignored for `uar.csv`.
 
 ### `create-org-space-users`
 
@@ -561,7 +610,13 @@ For each organization the command searches all spaces for any `xsuaa` service in
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials (clientId, clientSecret) are fetched on demand and never stored locally.
 
-The `--format uar.csv` option produces a User Access Review export: one row per role collection membership, so a user assigned to N role collections produces N rows with the other fields duplicated across them. Role collections with no members still get one row, with `N/A` in Role Collection Members and Origin. Rows are sorted by Role Collection name. This format fetches each org's full role collection inventory (for descriptions) in addition to its users, and ignores `--fields`/`--excludeFields` since its columns are fixed.
+The `--format uar.csv` option produces a User Access Review export: one row per role collection membership, so a user assigned to N role collections produces N rows with the other fields duplicated across them. Role collections with no members still get one row, with `N/A` in Role Collection Members and Origin. Rows are sorted by Role Collection name. This format fetches each org's full role collection inventory (for descriptions) in addition to its users, and ignores `--fields`/`--sort-by` since its columns are fixed.
+
+`csv` is always a flat list, one row per user, with columns: `region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups`. `json`/`toon` normally nest `regions`/`orgs`/`users` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep users in their natural (API) order.
 
 If neither `--org` nor `--orgs` is given, the default org scope selected via
 [`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
@@ -603,14 +658,14 @@ bo users --include sap.ids,sap.custom
 # Exclude users where any user field contains any of these keywords
 bo users --exclude sap.default,uaa
 
-# Include only specific fields in output
+# Limit output to just these columns, in this order, for any --format
 bo users --fields user_id,user_name,email,user_origin
 
-# Exclude specific fields from output
-bo users --excludeFields lastLogonTime,groups
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo users --sort-by user_name
 
 # Combine filtering and field selection
-bo users --include "sap.ids" --excludeFields groups --regions us10,us20
+bo users --include "sap.ids" --fields user_name,email --regions us10,us20
 
 # Write output to a file instead of stdout; --format is auto-detected from
 # the extension (.json, .csv, .toon — uar.csv is never auto-detected, pass
@@ -792,9 +847,22 @@ bo roles --format json
 # Write output to a file, ready to feed into create-roles/update-roles/delete-roles
 # (--format json is implied here by the .json extension — see below)
 bo roles --output roles.json
+
+# csv is always a flat list, one row per role
+bo roles --format csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too — not suitable for
+# feeding back into create-roles/update-roles/delete-roles)
+bo roles --fields role_name,appName,description
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo roles --sort-by appName,role_name
 ```
 
-`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.csv` selects `csv`, `.toon` selects `toon` — pass `--format` explicitly to override.
+
+`csv` columns: `region,org_id,org_name,roleTemplateAppId,roleTemplateName,role_name,appName,description,isReadOnly,attributeList` (the role's attribute list, JSON-encoded, empty when it has none). `json`/`toon` normally nest `regions`/`orgs`/`roles` instead (the shape the other `bo *-roles` commands read back in) — use `--fields <column,...>` (case-insensitive, comma-separated, any of those columns, in the order given) or `--sort-by <column,...>` (each optionally suffixed with `:desc`) to switch them to that same flat `{"rows": [...]}` view instead; omit both to keep the default nested order (sorted by `roleTemplateAppId` then `roleTemplateName`).
 
 Output format (TOON):
 ```
@@ -943,9 +1011,21 @@ bo role-collections --format json
 
 # Write output to a file instead of stdout (--format json is implied by the .json extension)
 bo role-collections --output role-collections.json
+
+# csv is always a flat list, one row per role reference
+bo role-collections --format csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo role-collections --fields rolecollection_name,role_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo role-collections --sort-by rolecollection_name,role_name
 ```
 
-`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.csv` selects `csv`, `.toon` selects `toon` — pass `--format` explicitly to override.
+
+`csv` columns: `region,org_id,org_name,rolecollection_name,rolecollection_description,rolecollection_isReadOnly,role_template_app_id,role_template_name,role_name,role_description` (a role collection with no role references still gets one row, with the `role_*` columns empty). `json`/`toon` normally nest `regions`/`orgs`/`roleCollections`/`roleReferences` instead — use `--fields <column,...>` (case-insensitive, comma-separated, any of those columns, in the order given) or `--sort-by <column,...>` (each optionally suffixed with `:desc`) to switch them to that same flat `{"rows": [...]}` view instead; omit both to keep the default nested order (role collections sorted by name).
 
 Output format (TOON):
 ```
@@ -1171,6 +1251,14 @@ bo space-destinations --space <space-guid> --regions us10,us20,eu10
 # Write output to a file instead of stdout; --format is auto-detected from
 # the extension (.json, .csv, .toon) when not explicitly given
 bo space-destinations -o all-space-destinations.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too; not with --full)
+bo space-destinations --fields space_name,destination_name,destination_url
+
+# Sort by one or more columns, in priority order (":desc" for descending;
+# also switches json/toon to the flat view; not with --full)
+bo space-destinations --sort-by space_name,destination_name
 ```
 
 Default TOON output (without `--full`) — `org_id`/`org_name` identify the space's org, and each destination carries its own `destination_service_id`/`destination_service_name` since destinations are flattened directly under their space rather than grouped by instance:
@@ -1202,7 +1290,11 @@ org_id,org_name,space_id,space_name,destination_service_name,destination_name,de
 <org-guid>,my-org,<space-guid>,dev,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
 ```
 
-With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is (plus the same `destination_service_id`/`destination_service_name`) — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
+With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is (plus the same `destination_service_id`/`destination_service_name`) — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV, `--fields`, and `--sort-by` are not supported with `--full`, since a destination's properties aren't a fixed set of columns in that mode.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the CSV columns above, in the order given) to limit output to just those columns — switches `json`/`toon` to that same flat `{"rows": [...]}` view too.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `destination_name` within each space.
 
 ⚠️ **Omitting `--space` scans every accessible space across every org** — on a large foundation this can be slow and will interactively prompt (once per instance, see above) for every destination service instance with no service key, unless you narrow scope with `--regions` or target a specific space with `--space`.
 
@@ -1315,6 +1407,14 @@ bo subaccount-destinations --orgs target-orgs.csv
 # Write output to a file instead of stdout; --format is auto-detected from
 # -o's extension (.json, .csv, .toon) when not explicitly given
 bo subaccount-destinations --org <org-guid-or-name> --output dests.json --format json
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too; not with --full)
+bo subaccount-destinations --org <org-guid-or-name> --fields destination_name,destination_url
+
+# Sort by one or more columns, in priority order (":desc" for descending;
+# also switches json/toon to the flat view; not with --full)
+bo subaccount-destinations --org <org-guid-or-name> --sort-by destination_name:desc
 ```
 
 Default TOON output (without `--full`):
@@ -1758,6 +1858,13 @@ bo service-keys --orgs target-orgs.csv --spaces prod --service-keys "btp*"
 # Include credentials, writing to a file instead of stdout;
 # --format is auto-detected from the .json extension here, so --format json could be omitted
 bo service-keys --full -o keys.json --format json
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo service-keys --fields org_name,space_name,instance_name,key_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo service-keys --sort-by key_name
 ```
 
 Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv`, `.toon`) when `--format` isn't explicitly given:
@@ -1766,9 +1873,13 @@ Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv
 |---|---|
 | `toon` (default) | Token-Oriented Object Notation — compact, human-readable |
 | `json` | JSON document, same nesting as the TOON output |
-| `csv` | Flat rows, one per service key — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,label,plan,key_guid,key_name,created_at,updated_at,last_operation_type,last_operation_state` (plus a trailing `credentials` JSON column when `--full` is given) |
+| `csv` | Flat rows, one per service key — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,label,plan,key_guid,key_name,created_at,updated_at,last_operation_type,last_operation_state,credentials` (the last column, the key's credentials JSON-encoded, is always present but only populated when `--full` is given) |
 
 Without `--full`, only service key metadata is included — `key_guid`, `key_name`, `created_at`, `updated_at`, `last_operation_type`, `last_operation_state`. (The CF API doesn't expose a "created by" user on this resource, so that field isn't included.) With `--full`, each key's credentials are also fetched and included:
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns in the CSV row above) to limit output to just those columns, in the order given — switches `json`/`toon` to that same flat `{"rows": [...]}` view too. Omit it to get every column, in the normal nested structure shown below.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `region`, `org_name`, `space_name`, `instance_name`, then `key_name`.
 
 ```
 orgs[1]:

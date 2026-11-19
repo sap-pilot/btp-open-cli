@@ -40,6 +40,32 @@ type spOutDoc struct {
 	Regions []spOutRegion `json:"regions" toon:"regions"`
 }
 
+// spFlatRow is the flat, one-row-per-space view of spOutDoc — the same
+// shape as the CSV output. Used directly for CSV, and for JSON/TOON too
+// when --fields or --sort-by is given; otherwise JSON/TOON keep the nested
+// region/org structure.
+type spFlatRow struct {
+	Region    string `json:"region"     toon:"region"`
+	OrgID     string `json:"org_id"     toon:"org_id"`
+	OrgName   string `json:"org_name"   toon:"org_name"`
+	SpaceID   string `json:"space_id"   toon:"space_id"`
+	SpaceName string `json:"space_name" toon:"space_name"`
+}
+
+// flattenSpacesRows converts doc's nested region/org structure into one
+// flat row per space.
+func flattenSpacesRows(doc spOutDoc) []spFlatRow {
+	var rows []spFlatRow
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, sp := range o.Spaces {
+				rows = append(rows, spFlatRow{Region: r.ID, OrgID: o.ID, OrgName: o.Name, SpaceID: sp.ID, SpaceName: sp.Name})
+			}
+		}
+	}
+	return rows
+}
+
 // ── fetch result ──────────────────────────────────────────────────────────────
 
 type spacesRegionResult struct {
@@ -74,6 +100,19 @@ is not explicitly given, it is auto-detected from --output's extension:
 .json selects json, .csv selects csv, .toon selects toon — otherwise the
 default toon applies. Pass --format explicitly to override the extension.
 
+json/toon normally nest regions/orgs/spaces instead of the flat csv shape,
+but switch to that same flat {"rows": [...]} view whenever --fields or
+--sort-by is given.
+
+Use --fields <column,...> (case-insensitive, comma-separated, any of the
+csv columns above) to limit output to just those columns, in the order
+given. Omit it to get every column.
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, in priority order, each optionally suffixed with ":desc" for
+descending (":asc" is the default). Omit it to keep the default order:
+sorted by space_name within each org.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -89,6 +128,16 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := parseFieldsFlag[spFlatRow](fieldsFlag, "--fields")
+		if err != nil {
+			return err
+		}
+		sortByFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := parseSortByFlag[spFlatRow](sortByFlag, "--sort-by")
+		if err != nil {
+			return err
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -205,13 +254,41 @@ If --regions is omitted the regions from the last login are used.`,
 		colorMode, _ := cmd.Flags().GetString("color")
 		color := consoleColorEnabled(outputFile, colorMode)
 
-		switch strings.ToLower(format) {
+		fmtLower := strings.ToLower(format)
+		if fmtLower == "csv" || len(fieldIDs) > 0 || len(sortKeys) > 0 {
+			doc, errs := buildSpacesDoc(results, includePattern, excludePattern)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+			}
+			flatRows := flattenSpacesRows(doc)
+			if len(sortKeys) > 0 {
+				sortRowsBy(flatRows, sortKeys)
+			}
+			switch fmtLower {
+			case "json":
+				return writeSpacesJSON(out, flatDocValue(flatRows, fieldIDs))
+			case "csv":
+				csvW := newRainbowCSVWriter(out, color)
+				defer csvW.Flush()
+				return writeFlatCSV(csvW, flatRows, fieldIDs)
+			default:
+				return writeSpacesToon(out, flatDocValue(flatRows, fieldIDs), color)
+			}
+		}
+
+		switch fmtLower {
 		case "json":
-			return writeSpacesJSON(out, results, includePattern, excludePattern)
-		case "csv":
-			return writeSpacesCSV(out, results, includePattern, excludePattern, color)
+			doc, errs := buildSpacesDoc(results, includePattern, excludePattern)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+			}
+			return writeSpacesJSON(out, doc)
 		default: // "toon"
-			return writeSpacesToon(out, results, includePattern, excludePattern, color)
+			doc, errs := buildSpacesDoc(results, includePattern, excludePattern)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+			}
+			return writeSpacesToon(out, doc, color)
 		}
 	},
 }
@@ -256,12 +333,12 @@ func buildSpacesDoc(results []spacesRegionResult, includePattern, excludePattern
 	return doc, errs
 }
 
-func writeSpacesToon(w io.Writer, results []spacesRegionResult, includePattern, excludePattern string, color bool) error {
-	doc, errs := buildSpacesDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+// writeSpacesToon and writeSpacesJSON take val as either spOutDoc (the
+// default nested region/org structure) or flatDocValue's result (used
+// instead when --fields or --sort-by is given) — both are just Go values
+// that toonenc/json reflect over.
+func writeSpacesToon(w io.Writer, val interface{}, color bool) error {
+	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
@@ -273,39 +350,12 @@ func writeSpacesToon(w io.Writer, results []spacesRegionResult, includePattern, 
 	return err
 }
 
-func writeSpacesJSON(w io.Writer, results []spacesRegionResult, includePattern, excludePattern string) error {
-	doc, errs := buildSpacesDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-	out, err := json.MarshalIndent(doc, "", "  ")
+func writeSpacesJSON(w io.Writer, val interface{}) error {
+	out, err := json.MarshalIndent(val, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
 	fmt.Fprintln(w, string(out))
-	return nil
-}
-
-func writeSpacesCSV(w io.Writer, results []spacesRegionResult, includePattern, excludePattern string, color bool) error {
-	doc, errs := buildSpacesDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-
-	csvW := newRainbowCSVWriter(w, color)
-	defer csvW.Flush()
-	if err := csvW.Write([]string{"region", "org_id", "org_name", "space_id", "space_name"}); err != nil {
-		return err
-	}
-	for _, r := range doc.Regions {
-		for _, o := range r.Orgs {
-			for _, sp := range o.Spaces {
-				if err := csvW.Write([]string{r.ID, o.ID, o.Name, sp.ID, sp.Name}); err != nil {
-					return err
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -320,4 +370,6 @@ func init() {
 	spacesCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	spacesCmd.Flags().String("include", "", "Only include spaces where org_name or space_name contain any of these comma-separated keywords")
 	spacesCmd.Flags().String("exclude", "", "Exclude spaces where org_name or space_name contain any of these comma-separated keywords")
+	spacesCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (region,org_id,org_name,space_id,space_name; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
+	spacesCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
 }

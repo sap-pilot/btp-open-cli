@@ -61,6 +61,62 @@ type appsOutDoc struct {
 	Regions []appsOutRegion `json:"regions" toon:"regions"`
 }
 
+// appsFlatRow is the flat, one-row-per-app view of appsOutDoc — the same
+// shape as the CSV output. Used directly for CSV, and for JSON/TOON too
+// when --fields or --sort-by is given (see flattenAppsRows and the RunE
+// below); otherwise JSON/TOON keep the nested region/org/space structure.
+type appsFlatRow struct {
+	RegionID          string `json:"region_id"            toon:"region_id"`
+	OrgID             string `json:"org_id"                toon:"org_id"`
+	OrgName           string `json:"org_name"              toon:"org_name"`
+	SpaceID           string `json:"space_id"              toon:"space_id"`
+	SpaceName         string `json:"space_name"            toon:"space_name"`
+	AppMtaID          string `json:"app_mta_id"            toon:"app_mta_id"`
+	AppID             string `json:"app_id"                toon:"app_id"`
+	AppName           string `json:"app_name"              toon:"app_name"`
+	AppState          string `json:"app_state"             toon:"app_state"`
+	AppCreatedAt      string `json:"app_created_at"        toon:"app_created_at"`
+	AppUpdatedAt      string `json:"app_updated_at"        toon:"app_updated_at"`
+	ProcessInstances  int    `json:"process_instances"     toon:"process_instances"`
+	ProcessMemoryInMB int    `json:"process_memory_in_mb"  toon:"process_memory_in_mb"`
+	ProcessDiskInMB   int    `json:"process_disk_in_mb"    toon:"process_disk_in_mb"`
+	AppTotalMemoryMB  int    `json:"app_total_memory_mb"   toon:"app_total_memory_mb"`
+	AppEnv            string `json:"app_env"               toon:"app_env"`
+}
+
+// flattenAppsRows converts doc's nested region/org/space structure into one
+// flat row per app, encoding a.Env (if any) as a JSON string — the same
+// representation renderAppsCSV always used for its "app_env" column.
+func flattenAppsRows(doc appsOutDoc) ([]appsFlatRow, error) {
+	var rows []appsFlatRow
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, sp := range o.Spaces {
+				for _, a := range sp.Apps {
+					var envCol string
+					if len(a.Env) > 0 {
+						envJSON, err := json.Marshal(a.Env)
+						if err != nil {
+							return nil, fmt.Errorf("encoding app_env for %q: %w", a.Name, err)
+						}
+						envCol = string(envJSON)
+					}
+					rows = append(rows, appsFlatRow{
+						RegionID: r.ID, OrgID: o.ID, OrgName: o.Name,
+						SpaceID: sp.ID, SpaceName: sp.Name,
+						AppMtaID: a.MtaID, AppID: a.ID, AppName: a.Name, AppState: a.State,
+						AppCreatedAt: a.CreatedAt, AppUpdatedAt: a.UpdatedAt,
+						ProcessInstances: a.Instances, ProcessMemoryInMB: a.MemoryInMB,
+						ProcessDiskInMB: a.DiskInMB, AppTotalMemoryMB: a.TotalMemoryMB,
+						AppEnv: envCol,
+					})
+				}
+			}
+		}
+	}
+	return rows, nil
+}
+
 // ── fetch result ──────────────────────────────────────────────────────────────
 
 type appsRegionResult struct {
@@ -121,6 +177,22 @@ is not explicitly given, it is auto-detected from --output's extension:
 (including no --output) the default toon applies. Pass --format explicitly
 to override the extension.
 
+CSV is always a flat list, one row per app, with columns: region_id, org_id,
+org_name, space_id, space_name, app_mta_id, app_id, app_name, app_state,
+app_created_at, app_updated_at, process_instances, process_memory_in_mb,
+process_disk_in_mb, app_total_memory_mb, app_env. json/toon normally nest
+regions/orgs/spaces/apps instead, but switch to that same flat
+{"rows": [...]} view whenever --fields or --sort-by is given.
+
+Use --fields <column,...> (case-insensitive, comma-separated, any of the
+columns above) to limit output to just those columns, in the order given.
+Omit it to get every column.
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, in priority order, each optionally suffixed with ":desc" for
+descending (":asc" is the default). Omit it to keep apps in their natural
+(API) order.
+
 Use --include-env to also fetch each app's own user-provided environment
 variables (as "app_env" — not VCAP_SERVICES or any other derived/system
 environment) via one extra API call per app; fetching it requires at least
@@ -150,6 +222,16 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := parseFieldsFlag[appsFlatRow](fieldsFlag, "--fields")
+		if err != nil {
+			return err
+		}
+		sortByFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := parseSortByFlag[appsFlatRow](sortByFlag, "--sort-by")
+		if err != nil {
+			return err
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -323,11 +405,27 @@ If --regions is omitted the regions from the last login are used.`,
 		colorMode, _ := cmd.Flags().GetString("color")
 		color := consoleColorEnabled(outputFile, colorMode)
 
+		if strings.ToLower(format) == "csv" || len(fieldIDs) > 0 || len(sortKeys) > 0 {
+			flatRows, flatErr := flattenAppsRows(doc)
+			if flatErr != nil {
+				return flatErr
+			}
+			if len(sortKeys) > 0 {
+				sortRowsBy(flatRows, sortKeys)
+			}
+			switch strings.ToLower(format) {
+			case "json":
+				return renderAppsJSON(out, flatDocValue(flatRows, fieldIDs))
+			case "csv":
+				return renderAppsCSV(out, flatRows, color, fieldIDs)
+			default:
+				return renderAppsToon(out, flatDocValue(flatRows, fieldIDs), color)
+			}
+		}
+
 		switch strings.ToLower(format) {
 		case "json":
 			return renderAppsJSON(out, doc)
-		case "csv":
-			return renderAppsCSV(out, doc, color)
 		default:
 			return renderAppsToon(out, doc, color)
 		}
@@ -447,8 +545,12 @@ func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern str
 	return doc, errs
 }
 
-func renderAppsToon(w io.Writer, doc appsOutDoc, color bool) error {
-	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+// renderAppsToon and renderAppsJSON take val as either appsOutDoc (the
+// default nested region/org/space structure) or flatDocValue's result (used
+// instead when --fields or --sort-by is given) — both are just Go values
+// that toonenc/json reflect over.
+func renderAppsToon(w io.Writer, val interface{}, color bool) error {
+	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
@@ -460,8 +562,8 @@ func renderAppsToon(w io.Writer, doc appsOutDoc, color bool) error {
 	return err
 }
 
-func renderAppsJSON(w io.Writer, doc appsOutDoc) error {
-	out, err := json.MarshalIndent(doc, "", "  ")
+func renderAppsJSON(w io.Writer, val interface{}) error {
+	out, err := json.MarshalIndent(val, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
@@ -469,51 +571,10 @@ func renderAppsJSON(w io.Writer, doc appsOutDoc) error {
 	return nil
 }
 
-func renderAppsCSV(w io.Writer, doc appsOutDoc, color bool) error {
+func renderAppsCSV(w io.Writer, rows []appsFlatRow, color bool, fieldIDs []string) error {
 	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
-
-	if err := csvW.Write([]string{
-		"region_id", "org_id", "org_name",
-		"space_id", "space_name",
-		"app_mta_id", "app_id", "app_name", "app_state",
-		"app_created_at", "app_updated_at",
-		"process_instances", "process_memory_in_mb", "process_disk_in_mb", "app_total_memory_mb",
-		"app_env",
-	}); err != nil {
-		return err
-	}
-
-	for _, r := range doc.Regions {
-		for _, o := range r.Orgs {
-			for _, sp := range o.Spaces {
-				for _, a := range sp.Apps {
-					var envCol string
-					if len(a.Env) > 0 {
-						envJSON, err := json.Marshal(a.Env)
-						if err != nil {
-							return fmt.Errorf("encoding app_env for %q: %w", a.Name, err)
-						}
-						envCol = string(envJSON)
-					}
-					if err := csvW.Write([]string{
-						r.ID, o.ID, o.Name,
-						sp.ID, sp.Name,
-						a.MtaID, a.ID, a.Name, a.State,
-						a.CreatedAt, a.UpdatedAt,
-						strconv.Itoa(a.Instances),
-						strconv.Itoa(a.MemoryInMB),
-						strconv.Itoa(a.DiskInMB),
-						strconv.Itoa(a.TotalMemoryMB),
-						envCol,
-					}); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	return nil
+	return writeFlatCSV(csvW, rows, fieldIDs)
 }
 
 // appsMatchesIncludeExclude applies --include/--exclude keyword filtering
@@ -545,4 +606,6 @@ func init() {
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().Bool("include-env", false, "Also fetch and include each app's own user-provided environment variables (app_env) — requires Space Developer access per app; this is sensitive output, see README")
+	appsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as CSV; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
+	appsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
 }

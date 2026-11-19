@@ -29,6 +29,31 @@ type sadOrgDoc struct {
 	Destinations []map[string]string `json:"destinations" toon:"destinations"`
 }
 
+// sadFlatRow is the flat, one-row-per-destination view of []sadOrgDoc — the
+// same shape as the CSV output. Only meaningful without --full, since with
+// it a destination's properties aren't a fixed set of columns (see the
+// RunE below, which rejects --fields/--sort-by together with --full).
+type sadFlatRow struct {
+	OrgName              string `json:"org_name"               toon:"org_name"`
+	DestinationName      string `json:"destination_name"       toon:"destination_name"`
+	DestinationURL       string `json:"destination_url"        toon:"destination_url"`
+	DestinationSapClient string `json:"destination_sap_client" toon:"destination_sap_client"`
+}
+
+// flattenSadRows converts docs into one flat row per destination.
+func flattenSadRows(docs []sadOrgDoc) []sadFlatRow {
+	var rows []sadFlatRow
+	for _, doc := range docs {
+		for _, d := range doc.Destinations {
+			rows = append(rows, sadFlatRow{
+				OrgName: doc.OrgName, DestinationName: d["Name"],
+				DestinationURL: d["URL"], DestinationSapClient: d["sap-client"],
+			})
+		}
+	}
+	return rows
+}
+
 // ── shared setup ──────────────────────────────────────────────────────────────
 
 // resolveOrgDestClient finds the target org across all active regions by GUID
@@ -278,6 +303,18 @@ case-insensitive substring.
 Use --format csv (without --full) to get a flat CSV with columns:
   org_name,destination_name,destination_url,destination_sap_client
 
+Use --fields <column,...> (case-insensitive, comma-separated, any of those
+columns, in the order given) to limit output to just those columns —
+switches json/toon to that same flat {"rows": [...]} view too (not
+supported together with --full, since a destination's properties aren't a
+fixed set of columns in that mode).
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, each optionally suffixed with ":desc" for descending (":asc" is
+the default) — also switches json/toon to the flat view, and is likewise
+not supported with --full. Omit it to keep the default order: sorted by
+destination_name within each org.
+
 If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
 pick one interactively, or pass --org/--orgs directly. With more than one
@@ -304,6 +341,19 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
 				format = auto
 			}
+		}
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := parseFieldsFlag[sadFlatRow](fieldsFlag, "--fields")
+		if err != nil {
+			return err
+		}
+		sortByFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := parseSortByFlag[sadFlatRow](sortByFlag, "--sort-by")
+		if err != nil {
+			return err
+		}
+		if full && (len(fieldIDs) > 0 || len(sortKeys) > 0) {
+			return fmt.Errorf("--fields/--sort-by are not supported with --full, since a destination's properties aren't a fixed set of columns in that mode; omit --full to use them")
 		}
 
 		creds, err := store.Load()
@@ -383,8 +433,24 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			return fmt.Errorf("no destinations retrieved — no target org resolved to a usable destination service instance")
 		}
 
+		flatRowsFor := func() []sadFlatRow {
+			flatRows := flattenSadRows(docs)
+			if len(sortKeys) > 0 {
+				sortRowsBy(flatRows, sortKeys)
+			}
+			return flatRows
+		}
+
 		switch strings.ToLower(format) {
 		case "json":
+			if len(fieldIDs) > 0 || len(sortKeys) > 0 {
+				out, jsonErr := json.MarshalIndent(flatDocValue(flatRowsFor(), fieldIDs), "", "  ")
+				if jsonErr != nil {
+					return fmt.Errorf("encoding JSON: %w", jsonErr)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(out))
+				return nil
+			}
 			var out []byte
 			if len(docs) == 1 {
 				out, err = json.MarshalIndent(docs[0], "", "  ")
@@ -402,22 +468,17 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			}
 			w := csv.NewWriter(cmd.OutOrStdout())
 			defer w.Flush()
-			if err := w.Write([]string{
-				"org_name", "destination_name", "destination_url", "destination_sap_client",
-			}); err != nil {
-				return err
-			}
-			for _, doc := range docs {
-				for _, d := range doc.Destinations {
-					if err := w.Write([]string{
-						doc.OrgName, d["Name"], d["URL"], d["sap-client"],
-					}); err != nil {
-						return err
-					}
-				}
-			}
+			return writeFlatCSV(w, flatRowsFor(), fieldIDs)
 
 		default: // toon
+			if len(fieldIDs) > 0 || len(sortKeys) > 0 {
+				out, toonErr := toonenc.Marshal(flatDocValue(flatRowsFor(), fieldIDs), toonenc.WithIndent(2))
+				if toonErr != nil {
+					return fmt.Errorf("encoding TOON: %w", toonErr)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), string(out))
+				return nil
+			}
 			var out []byte
 			if len(docs) == 1 {
 				out, err = toonenc.Marshal(docs[0], toonenc.WithIndent(2))
@@ -684,6 +745,8 @@ func init() {
 	subaccountDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
 	subaccountDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
+	subaccountDestinationsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (org_name,destination_name,destination_url,destination_sap_client; switches json/toon to a flat {rows:[...]} view too). Not supported with --full")
+	subaccountDestinationsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to a flat {rows:[...]} view too. Not supported with --full")
 	subaccountDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(subaccountDestinationsCmd)
 

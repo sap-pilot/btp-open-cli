@@ -63,6 +63,48 @@ type ospOutDoc struct {
 	Regions []ospOutRegion `json:"regions" toon:"regions"`
 }
 
+// ospFlatRow is the flat, one-row-per-user view of ospOutDoc — the same
+// shape as the csv output (space_id/space_name are empty for org-level
+// users). Used directly for csv, and for json/toon too when --fields or
+// --sort-by is given (otherwise json/toon keep the nested region/org/space
+// structure). Not used for uar.csv, whose columns are fixed.
+type ospFlatRow struct {
+	Region       string `json:"region"        toon:"region"`
+	OrgID        string `json:"org_id"        toon:"org_id"`
+	OrgName      string `json:"org_name"      toon:"org_name"`
+	SpaceID      string `json:"space_id"      toon:"space_id"`
+	SpaceName    string `json:"space_name"    toon:"space_name"`
+	CFUserID     string `json:"cfuser_id"     toon:"cfuser_id"`
+	CFUserName   string `json:"cfuser_name"   toon:"cfuser_name"`
+	CFUserOrigin string `json:"cfuser_origin" toon:"cfuser_origin"`
+	CFUserRoles  string `json:"cfuser_roles"  toon:"cfuser_roles"`
+}
+
+// flattenOspRows converts doc's nested region/org/space structure into one
+// flat row per user (org-level users get empty SpaceID/SpaceName).
+func flattenOspRows(doc ospOutDoc) []ospFlatRow {
+	var rows []ospFlatRow
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, u := range o.Users {
+				rows = append(rows, ospFlatRow{
+					Region: r.ID, OrgID: o.ID, OrgName: o.Name,
+					CFUserID: u.ID, CFUserName: u.Name, CFUserOrigin: u.Origin, CFUserRoles: u.Roles,
+				})
+			}
+			for _, sp := range o.Spaces {
+				for _, u := range sp.Users {
+					rows = append(rows, ospFlatRow{
+						Region: r.ID, OrgID: o.ID, OrgName: o.Name, SpaceID: sp.ID, SpaceName: sp.Name,
+						CFUserID: u.ID, CFUserName: u.Name, CFUserOrigin: u.Origin, CFUserRoles: u.Roles,
+					})
+				}
+			}
+		}
+	}
+	return rows
+}
+
 // buildOspOutputDoc converts raw fetch results into the shared output model.
 // includePattern/excludePattern are optional comma-separated keyword lists
 // matched case-insensitively against user id/name/origin/roles; spaces and
@@ -151,6 +193,20 @@ is not explicitly given, it is auto-detected from --output's extension:
 default toon applies (uar.csv is never auto-detected — pass --format
 uar.csv explicitly). Pass --format explicitly to override the extension.
 
+json/toon normally nest regions/orgs/spaces instead of the flat csv shape,
+but switch to that same flat {"rows": [...]} view whenever --fields or
+--sort-by is given.
+
+Use --fields <column,...> (case-insensitive, comma-separated, any of the
+csv columns above) to limit output to just those columns, in the order
+given. Omit it to get every column. Ignored for uar.csv, whose columns are
+fixed.
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, in priority order, each optionally suffixed with ":desc" for
+descending (":asc" is the default). Omit it to keep users in their natural
+(API) order. Ignored for uar.csv.
+
 If --regions is omitted, the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -164,6 +220,16 @@ If --regions is omitted, the regions from the last login are used.`,
 			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
 				format = auto
 			}
+		}
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := parseFieldsFlag[ospFlatRow](fieldsFlag, "--fields")
+		if err != nil {
+			return err
+		}
+		sortByFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := parseSortByFlag[ospFlatRow](sortByFlag, "--sort-by")
+		if err != nil {
+			return err
 		}
 
 		creds, err := store.Load()
@@ -305,25 +371,53 @@ If --regions is omitted, the regions from the last login are used.`,
 		colorMode, _ := cmd.Flags().GetString("color")
 		color := consoleColorEnabled(outputFile, colorMode)
 
-		switch strings.ToLower(format) {
+		fmtLower := strings.ToLower(format)
+		if fmtLower != "uar.csv" && (fmtLower == "csv" || len(fieldIDs) > 0 || len(sortKeys) > 0) {
+			doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+			}
+			flatRows := flattenOspRows(doc)
+			if len(sortKeys) > 0 {
+				sortRowsBy(flatRows, sortKeys)
+			}
+			switch fmtLower {
+			case "json":
+				return writeOspJSON(out, flatDocValue(flatRows, fieldIDs))
+			case "csv":
+				csvW := newRainbowCSVWriter(out, color)
+				defer csvW.Flush()
+				return writeFlatCSV(csvW, flatRows, fieldIDs)
+			default:
+				return writeOspToon(out, flatDocValue(flatRows, fieldIDs), color)
+			}
+		}
+
+		switch fmtLower {
 		case "json":
-			return writeOspJSON(out, results, includePattern, excludePattern)
-		case "csv":
-			return writeOspCSV(out, results, includePattern, excludePattern, color)
+			doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+			}
+			return writeOspJSON(out, doc)
 		case "uar.csv":
 			return writeOspUARCSV(out, results, includePattern, excludePattern, color)
 		default: // "toon"
-			return writeOspToon(out, results, includePattern, excludePattern, color)
+			doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: %v\n", e)
+			}
+			return writeOspToon(out, doc, color)
 		}
 	},
 }
 
-func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludePattern string, color bool) error {
-	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+// writeOspToon and writeOspJSON take val as either ospOutDoc (the default
+// nested region/org/space structure) or flatDocValue's result (used
+// instead when --fields or --sort-by is given) — both are just Go values
+// that toonenc/json reflect over.
+func writeOspToon(w io.Writer, val interface{}, color bool) error {
+	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
@@ -335,63 +429,12 @@ func writeOspToon(w io.Writer, results []ospRegionData, includePattern, excludeP
 	return err
 }
 
-func writeOspJSON(w io.Writer, results []ospRegionData, includePattern, excludePattern string) error {
-	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-	out, err := json.MarshalIndent(doc, "", "  ")
+func writeOspJSON(w io.Writer, val interface{}) error {
+	out, err := json.MarshalIndent(val, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
 	fmt.Fprintln(w, string(out))
-	return nil
-}
-
-// writeOspCSV writes one row per user with columns:
-// region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles
-// space_id and space_name are empty for org-level users.
-func writeOspCSV(w io.Writer, results []ospRegionData, includePattern, excludePattern string, color bool) error {
-	doc, errs := buildOspOutputDoc(results, includePattern, excludePattern)
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "warning: %v\n", e)
-	}
-
-	csvW := newRainbowCSVWriter(w, color)
-	defer csvW.Flush()
-
-	if err := csvW.Write([]string{
-		"region", "org_id", "org_name",
-		"space_id", "space_name",
-		"cfuser_id", "cfuser_name", "cfuser_origin", "cfuser_roles",
-	}); err != nil {
-		return err
-	}
-	for _, r := range doc.Regions {
-		for _, o := range r.Orgs {
-			for _, u := range o.Users {
-				// Org-level users: space_id and space_name are empty.
-				if err := csvW.Write([]string{
-					r.ID, o.ID, o.Name,
-					"", "",
-					u.ID, u.Name, u.Origin, u.Roles,
-				}); err != nil {
-					return err
-				}
-			}
-			for _, sp := range o.Spaces {
-				for _, u := range sp.Users {
-					if err := csvW.Write([]string{
-						r.ID, o.ID, o.Name,
-						sp.ID, sp.Name,
-						u.ID, u.Name, u.Origin, u.Roles,
-					}); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -444,4 +487,6 @@ func init() {
 	orgSpaceUsersCmd.Flags().String("org", "", "Restrict to a single org by exact GUID")
 	orgSpaceUsersCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	orgSpaceUsersCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
+	orgSpaceUsersCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as csv; switches json/toon to the flat {rows:[...]} view too; ignored for uar.csv). Default: every column, in the normal nested json/toon structure")
+	orgSpaceUsersCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too; ignored for uar.csv")
 }

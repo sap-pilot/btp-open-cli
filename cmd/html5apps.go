@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -105,174 +104,6 @@ func html5RowFromApplication(a html5apps.Application, region, destInstanceName, 
 
 type html5AppsDoc struct {
 	Apps []html5AppRow `json:"apps" toon:"apps"`
-}
-
-// html5FieldIDs returns html5AppRow's own JSON field names, in struct
-// declaration order — the canonical column list used for CSV headers, to
-// validate --fields, and as the default (full) field order.
-func html5FieldIDs() []string {
-	t := reflect.TypeOf(html5AppRow{})
-	ids := make([]string, 0, t.NumField())
-	for i := 0; i < t.NumField(); i++ {
-		ids = append(ids, strings.Split(t.Field(i).Tag.Get("json"), ",")[0])
-	}
-	return ids
-}
-
-// html5ParseFields validates --fields' comma-separated column IDs
-// case-insensitively against html5FieldIDs(), preserving the order given —
-// that order is then used for CSV's columns and, when narrowing, for the
-// JSON/TOON field order too (see html5BuildFilteredRows). Returns nil
-// (meaning "every field, in canonical order") when raw is empty.
-func html5ParseFields(raw string) ([]string, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	allIDs := html5FieldIDs()
-	valid := make(map[string]string, len(allIDs))
-	for _, id := range allIDs {
-		valid[strings.ToLower(id)] = id
-	}
-	out := make([]string, 0, len(allIDs))
-	for _, f := range splitCSV(raw) {
-		id, ok := valid[strings.ToLower(strings.TrimSpace(f))]
-		if !ok {
-			return nil, fmt.Errorf("invalid --fields value %q: must be one of %s", f, strings.Join(allIDs, ", "))
-		}
-		out = append(out, id)
-	}
-	return out, nil
-}
-
-// html5SortKey is one --sort-by criterion: a column ID plus direction.
-type html5SortKey struct {
-	ID   string
-	Desc bool
-}
-
-// html5ParseSort validates --sort-by's comma-separated column IDs
-// case-insensitively against html5FieldIDs() (the same columns --fields
-// accepts), preserving the order given as the tie-breaking priority. Each
-// column may be suffixed with ":desc" or ":asc" (":asc" is the default, so
-// it's only useful for clarity). Returns nil (meaning "no explicit
-// --sort-by"; the command's own default order applies) when raw is empty.
-func html5ParseSort(raw string) ([]html5SortKey, error) {
-	if raw == "" {
-		return nil, nil
-	}
-	allIDs := html5FieldIDs()
-	valid := make(map[string]string, len(allIDs))
-	for _, id := range allIDs {
-		valid[strings.ToLower(id)] = id
-	}
-	keys := make([]html5SortKey, 0, len(allIDs))
-	for _, f := range splitCSV(raw) {
-		f = strings.TrimSpace(f)
-		field, dir := f, ""
-		if idx := strings.LastIndex(f, ":"); idx >= 0 {
-			field = strings.TrimSpace(f[:idx])
-			dir = strings.ToLower(strings.TrimSpace(f[idx+1:]))
-		}
-		id, ok := valid[strings.ToLower(field)]
-		if !ok {
-			return nil, fmt.Errorf("invalid --sort-by value %q: must be one of %s, each optionally suffixed with \":desc\" or \":asc\"", f, strings.Join(allIDs, ", "))
-		}
-		var desc bool
-		switch dir {
-		case "", "asc":
-			desc = false
-		case "desc":
-			desc = true
-		default:
-			return nil, fmt.Errorf("invalid --sort-by direction %q for field %q: must be \"asc\" or \"desc\"", dir, id)
-		}
-		keys = append(keys, html5SortKey{ID: id, Desc: desc})
-	}
-	return keys, nil
-}
-
-// html5CompareValues orders two html5FieldValue results of the same field
-// (both strings or both bools; false < true) — <0 if a<b, 0 if equal, >0 if
-// a>b.
-func html5CompareValues(a, b interface{}) int {
-	switch av := a.(type) {
-	case string:
-		bv, _ := b.(string)
-		switch {
-		case av < bv:
-			return -1
-		case av > bv:
-			return 1
-		default:
-			return 0
-		}
-	case bool:
-		bv, _ := b.(bool)
-		switch {
-		case av == bv:
-			return 0
-		case !av && bv:
-			return -1
-		default:
-			return 1
-		}
-	default:
-		return 0
-	}
-}
-
-// html5FieldValue returns r's value for one of html5FieldIDs()' column IDs
-// (a string or a bool), or ok=false if id isn't a field of html5AppRow.
-func html5FieldValue(r html5AppRow, id string) (val interface{}, ok bool) {
-	v := reflect.ValueOf(r)
-	t := v.Type()
-	for i := 0; i < t.NumField(); i++ {
-		if strings.Split(t.Field(i).Tag.Get("json"), ",")[0] == id {
-			return v.Field(i).Interface(), true
-		}
-	}
-	return nil, false
-}
-
-// html5BuildFilteredRows uses reflect.StructOf to build, at runtime, a
-// struct type containing only fieldIDs (in that order), copying each
-// field's type and original tag from html5AppRow — so JSON/TOON marshaling
-// (which just reflects over whatever value it's given) emits exactly those
-// fields, in that order, the same way --fields narrows CSV's columns.
-func html5BuildFilteredRows(rows []html5AppRow, fieldIDs []string) interface{} {
-	srcType := reflect.TypeOf(html5AppRow{})
-	srcIndexByID := make(map[string]int, srcType.NumField())
-	for i := 0; i < srcType.NumField(); i++ {
-		id := strings.Split(srcType.Field(i).Tag.Get("json"), ",")[0]
-		srcIndexByID[id] = i
-	}
-
-	structFields := make([]reflect.StructField, 0, len(fieldIDs))
-	srcIndexes := make([]int, 0, len(fieldIDs))
-	for _, id := range fieldIDs {
-		idx, ok := srcIndexByID[id]
-		if !ok {
-			continue
-		}
-		srcField := srcType.Field(idx)
-		structFields = append(structFields, reflect.StructField{
-			Name: srcField.Name,
-			Type: srcField.Type,
-			Tag:  srcField.Tag,
-		})
-		srcIndexes = append(srcIndexes, idx)
-	}
-
-	dynType := reflect.StructOf(structFields)
-	out := reflect.MakeSlice(reflect.SliceOf(dynType), len(rows), len(rows))
-	for i, r := range rows {
-		rv := reflect.ValueOf(r)
-		dst := out.Index(i)
-		for j, idx := range srcIndexes {
-			dst.Field(j).Set(rv.Field(idx))
-		}
-	}
-	return out.Interface()
 }
 
 // ── service-instance based discovery ────────────────────────────────────────
@@ -903,9 +734,9 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 // ── rendering ────────────────────────────────────────────────────────────────
 
 // renderHTML5AppsToon and renderHTML5AppsJSON take val as returned by either
-// html5AppsDoc{Apps: rows} (no --fields) or html5BuildFilteredRows wrapped
-// the same way (see the RunE below) — both are just Go values that
-// toonenc/json reflect over, so narrowing the fields is transparent to them.
+// html5AppsDoc{Apps: rows} (no --fields) or buildFilteredRows wrapped the
+// same way (see the RunE below) — both are just Go values that toonenc/json
+// reflect over, so narrowing the fields is transparent to them.
 
 func renderHTML5AppsToon(w io.Writer, val interface{}, color bool) error {
 	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
@@ -929,39 +760,12 @@ func renderHTML5AppsJSON(w io.Writer, val interface{}) error {
 	return nil
 }
 
-// renderHTML5AppsCSV writes fieldIDs (html5FieldIDs() when empty, i.e. every
-// column) as the header, then one row per app with each cell looked up via
-// html5FieldValue.
+// renderHTML5AppsCSV writes fieldIDs (fieldIDsOf[html5AppRow]() when empty,
+// i.e. every column) as the header, then one row per app.
 func renderHTML5AppsCSV(w io.Writer, rows []html5AppRow, color bool, fieldIDs []string) error {
-	ids := fieldIDs
-	if len(ids) == 0 {
-		ids = html5FieldIDs()
-	}
-
 	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
-
-	if err := csvW.Write(ids); err != nil {
-		return err
-	}
-	for _, a := range rows {
-		cells := make([]string, len(ids))
-		for i, id := range ids {
-			val, _ := html5FieldValue(a, id)
-			switch v := val.(type) {
-			case bool:
-				cells[i] = fmt.Sprintf("%t", v)
-			case string:
-				cells[i] = v
-			default:
-				cells[i] = fmt.Sprintf("%v", v)
-			}
-		}
-		if err := csvW.Write(cells); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeFlatCSV(csvW, rows, fieldIDs)
 }
 
 // ── command ───────────────────────────────────────────────────────────────────
@@ -1098,12 +902,12 @@ If --regions is omitted the regions from the last login are used.`,
 			return err
 		}
 		fieldsFlag, _ := cmd.Flags().GetString("fields")
-		fieldIDs, err := html5ParseFields(fieldsFlag)
+		fieldIDs, err := parseFieldsFlag[html5AppRow](fieldsFlag, "--fields")
 		if err != nil {
 			return err
 		}
 		sortFlag, _ := cmd.Flags().GetString("sort-by")
-		sortKeys, err := html5ParseSort(sortFlag)
+		sortKeys, err := parseSortByFlag[html5AppRow](sortFlag, "--sort-by")
 		if err != nil {
 			return err
 		}
@@ -1195,21 +999,7 @@ If --regions is omitted the regions from the last login are used.`,
 		rows = filtered
 
 		if len(sortKeys) > 0 {
-			sort.SliceStable(rows, func(i, j int) bool {
-				for _, key := range sortKeys {
-					vi, _ := html5FieldValue(rows[i], key.ID)
-					vj, _ := html5FieldValue(rows[j], key.ID)
-					c := html5CompareValues(vi, vj)
-					if c == 0 {
-						continue
-					}
-					if key.Desc {
-						return c > 0
-					}
-					return c < 0
-				}
-				return false
-			})
+			sortRowsBy(rows, sortKeys)
 		} else {
 			sort.Slice(rows, func(i, j int) bool {
 				if rows[i].Region != rows[j].Region {
@@ -1240,7 +1030,7 @@ If --regions is omitted the regions from the last login are used.`,
 		if len(fieldIDs) > 0 {
 			docVal = struct {
 				Apps interface{} `json:"apps" toon:"apps"`
-			}{Apps: html5BuildFilteredRows(rows, fieldIDs)}
+			}{Apps: buildFilteredRows(rows, fieldIDs)}
 		}
 		switch strings.ToLower(format) {
 		case "json":

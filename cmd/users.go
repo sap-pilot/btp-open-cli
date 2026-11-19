@@ -46,6 +46,41 @@ type usrOutDoc struct {
 	Regions []usrOutRegion `json:"regions" toon:"regions"`
 }
 
+// usrFlatRow is the flat, one-row-per-user view of usrOutDoc — the same
+// shape as the CSV output. Used directly for CSV, and for JSON/TOON too
+// when --fields or --sort-by is given; otherwise JSON/TOON keep the nested
+// region/org structure.
+type usrFlatRow struct {
+	Region         string `json:"region"           toon:"region"`
+	OrgID          string `json:"org_id"           toon:"org_id"`
+	OrgName        string `json:"org_name"         toon:"org_name"`
+	UserID         string `json:"user_id"          toon:"user_id"`
+	UserExternalID string `json:"user_externalId"  toon:"user_externalId"`
+	UserOrigin     string `json:"user_origin"      toon:"user_origin"`
+	UserName       string `json:"user_name"        toon:"user_name"`
+	Email          string `json:"email"            toon:"email"`
+	LastLogonTime  string `json:"lastLogonTime"    toon:"lastLogonTime"`
+	Groups         string `json:"groups"           toon:"groups"`
+}
+
+// flattenUsersRows converts doc's nested region/org structure into one flat
+// row per user.
+func flattenUsersRows(doc usrOutDoc) []usrFlatRow {
+	var rows []usrFlatRow
+	for _, r := range doc.Regions {
+		for _, o := range r.Orgs {
+			for _, u := range o.Users {
+				rows = append(rows, usrFlatRow{
+					Region: r.ID, OrgID: o.ID, OrgName: o.Name,
+					UserID: u.ID, UserExternalID: u.ExternalID, UserOrigin: u.Origin,
+					UserName: u.UserName, Email: u.Email, LastLogonTime: u.LastLogonTime, Groups: u.Groups,
+				})
+			}
+		}
+	}
+	return rows
+}
+
 // usrOrgResult holds one org's fetched XSUAA data (users and, for uar.csv,
 // role collections) before it is projected into an output format.
 type usrOrgResult struct {
@@ -74,8 +109,8 @@ Output formats (--format):
            A user assigned to N role collections produces N rows, with the other
            fields duplicated across them. Role collections with no members still
            get one row, with "N/A" in Role Collection Members and Origin. Rows are
-           sorted by Role Collection name. --fields/--excludeFields are ignored
-           for this format since its columns are fixed.
+           sorted by Role Collection name. --fields/--sort-by are ignored for
+           this format since its columns are fixed.
 
 For each org the command finds any xsuaa/apiaccess service instance (in any space)
 and uses the first available service key to obtain an access token. If no instance
@@ -99,6 +134,22 @@ is not explicitly given, it is auto-detected from --output's extension:
 default toon applies (uar.csv is never auto-detected — pass --format
 uar.csv explicitly). Pass --format explicitly to override the extension.
 
+csv is always a flat list, one row per user, with columns:
+region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,
+lastLogonTime,groups. json/toon normally nest regions/orgs/users instead,
+but switch to that same flat {"rows": [...]} view whenever --fields or
+--sort-by is given.
+
+Use --fields <column,...> (case-insensitive, comma-separated, any of the
+columns above) to limit output to just those columns, in the order given.
+Omit it to get every column. Ignored for uar.csv, whose columns are fixed.
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, in priority order, each optionally suffixed with ":desc" for
+descending (":asc" is the default). Omit it to keep users in their natural
+(API) order. Ignored for uar.csv, which is always sorted by Role Collection
+name.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -115,9 +166,16 @@ If --regions is omitted the regions from the last login are used.`,
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
-		fieldsCSV, _ := cmd.Flags().GetString("fields")
-		excludeFieldsCSV, _ := cmd.Flags().GetString("excludeFields")
-		fields := buildUsrFieldSet(fieldsCSV, excludeFieldsCSV)
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := parseFieldsFlag[usrFlatRow](fieldsFlag, "--fields")
+		if err != nil {
+			return err
+		}
+		sortByFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := parseSortByFlag[usrFlatRow](sortByFlag, "--sort-by")
+		if err != nil {
+			return err
+		}
 
 		creds, err := store.Load()
 		if err != nil {
@@ -237,7 +295,10 @@ If --regions is omitted the regions from the last login are used.`,
 				if !usrMatchesIncludeExclude(u, email, lastLogon, groups, includePattern, excludePattern) {
 					continue
 				}
-				outUsers = append(outUsers, usrApplyFields(u, email, lastLogon, groups, fields))
+				outUsers = append(outUsers, usrOutUser{
+					ID: u.ID, ExternalID: u.ExternalID, Origin: u.Origin, UserName: u.UserName,
+					Email: email, LastLogonTime: lastLogon, Groups: groups,
+				})
 			}
 			regionOrgs[r.regionName] = append(regionOrgs[r.regionName], usrOutOrg{
 				ID:    r.orgGUID,
@@ -263,11 +324,25 @@ If --regions is omitted the regions from the last login are used.`,
 		colorMode, _ := cmd.Flags().GetString("color")
 		color := consoleColorEnabled(outputFile, colorMode)
 
-		switch strings.ToLower(format) {
+		fmtLower := strings.ToLower(format)
+		if fmtLower != "uar.csv" && (fmtLower == "csv" || len(fieldIDs) > 0 || len(sortKeys) > 0) {
+			flatRows := flattenUsersRows(doc)
+			if len(sortKeys) > 0 {
+				sortRowsBy(flatRows, sortKeys)
+			}
+			switch fmtLower {
+			case "json":
+				return writeUsersJSON(out, flatDocValue(flatRows, fieldIDs))
+			case "csv":
+				return writeUsersCSV(out, flatRows, color, fieldIDs)
+			default:
+				return writeUsersToon(out, flatDocValue(flatRows, fieldIDs), color)
+			}
+		}
+
+		switch fmtLower {
 		case "json":
 			return writeUsersJSON(out, doc)
-		case "csv":
-			return writeUsersCSV(out, doc, color)
 		case "uar.csv":
 			return writeUsersUARCSV(out, buildUARRows(regionOrder, results, includePattern, excludePattern), color)
 		default: // "toon"
@@ -400,8 +475,12 @@ func writeUsersUARCSV(w io.Writer, rows []uarRow, color bool) error {
 	return nil
 }
 
-func writeUsersToon(w io.Writer, doc usrOutDoc, color bool) error {
-	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+// writeUsersToon and writeUsersJSON take val as either usrOutDoc (the
+// default nested region/org structure) or flatDocValue's result (used
+// instead when --fields or --sort-by is given) — both are just Go values
+// that toonenc/json reflect over.
+func writeUsersToon(w io.Writer, val interface{}, color bool) error {
+	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding output: %w", err)
 	}
@@ -413,8 +492,8 @@ func writeUsersToon(w io.Writer, doc usrOutDoc, color bool) error {
 	return err
 }
 
-func writeUsersJSON(w io.Writer, doc usrOutDoc) error {
-	out, err := json.MarshalIndent(doc, "", "  ")
+func writeUsersJSON(w io.Writer, val interface{}) error {
+	out, err := json.MarshalIndent(val, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
@@ -422,31 +501,13 @@ func writeUsersJSON(w io.Writer, doc usrOutDoc) error {
 	return nil
 }
 
-// writeUsersCSV writes one row per user with columns:
+// writeUsersCSV writes rows with columns:
 // region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups
-func writeUsersCSV(w io.Writer, doc usrOutDoc, color bool) error {
+// (or fieldIDs, when given).
+func writeUsersCSV(w io.Writer, rows []usrFlatRow, color bool, fieldIDs []string) error {
 	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
-
-	if err := csvW.Write([]string{
-		"region", "org_id", "org_name",
-		"user_id", "user_externalId", "user_origin", "user_name", "email", "lastLogonTime", "groups",
-	}); err != nil {
-		return err
-	}
-	for _, r := range doc.Regions {
-		for _, o := range r.Orgs {
-			for _, u := range o.Users {
-				if err := csvW.Write([]string{
-					r.ID, o.ID, o.Name,
-					u.ID, u.ExternalID, u.Origin, u.UserName, u.Email, u.LastLogonTime, u.Groups,
-				}); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return writeFlatCSV(csvW, rows, fieldIDs)
 }
 
 func init() {
@@ -461,39 +522,8 @@ func init() {
 	usersCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no service instance or key are silently skipped")
 	usersCmd.Flags().String("include", "", "Only include users where any user field contains any of these comma-separated, case-insensitive keywords")
 	usersCmd.Flags().String("exclude", "", "Exclude users where any user field contains any of these comma-separated, case-insensitive keywords")
-	usersCmd.Flags().String("fields", "", "Comma-separated fields to include in output (user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups)")
-	usersCmd.Flags().String("excludeFields", "", "Comma-separated fields to exclude from output")
-}
-
-// usrFieldSet tracks which output fields are active. nil means all fields included.
-type usrFieldSet map[string]bool
-
-func (f usrFieldSet) active(field string) bool {
-	return f == nil || f[field]
-}
-
-var usrAllFields = []string{"user_id", "user_externalId", "user_origin", "user_name", "email", "lastLogonTime", "groups"}
-
-// buildUsrFieldSet computes the active field set from --fields and --excludeFields.
-// Returns nil if both are empty (all fields active).
-func buildUsrFieldSet(fieldsCSV, excludeCSV string) usrFieldSet {
-	if fieldsCSV == "" && excludeCSV == "" {
-		return nil
-	}
-	active := make(usrFieldSet)
-	if fieldsCSV != "" {
-		for _, f := range splitCSV(fieldsCSV) {
-			active[strings.TrimSpace(f)] = true
-		}
-	} else {
-		for _, f := range usrAllFields {
-			active[f] = true
-		}
-	}
-	for _, f := range splitCSV(excludeCSV) {
-		delete(active, strings.TrimSpace(f))
-	}
-	return active
+	usersCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as CSV; switches json/toon to the flat {rows:[...]} view too; ignored for uar.csv). Default: every column, in the normal nested json/toon structure")
+	usersCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too; ignored for uar.csv")
 }
 
 // usrMatchesIncludeExclude applies --include/--exclude keyword filtering
@@ -526,31 +556,4 @@ func uarRowMatchesIncludeExclude(row uarRow, includePattern, excludePattern stri
 		return false
 	}
 	return true
-}
-
-// usrApplyFields builds a usrOutUser, omitting fields not in the active set.
-func usrApplyFields(u xsuaa.User, email, lastLogon, groups string, fields usrFieldSet) usrOutUser {
-	var out usrOutUser
-	if fields.active("user_id") {
-		out.ID = u.ID
-	}
-	if fields.active("user_externalId") {
-		out.ExternalID = u.ExternalID
-	}
-	if fields.active("user_origin") {
-		out.Origin = u.Origin
-	}
-	if fields.active("user_name") {
-		out.UserName = u.UserName
-	}
-	if fields.active("email") {
-		out.Email = email
-	}
-	if fields.active("lastLogonTime") {
-		out.LastLogonTime = lastLogon
-	}
-	if fields.active("groups") {
-		out.Groups = groups
-	}
-	return out
 }
