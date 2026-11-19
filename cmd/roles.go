@@ -75,6 +75,21 @@ type roFlatRow struct {
 
 // flattenRolesRows converts doc's nested region/org structure into one flat
 // row per role.
+// roMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) against a role's roleTemplateAppId, roleTemplateName,
+// role_name, appName, and description.
+func roMatchesIncludeExclude(role xsuaa.Role, includePattern, excludePattern string) bool {
+	fields := []string{role.RoleTemplateAppID, role.RoleTemplateName, role.Name, role.AppName, role.Description}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
+}
+
 func flattenRolesRows(doc roOutDoc) ([]roFlatRow, error) {
 	var rows []roFlatRow
 	for _, r := range doc.Regions {
@@ -197,6 +212,11 @@ columns, in priority order, each optionally suffixed with ":desc" for
 descending (":asc" is the default). Omit it to keep the default order:
 sorted by roleTemplateAppId then roleTemplateName.
 
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a role matches if roleTemplateAppId,
+roleTemplateName, role_name, appName, or description contains any of them
+(case-insensitive).
+
 If --regions is omitted the regions from the last login are used.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -229,6 +249,8 @@ If --regions is omitted the regions from the last login are used.`,
 		if err != nil {
 			return err
 		}
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -362,6 +384,9 @@ If --regions is omitted the regions from the last login are used.`,
 				if !matchesNegatablePattern(pattern, role.Name) {
 					continue
 				}
+				if !roMatchesIncludeExclude(role, includePattern, excludePattern) {
+					continue
+				}
 				outRoles = append(outRoles, xsuaaRoleToOut(role))
 			}
 			sort.Slice(outRoles, func(i, j int) bool {
@@ -466,4 +491,6 @@ func init() {
 	rolesCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	rolesCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as csv; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
 	rolesCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
+	rolesCmd.Flags().String("include", "", "Only include roles where roleTemplateAppId, roleTemplateName, role_name, appName, or description contain any of these comma-separated, case-insensitive keywords")
+	rolesCmd.Flags().String("exclude", "", "Exclude roles where roleTemplateAppId, roleTemplateName, role_name, appName, or description contain any of these comma-separated, case-insensitive keywords")
 }

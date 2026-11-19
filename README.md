@@ -858,11 +858,18 @@ bo roles --fields role_name,appName,description
 
 # Sort by one or more columns, in priority order (":desc" for descending)
 bo roles --sort-by appName,role_name
+
+# Only include roles where roleTemplateAppId, roleTemplateName, role_name,
+# appName, or description contain any of these comma-separated keywords
+bo roles --include "Custom_Role"
+bo roles --exclude sap.default
 ```
 
 `--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.csv` selects `csv`, `.toon` selects `toon` — pass `--format` explicitly to override.
 
 `csv` columns: `region,org_id,org_name,roleTemplateAppId,roleTemplateName,role_name,appName,description,isReadOnly,attributeList` (the role's attribute list, JSON-encoded, empty when it has none). `json`/`toon` normally nest `regions`/`orgs`/`roles` instead (the shape the other `bo *-roles` commands read back in) — use `--fields <column,...>` (case-insensitive, comma-separated, any of those columns, in the order given) or `--sort-by <column,...>` (each optionally suffixed with `:desc`) to switch them to that same flat `{"rows": [...]}` view instead; omit both to keep the default nested order (sorted by `roleTemplateAppId` then `roleTemplateName`).
+
+Use `--include`/`--exclude` to narrow results further: each accepts a comma-separated list of keywords, and a role matches if `roleTemplateAppId`, `roleTemplateName`, `role_name`, `appName`, or `description` contains any of them (case-insensitive).
 
 Output format (TOON):
 ```
@@ -1021,11 +1028,19 @@ bo role-collections --fields rolecollection_name,role_name
 
 # Sort by one or more columns, in priority order (":desc" for descending)
 bo role-collections --sort-by rolecollection_name,role_name
+
+# Only include rows where rolecollection_name, rolecollection_description,
+# role_template_app_id, role_template_name, role_name, or role_description
+# contain any of these comma-separated keywords
+bo role-collections --include "BTP Admin"
+bo role-collections --exclude temp
 ```
 
 `--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.csv` selects `csv`, `.toon` selects `toon` — pass `--format` explicitly to override.
 
 `csv` columns: `region,org_id,org_name,rolecollection_name,rolecollection_description,rolecollection_isReadOnly,role_template_app_id,role_template_name,role_name,role_description` (a role collection with no role references still gets one row, with the `role_*` columns empty). `json`/`toon` normally nest `regions`/`orgs`/`roleCollections`/`roleReferences` instead — use `--fields <column,...>` (case-insensitive, comma-separated, any of those columns, in the order given) or `--sort-by <column,...>` (each optionally suffixed with `:desc`) to switch them to that same flat `{"rows": [...]}` view instead; omit both to keep the default nested order (role collections sorted by name).
+
+Use `--include`/`--exclude` to narrow results further: each accepts a comma-separated list of keywords, and a row (one role reference, or the role collection itself if it has none) matches if `rolecollection_name`, `rolecollection_description`, `role_template_app_id`, `role_template_name`, `role_name`, or `role_description` contains any of them (case-insensitive). A role collection is dropped entirely once it has no matching row left.
 
 Output format (TOON):
 ```
@@ -1865,6 +1880,11 @@ bo service-keys --fields org_name,space_name,instance_name,key_name
 
 # Sort by one or more columns, in priority order (":desc" for descending)
 bo service-keys --sort-by key_name
+
+# Only include keys where region, org_name, space_name, instance_name,
+# label, plan, or key_name contain any of these comma-separated keywords
+bo service-keys --include prod
+bo service-keys --exclude sandbox,test
 ```
 
 Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv`, `.toon`) when `--format` isn't explicitly given:
@@ -1880,6 +1900,8 @@ Without `--full`, only service key metadata is included — `key_guid`, `key_nam
 Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns in the CSV row above) to limit output to just those columns, in the order given — switches `json`/`toon` to that same flat `{"rows": [...]}` view too. Omit it to get every column, in the normal nested structure shown below.
 
 Use `--sort-by <column,...>` to sort rows by one or more of those same columns, each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `region`, `org_name`, `space_name`, `instance_name`, then `key_name`.
+
+Use `--include`/`--exclude` to narrow results further: each accepts a comma-separated list of keywords, and a key matches if `region`, `org_name`, `space_name`, `instance_name`, `label`, `plan`, or `key_name` contains any of them (case-insensitive). Filtering happens before `--full` fetches credentials, so excluded keys never trigger that extra API call.
 
 ```
 orgs[1]:

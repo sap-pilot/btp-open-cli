@@ -68,6 +68,25 @@ type rcFlatRow struct {
 	RoleDescription           string `json:"role_description"           toon:"role_description"`
 }
 
+// rcRowMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) to one role-collection/role-reference row's own fields:
+// rolecollection_name, rolecollection_description, role_template_app_id,
+// role_template_name, role_name, role_description.
+func rcRowMatchesIncludeExclude(row rcFlatRow, includePattern, excludePattern string) bool {
+	fields := []string{
+		row.RoleCollectionName, row.RoleCollectionDescription,
+		row.RoleTemplateAppID, row.RoleTemplateName, row.RoleName, row.RoleDescription,
+	}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
+}
+
 // flattenRoleCollectionsRows converts doc's nested region/org/roleCollection
 // structure into one flat row per role reference.
 func flattenRoleCollectionsRows(doc rcOutDoc) []rcFlatRow {
@@ -150,6 +169,13 @@ descending (":asc" is the default). Omit it to keep the default order:
 role collections sorted by name (role references within a role collection
 keep their own default order: role_template_app_id then role_template_name).
 
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a row (one role reference, or the
+role collection itself if it has none) matches if rolecollection_name,
+rolecollection_description, role_template_app_id, role_template_name,
+role_name, or role_description contains any of them (case-insensitive). A
+role collection is dropped entirely once it has no matching row left.
+
 If --regions is omitted the regions from the last login are used.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -182,6 +208,8 @@ If --regions is omitted the regions from the last login are used.`,
 		if err != nil {
 			return err
 		}
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		creds, err := store.Load()
 		if err != nil {
@@ -317,6 +345,14 @@ If --regions is omitted the regions from the last login are used.`,
 				}
 				var refs []rcOutRoleRef
 				for _, ref := range rc.RoleReferences {
+					candidate := rcFlatRow{
+						RoleCollectionName: rc.Name, RoleCollectionDescription: rc.Description,
+						RoleTemplateAppID: ref.RoleTemplateAppID, RoleTemplateName: ref.RoleTemplateName,
+						RoleName: ref.Name, RoleDescription: ref.Description,
+					}
+					if !rcRowMatchesIncludeExclude(candidate, includePattern, excludePattern) {
+						continue
+					}
 					refs = append(refs, rcOutRoleRef{
 						RoleTemplateAppID: ref.RoleTemplateAppID,
 						RoleTemplateName:  ref.RoleTemplateName,
@@ -330,6 +366,17 @@ If --regions is omitted the regions from the last login are used.`,
 					}
 					return refs[i].RoleTemplateName < refs[j].RoleTemplateName
 				})
+				if len(rc.RoleReferences) == 0 {
+					// No references at all: keep/drop based on the role
+					// collection's own fields alone (matching
+					// flattenRoleCollectionsRows' "one empty row" case).
+					base := rcFlatRow{RoleCollectionName: rc.Name, RoleCollectionDescription: rc.Description}
+					if !rcRowMatchesIncludeExclude(base, includePattern, excludePattern) {
+						continue
+					}
+				} else if (includePattern != "" || excludePattern != "") && len(refs) == 0 {
+					continue // had references, but none matched
+				}
 				outRCs = append(outRCs, rcOutRoleCollection{
 					Name:           rc.Name,
 					Description:    rc.Description,
@@ -433,4 +480,6 @@ func init() {
 	roleCollectionsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	roleCollectionsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as csv; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
 	roleCollectionsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
+	roleCollectionsCmd.Flags().String("include", "", "Only include rows where rolecollection_name, rolecollection_description, role_template_app_id, role_template_name, role_name, or role_description contain any of these comma-separated, case-insensitive keywords")
+	roleCollectionsCmd.Flags().String("exclude", "", "Exclude rows where rolecollection_name, rolecollection_description, role_template_app_id, role_template_name, role_name, or role_description contain any of these comma-separated, case-insensitive keywords")
 }

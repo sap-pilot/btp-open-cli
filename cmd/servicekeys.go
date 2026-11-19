@@ -88,6 +88,21 @@ type skMatchedKey struct {
 	Credentials        map[string]interface{}
 }
 
+// skMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) against a matched key's region, org_name, space_name,
+// instance_name, label, plan, and key_name.
+func skMatchesIncludeExclude(k skMatchedKey, includePattern, excludePattern string) bool {
+	fields := []string{k.Region, k.OrgName, k.SpaceName, k.InstanceName, k.Label, k.Plan, k.KeyName}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
+}
+
 type skRegionResult struct {
 	Region string
 	Keys   []skMatchedKey
@@ -190,6 +205,12 @@ the default) — also switches json/toon to the flat view. Omit it to keep
 the default order: sorted by region, org_name, space_name, instance_name,
 then key_name.
 
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a key matches if region, org_name,
+space_name, instance_name, label, plan, or key_name contains any of them
+(case-insensitive). Filtering happens before --full fetches credentials, so
+excluded keys never trigger that extra API call.
+
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
 .json selects json, .csv selects csv, .toon selects toon — otherwise the
@@ -223,6 +244,8 @@ If --regions is omitted the regions from the last login are used.`,
 		if err != nil {
 			return err
 		}
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		if spaceFlag != "" {
 			if spacesFlag != "" {
@@ -448,7 +471,11 @@ If --regions is omitted the regions from the last login are used.`,
 				fmt.Fprintf(os.Stderr, "warning: region %q: %v\n", r.Region, r.Err)
 				continue
 			}
-			allMatched = append(allMatched, r.Keys...)
+			for _, k := range r.Keys {
+				if skMatchesIncludeExclude(k, includePattern, excludePattern) {
+					allMatched = append(allMatched, k)
+				}
+			}
 		}
 
 		// Phase 2: with --full, fetch each matched key's credentials, bounded
@@ -642,4 +669,6 @@ func init() {
 	serviceKeysCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	serviceKeysCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as csv; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
 	serviceKeysCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
+	serviceKeysCmd.Flags().String("include", "", "Only include keys where region, org_name, space_name, instance_name, label, plan, or key_name contain any of these comma-separated, case-insensitive keywords")
+	serviceKeysCmd.Flags().String("exclude", "", "Exclude keys where region, org_name, space_name, instance_name, label, plan, or key_name contain any of these comma-separated, case-insensitive keywords")
 }
