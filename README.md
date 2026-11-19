@@ -2416,6 +2416,8 @@ Run `bo completion <shell> --help` for shell-specific installation instructions.
 | `--color` | Color console output: `auto` (default), `always`, or `never` — see [Colorized toon/csv output](#colorized-tooncsv-output) |
 | `-h`, `--help` | Show help |
 
+`apps`, `users`, `role-collections`, `roles`, `subaccount-destinations`, `space-destinations`, `service-keys`, `org-users`, `org-space-users`, `org-spaces`, `spaces`, `html5-apps`, and `orgs` all share the same `--include`/`--exclude`/`--fields`/`--sort-by` flags (`orgs` only has `--include`/`--exclude`), added uniformly across them. Their `--help` output breaks the usual two sections into three: the command's own flags under `Flags:`, those shared flags pulled into their own `Common Flags:` section just above `Global Flags:`, and `--help` itself grouped into `Global Flags:` alongside `--color`/`--verbose` rather than sitting in `Flags:`. Every other command keeps cobra's normal two-section `Flags:`/`Global Flags:` layout.
+
 ### Colorized toon/csv output
 
 `spaces`, `apps`, `service-instances`, `service-keys`, `role-collections`, `users`, `org-users`, and `org-space-users` colorize each column of their `toon` and `csv` (including `uar.csv`) output — one color per column, cycling across the row, à la the "rainbow csv" editor plugins — so wide rows stay easy to scan by eye. For `toon` output this colors both the compact tabular array headers (`spaces[2]{space_id,space_name}:`) and the comma-separated rows beneath them; plain `key: value` lines are left as-is.
