@@ -10,7 +10,6 @@ import (
 	"os/signal"
 	"sort"
 	"strings"
-	"time"
 
 	toonenc "github.com/toon-format/toon-go"
 
@@ -57,8 +56,12 @@ func flattenSadRows(docs []sadOrgDoc) []destFlatRow {
 //   - Service key credentials (clientId, clientSecret) are fetched from CF on
 //     demand and discarded immediately — they are never written to disk.
 //
-// If no instance or service key is found and noPrompt is false, the user is
-// prompted to create the required resource and the search is retried once.
+// If no destination service instance at all is found anywhere in the org
+// and noPrompt is false, the user is prompted to create one and the search
+// is retried once; noPrompt instead fails immediately. A found instance
+// with no service key is instead governed by keyOption (see
+// resolveDestInstanceClient) — independently of noPrompt. Callers must call
+// cleanupDestClients(client) once they're done using the returned client.
 func resolveOrgDestClient(
 	ctx context.Context,
 	cmd *cobra.Command,
@@ -66,6 +69,7 @@ func resolveOrgDestClient(
 	creds *store.Credentials,
 	apiURLs []string,
 	noPrompt bool,
+	keyOption destKeyOption,
 ) (orgGUID, orgName string, client sdDestClient, err error) {
 
 	// ── step 1: find the org across regions ──────────────────────────────────
@@ -145,89 +149,13 @@ func resolveOrgDestClient(
 			spaceCache := creds.SpaceDestServices[space.GUID]
 
 			for _, inst := range instances {
-				cached := spaceCache[inst.GUID]
-				needToken := cached == nil || cached.AccessToken == "" ||
-					time.Now().Add(60*time.Second).After(cached.TokenExpiry)
-
-				if needToken {
-					// Fetch service key from CF on demand — credentials are NOT cached.
-					key, keyErr := cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-					if keyErr != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: finding service key for %q: %v\n", inst.Name, keyErr)
-						continue
-					}
-					if key == nil {
-						if noPrompt {
-							fmt.Fprintf(cmd.ErrOrStderr(),
-								"warning: no service key for destination instance %q in space %q — skipping\n",
-								inst.Name, space.Name)
-						} else {
-							for key == nil {
-								fmt.Fprintf(cmd.ErrOrStderr(),
-									"\nWARNING: No service key found for destination instance %q (space: %s)\n"+
-										"  Create one manually, e.g. via CF CLI:\n"+
-										"    cf create-service-key %s bo-dest-key\n"+
-										"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
-									inst.Name, space.Name, inst.Name)
-								retry, skip := promptRetryOrSkip(ctx)
-								if !retry && !skip {
-									return sdDestClient{}, false, errAborted
-								}
-								if skip {
-									break
-								}
-								key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-								if keyErr != nil || key == nil {
-									fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
-									key = nil
-								}
-							}
-						}
-						if key == nil {
-							continue
-						}
-					}
-
-					details, detailErr := cfClient.GetServiceCredentialDetails(ctx, key.GUID)
-					if detailErr != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: fetching key details for %q: %v\n", inst.Name, detailErr)
-						continue
-					}
-					clientID, clientSecret, tokenURL, uri, missing := destCredentialsFromDetails(details)
-					if missing != "" {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: incomplete credentials in service key for %q (missing %q)\n", inst.Name, missing)
-						continue
-					}
-
-					// Obtain token — credentials are discarded immediately after.
-					newToken, expiry, tokErr := destination.GetAccessToken(ctx, tokenURL, clientID, clientSecret)
-					if tokErr != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: token for destination instance %q: %v\n", inst.Name, tokErr)
-						continue
-					}
-
-					// Persist only: instanceName, tokenURL, URI, accessToken, tokenExpiry.
-					if cached == nil {
-						cached = &store.DestInstanceCache{}
-						spaceCache[inst.GUID] = cached
-					}
-					cached.InstanceName = inst.Name
-					cached.TokenURL = tokenURL
-					cached.URI = uri
-					cached.AccessToken = newToken
-					cached.TokenExpiry = expiry
-					// clientID and clientSecret intentionally NOT stored.
+				c, ok, resolveErr := resolveDestInstanceClient(ctx, cmd, cfClient, space.Name, inst, spaceCache, keyOption)
+				if resolveErr != nil {
+					return sdDestClient{}, false, resolveErr
 				}
-
-				if cached == nil || cached.URI == "" {
-					continue
+				if ok {
+					return c, true, nil
 				}
-				return sdDestClient{
-					InstanceGUID: inst.GUID,
-					InstanceName: cached.InstanceName,
-					URI:          cached.URI,
-					Token:        cached.AccessToken,
-				}, true, nil
 			}
 		}
 		return sdDestClient{}, false, nil
@@ -314,6 +242,19 @@ pick one interactively, or pass --org/--orgs directly. With more than one
 target org, --format json/toon returns a list of per-org results instead of
 a single object.
 
+--no-key-option <s/skip|c/create|t/transient|a/abort> governs what happens
+when a destination service instance is found with no service key: skip
+warns and moves on; create automatically creates a 'bo-dest-key' service key
+on the instance and keeps it; transient does the same but deletes that key
+again once it's no longer needed for this run; abort stops the whole
+command the first time it happens. Omit this flag to be asked
+s/skip/c/create/t/transient/a/abort interactively each time such an
+instance is found instead, defaulting to skip on a blank answer — unless -y
+is also given, in which case skip is used directly with no prompt.
+--no-prompt is the separate, unrelated case of an org having no destination
+service instance at all: with it, that fails immediately instead of
+prompting to create one.
+
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
 .json selects json, .csv selects csv, .toon selects toon — otherwise the
@@ -328,6 +269,15 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
+		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		keyOptionFlag, _ := cmd.Flags().GetString("no-key-option")
+		keyOption, err := normalizeDestKeyOption(keyOptionFlag)
+		if err != nil {
+			return err
+		}
+		if !cmd.Flags().Changed("no-key-option") && !skipConfirm {
+			keyOption = destKeyOptionPrompt
+		}
 		outputFile, _ := cmd.Flags().GetString("output")
 		if !cmd.Flags().Changed("format") {
 			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
@@ -373,7 +323,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 
 		var docs []sadOrgDoc
 		for _, target := range orgTargets {
-			orgGUID, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			orgGUID, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt, keyOption)
 			if resolveErr != nil {
 				if errors.Is(resolveErr, errAborted) {
 					return errAborted
@@ -383,6 +333,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			}
 
 			rawDests, fetchErr := destination.ListSubaccountDestinationsFull(ctx, destClient.URI, destClient.Token)
+			cleanupDestClients(destClient)
 			if fetchErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
 				continue
@@ -520,7 +471,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 
 		var anyOK bool
 		for _, target := range orgTargets {
-			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt, destKeyOptionFromNoPrompt(noPrompt))
 			if resolveErr != nil {
 				if errors.Is(resolveErr, errAborted) {
 					return errAborted
@@ -532,6 +483,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			fmt.Fprintf(cmd.OutOrStdout(), "Creating subaccount destinations in org %s (via instance: %s)...\n",
 				orgName, destClient.InstanceName)
 			items, postErr := destination.CreateSubaccountDestinations(ctx, destClient.URI, destClient.Token, rawBody)
+			cleanupDestClients(destClient)
 			if postErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: [%s] creating subaccount destinations: %v\n", orgName, postErr)
 				continue
@@ -597,7 +549,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 
 		var anyOK bool
 		for _, target := range orgTargets {
-			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt, destKeyOptionFromNoPrompt(noPrompt))
 			if resolveErr != nil {
 				if errors.Is(resolveErr, errAborted) {
 					return errAborted
@@ -609,6 +561,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 			fmt.Fprintf(cmd.OutOrStdout(), "Updating subaccount destinations in org %s (via instance: %s)...\n",
 				orgName, destClient.InstanceName)
 			items, putErr := destination.UpdateSubaccountDestinations(ctx, destClient.URI, destClient.Token, rawBody)
+			cleanupDestClients(destClient)
 			if putErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "    ERROR: [%s] updating subaccount destinations: %v\n", orgName, putErr)
 				continue
@@ -676,7 +629,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 
 		var anyOK bool
 		for _, target := range orgTargets {
-			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			_, orgName, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt, destKeyOptionFromNoPrompt(noPrompt))
 			if resolveErr != nil {
 				if errors.Is(resolveErr, errAborted) {
 					return errAborted
@@ -697,6 +650,7 @@ The access token is cached locally and reused until it expires or 'bo logoff' is
 					fmt.Fprintf(cmd.OutOrStdout(), "    not found: %s\n", name)
 				}
 			}
+			cleanupDestClients(destClient)
 			anyOK = true
 		}
 		if !anyOK {
@@ -716,7 +670,9 @@ func init() {
 	subaccountDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	subaccountDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	subaccountDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
-	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
+	subaccountDestinationsCmd.Flags().Bool("no-prompt", false, "Fail immediately (instead of prompting) when an org has no destination service instance at all")
+	subaccountDestinationsCmd.Flags().String("no-key-option", "", "What to do with a destination service instance found with no service key: s/skip (default), c/create (auto-create one, kept), t/transient (create, use, then delete it), or a/abort; omit to be asked interactively per instance (unless -y), s/skip if -y is given")
+	subaccountDestinationsCmd.Flags().BoolP("yes", "y", false, "Don't ask interactively about a missing destination service key — default to s/skip instead, unless --no-key-option is also given")
 	subaccountDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	subaccountDestinationsCmd.Flags().String("fields", "", "Comma-separated column names to limit output to, in the order given (org_id, org_name, or any destination property name exactly as the API casing has it); switches json/toon to a flat {rows:[...]} view too")
 	subaccountDestinationsCmd.Flags().String("sort-by", "", "Comma-separated column names to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to a flat {rows:[...]} view too")

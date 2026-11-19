@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	toonenc "github.com/toon-format/toon-go"
 
@@ -129,23 +128,30 @@ func sdMatchesAnyKeyword(pattern string, dest map[string]string) bool {
 // ── shared setup ──────────────────────────────────────────────────────────────
 
 // sdDestClient is a ready-to-use destination service client (token refreshed).
+// Cleanup is non-nil only when resolveDestInstanceClient created a temporary
+// service key for this client under destKeyOptionTransient — see
+// cleanupDestClients.
 type sdDestClient struct {
 	InstanceGUID string
 	InstanceName string
 	URI          string
 	Token        string
+	Cleanup      func()
 }
 
 // resolveSpaceDestClients finds the target space across regions, discovers all
-// destination service instances in it, loads/fetches their credentials (with
-// an interactive prompt when no service key exists), refreshes tokens and
-// persists the cache. It returns the space name and one client per instance.
+// destination service instances in it, loads/fetches their credentials (per
+// keyOption when a service key is missing — see resolveDestInstanceClient),
+// refreshes tokens and persists the cache. It returns the space name and one
+// client per instance. Callers must call cleanupDestClients(clients...) once
+// they're done using the returned clients.
 func resolveSpaceDestClients(
 	ctx context.Context,
 	cmd *cobra.Command,
 	spaceGUID string,
 	creds *store.Credentials,
 	apiURLs []string,
+	keyOption destKeyOption,
 ) (spaceName string, clients []sdDestClient, err error) {
 
 	// ── find the space and its CF client ─────────────────────────────────────
@@ -176,7 +182,7 @@ func resolveSpaceDestClients(
 	}
 	spaceName = spaceObj.Name
 
-	clients, err = resolveSpaceDestClientsFor(ctx, cmd, cfClient, spaceGUID, spaceName, creds)
+	clients, err = resolveSpaceDestClientsFor(ctx, cmd, cfClient, spaceGUID, spaceName, creds, keyOption)
 	saveDestCache(cmd, creds)
 	if err == nil && len(clients) == 0 {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: no destination service instances found in space %s (%s)\n", spaceName, spaceGUID)
@@ -193,7 +199,7 @@ func resolveSpaceDestClients(
 // NOT persist the token cache itself; callers that invoke it directly
 // (rather than through resolveSpaceDestClients) must call saveDestCache
 // once after they're done, rather than once per space.
-func resolveSpaceDestClientsFor(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID, spaceName string, creds *store.Credentials) ([]sdDestClient, error) {
+func resolveSpaceDestClientsFor(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID, spaceName string, creds *store.Credentials, keyOption destKeyOption) ([]sdDestClient, error) {
 	destPlan, planErr := cfClient.FindServicePlan(ctx, "destination", "lite")
 	if planErr != nil {
 		return nil, fmt.Errorf("looking up destination service plan: %w", planErr)
@@ -201,17 +207,17 @@ func resolveSpaceDestClientsFor(ctx context.Context, cmd *cobra.Command, cfClien
 	if destPlan == nil {
 		return nil, fmt.Errorf("destination service plan 'lite' not found in region %s", store.APIURLToRegion(cfClient.BaseURL()))
 	}
-	return resolveSpaceDestClientsForPlan(ctx, cmd, cfClient, spaceGUID, spaceName, destPlan.GUID, creds)
+	return resolveSpaceDestClientsForPlan(ctx, cmd, cfClient, spaceGUID, spaceName, destPlan.GUID, creds, keyOption)
 }
 
 // resolveSpaceDestClientsForPlan is resolveSpaceDestClientsFor's core, for a
 // caller that has also already resolved the destination/lite plan GUID once
 // (e.g. per region, rather than refetching it for every space scanned in
 // that region). Discovers destination service instances in the space and
-// resolves/caches an OAuth token for each, same prompt/skip/abort behavior
-// as resolveSpaceDestClients. Does not persist the cache — see
-// resolveSpaceDestClientsFor.
-func resolveSpaceDestClientsForPlan(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID, spaceName, destPlanGUID string, creds *store.Credentials) ([]sdDestClient, error) {
+// resolves/caches an OAuth token for each (per keyOption when a service key
+// is missing — see resolveDestInstanceClient). Does not persist the cache —
+// see resolveSpaceDestClientsFor.
+func resolveSpaceDestClientsForPlan(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID, spaceName, destPlanGUID string, creds *store.Credentials, keyOption destKeyOption) ([]sdDestClient, error) {
 	// ── find destination service instances in the space ───────────────────────
 	instances, instErr := cfClient.ListServiceInstancesInSpace(ctx, spaceGUID, destPlanGUID)
 	if instErr != nil {
@@ -236,85 +242,13 @@ func resolveSpaceDestClientsForPlan(ctx context.Context, cmd *cobra.Command, cfC
 	// They are fetched from CF on demand whenever a new token is needed and
 	// discarded immediately — only the token (+ tokenURL + URI) is persisted.
 	for _, inst := range instances {
-		cached := spaceCache[inst.GUID]
-		needToken := cached == nil || cached.AccessToken == "" ||
-			time.Now().Add(60*time.Second).After(cached.TokenExpiry)
-
-		if needToken {
-			// Always fetch the service key from CF to get credentials.
-			key, keyErr := cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-			if keyErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [space %s] finding service key for %q: %v\n", spaceName, inst.Name, keyErr)
-				continue
-			}
-			if key == nil {
-				// No key — warn and offer an interactive prompt to create one.
-				for key == nil {
-					fmt.Fprintf(cmd.ErrOrStderr(),
-						"\nWARNING: No service key found for destination service instance %q (%s, space %s)\n"+
-							"  Create one manually, e.g. via CF CLI:\n"+
-							"    cf create-service-key %s bo-dest-key\n"+
-							"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n",
-						inst.Name, inst.GUID, spaceName, inst.Name)
-					retry, skip := promptRetryOrSkip(ctx)
-					if !retry && !skip {
-						return nil, errAborted
-					}
-					if skip {
-						break
-					}
-					key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-					if keyErr != nil || key == nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
-						key = nil
-					}
-				}
-				if key == nil {
-					continue
-				}
-			}
-
-			details, detailErr := cfClient.GetServiceCredentialDetails(ctx, key.GUID)
-			if detailErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: fetching key details for %q: %v\n", inst.Name, detailErr)
-				continue
-			}
-			clientID, clientSecret, tokenURL, uri, missing := destCredentialsFromDetails(details)
-			if missing != "" {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: incomplete credentials in service key for %q (missing %q)\n", inst.Name, missing)
-				continue
-			}
-
-			// Get a new token — credentials are discarded after this call.
-			newToken, expiry, tokErr := destination.GetAccessToken(ctx, tokenURL, clientID, clientSecret)
-			if tokErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: token for destination instance %q: %v\n", inst.Name, tokErr)
-				continue
-			}
-
-			// Persist only: instanceName, tokenURL, URI, accessToken, tokenExpiry.
-			if cached == nil {
-				cached = &store.DestInstanceCache{}
-				spaceCache[inst.GUID] = cached
-			}
-			cached.InstanceName = inst.Name
-			cached.TokenURL = tokenURL
-			cached.URI = uri
-			cached.AccessToken = newToken
-			cached.TokenExpiry = expiry
-			// clientID and clientSecret intentionally NOT stored.
+		c, ok, resolveErr := resolveDestInstanceClient(ctx, cmd, cfClient, spaceName, inst, spaceCache, keyOption)
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
-
-		if cached == nil || cached.URI == "" {
-			continue // token fetch must have failed above
+		if ok {
+			clients = append(clients, c)
 		}
-
-		clients = append(clients, sdDestClient{
-			InstanceGUID: inst.GUID,
-			InstanceName: cached.InstanceName,
-			URI:          cached.URI,
-			Token:        cached.AccessToken,
-		})
 	}
 
 	creds.SpaceDestServices[spaceGUID] = spaceCache
@@ -503,7 +437,7 @@ func resolveAllOrgsSpacesForDest(ctx context.Context, creds *store.Credentials, 
 // Orgs/spaces with no matching destinations are omitted from the result
 // entirely, unlike the single --space path which always returns its one
 // target space even when empty.
-func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, includePattern, excludePattern string) ([]sdOrgDoc, error) {
+func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, includePattern, excludePattern string, keyOption destKeyOption) ([]sdOrgDoc, error) {
 	regionResults := resolveAllOrgsSpacesForDest(ctx, creds, apiURLs)
 
 	var docs []sdOrgDoc
@@ -525,7 +459,7 @@ func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 		for _, org := range rr.Orgs {
 			var spaceDocs []sdSpaceDoc
 			for _, sp := range spacesByOrg[org.GUID] {
-				clients, resolveErr := resolveSpaceDestClientsForPlan(ctx, cmd, rr.Client, sp.GUID, sp.Name, rr.PlanGUID, creds)
+				clients, resolveErr := resolveSpaceDestClientsForPlan(ctx, cmd, rr.Client, sp.GUID, sp.Name, rr.PlanGUID, creds, keyOption)
 				if resolveErr != nil {
 					if resolveErr == errAborted {
 						saveDestCache(cmd, creds)
@@ -553,6 +487,7 @@ func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 						dests = append(dests, sdTagDestInstance(raw, c.InstanceGUID, c.InstanceName))
 					}
 				}
+				cleanupDestClients(clients...)
 				if len(dests) == 0 {
 					continue
 				}
@@ -690,6 +625,16 @@ suffixed with ":desc" for descending (":asc" is the default) — also
 switches json/toon to the flat view. Omit it to keep the default order:
 sorted by Name within each space.
 
+--no-key-option <s/skip|c/create|t/transient|a/abort> governs what happens
+when a destination service instance is found with no service key: skip
+warns and moves on; create automatically creates a 'bo-dest-key' service key
+on the instance and keeps it; transient does the same but deletes that key
+again once it's no longer needed for this run; abort stops the whole
+command the first time it happens. Omit this flag to be asked
+s/skip/c/create/t/transient/a/abort interactively each time such an
+instance is found instead, defaulting to skip on a blank answer — unless -y
+is also given, in which case skip is used directly with no prompt.
+
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
 .json selects json, .csv selects csv, .toon selects toon — otherwise the
@@ -700,6 +645,15 @@ default toon applies. Pass --format explicitly to override the extension.`,
 		format, _ := cmd.Flags().GetString("format")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
+		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		keyOptionFlag, _ := cmd.Flags().GetString("no-key-option")
+		keyOption, err := normalizeDestKeyOption(keyOptionFlag)
+		if err != nil {
+			return err
+		}
+		if !cmd.Flags().Changed("no-key-option") && !skipConfirm {
+			keyOption = destKeyOptionPrompt
+		}
 		outputFile, _ := cmd.Flags().GetString("output")
 		if !cmd.Flags().Changed("format") {
 			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
@@ -732,7 +686,7 @@ default toon applies. Pass --format explicitly to override the extension.`,
 			if orgErr != nil {
 				return orgErr
 			}
-			spaceName, clients, resolveErr := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs)
+			spaceName, clients, resolveErr := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs, keyOption)
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -754,6 +708,7 @@ default toon applies. Pass --format explicitly to override the extension.`,
 					dests = append(dests, sdTagDestInstance(raw, c.InstanceGUID, c.InstanceName))
 				}
 			}
+			cleanupDestClients(clients...)
 			sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
 
 			docs = []sdOrgDoc{{
@@ -766,7 +721,7 @@ default toon applies. Pass --format explicitly to override the extension.`,
 				}},
 			}}
 		} else {
-			docs, err = fetchAllSpaceDestinations(ctx, cmd, creds, apiURLs, includePattern, excludePattern)
+			docs, err = fetchAllSpaceDestinations(ctx, cmd, creds, apiURLs, includePattern, excludePattern, keyOption)
 			if err != nil {
 				return err
 			}
@@ -800,8 +755,9 @@ destination service instance found in the given CF space (--space GUID).
 The JSON file must be an array of destination objects, e.g.:
   [{"Name":"my-dest","Type":"HTTP","URL":"https://...","Authentication":"NoAuthentication"}]
 
-A warning and interactive prompt are shown when a destination service instance
-has no service key; the user can create one and press Enter to retry.`,
+A destination service instance found with no service key prompts
+interactively (s/skip, c/create, t/transient, or a/abort — see
+'bo space-destinations --help').`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		spaceGUID, _ := cmd.Flags().GetString("space")
 		destFile, _ := cmd.Flags().GetString("destinations")
@@ -824,7 +780,7 @@ has no service key; the user can create one and press Enter to retry.`,
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs)
+		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs, destKeyOptionPrompt)
 		if err != nil {
 			return err
 		}
@@ -839,6 +795,7 @@ has no service key; the user can create one and press Enter to retry.`,
 			}
 			printActionResults(cmd, "created", names, items)
 		}
+		cleanupDestClients(clients...)
 		return nil
 	},
 }
@@ -854,8 +811,9 @@ destination service instance found in the given CF space (--space GUID).
 The JSON file must be an array of destination objects. Existing destinations with
 the same Name are overwritten; others are left unchanged.
 
-A warning and interactive prompt are shown when a destination service instance
-has no service key; the user can create one and press Enter to retry.`,
+A destination service instance found with no service key prompts
+interactively (s/skip, c/create, t/transient, or a/abort — see
+'bo space-destinations --help').`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		spaceGUID, _ := cmd.Flags().GetString("space")
 		destFile, _ := cmd.Flags().GetString("destinations")
@@ -878,7 +836,7 @@ has no service key; the user can create one and press Enter to retry.`,
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs)
+		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs, destKeyOptionPrompt)
 		if err != nil {
 			return err
 		}
@@ -893,6 +851,7 @@ has no service key; the user can create one and press Enter to retry.`,
 			}
 			printActionResults(cmd, "updated", names, items)
 		}
+		cleanupDestClients(clients...)
 		return nil
 	},
 }
@@ -933,7 +892,7 @@ used. Non-existent destinations are silently ignored (idempotent).`,
 		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt)
 		defer cancel()
 
-		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs)
+		spaceName, clients, err := resolveSpaceDestClients(ctx, cmd, spaceGUID, creds, apiURLs, destKeyOptionPrompt)
 		if err != nil {
 			return err
 		}
@@ -953,6 +912,7 @@ used. Non-existent destinations are silently ignored (idempotent).`,
 				}
 			}
 		}
+		cleanupDestClients(clients...)
 		return nil
 	},
 }
@@ -981,6 +941,8 @@ func init() {
 	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	spaceDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	spaceDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
+	spaceDestinationsCmd.Flags().String("no-key-option", "", "What to do with a destination service instance found with no service key: s/skip (default), c/create (auto-create one, kept), t/transient (create, use, then delete it), or a/abort; omit to be asked interactively per instance (unless -y), s/skip if -y is given")
+	spaceDestinationsCmd.Flags().BoolP("yes", "y", false, "Don't ask interactively about a missing destination service key — default to s/skip instead, unless --no-key-option is also given")
 	spaceDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	spaceDestinationsCmd.Flags().String("fields", "", "Comma-separated column names to limit output to, in the order given (org_id, org_name, space_id, space_name, or any destination property name exactly as the API casing has it); switches json/toon to a flat {rows:[...]} view too")
 	spaceDestinationsCmd.Flags().String("sort-by", "", "Comma-separated column names to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to a flat {rows:[...]} view too")

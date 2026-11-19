@@ -71,6 +71,19 @@ space names or GUIDs (comma-separated, case-insensitive) within each
 target org; omit it to scan every accessible space. --spaces has no effect
 on subaccount-level destinations, which aren't tied to any one space.
 
+--no-key-option <s/skip|c/create|t/transient|a/abort> governs what happens
+when a destination service instance is found with no service key: skip
+warns and moves on; create automatically creates a 'bo-dest-key' service key
+on the instance and keeps it; transient does the same but deletes that key
+again once it's no longer needed for this run; abort stops the whole
+command the first time it happens. Omit this flag to be asked
+s/skip/c/create/t/transient/a/abort interactively each time such an
+instance is found instead, defaulting to skip on a blank answer — unless -y
+is also given, in which case skip is used directly with no prompt.
+--no-prompt is the separate, unrelated case of an org having no destination
+service instance at all: with it, that fails immediately instead of
+prompting to create one.
+
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
 .json selects json, .csv selects csv, .toon selects toon — otherwise the
@@ -86,6 +99,15 @@ If --regions is omitted the regions from the last login are used.`,
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
+		skipConfirm, _ := cmd.Flags().GetBool("yes")
+		keyOptionFlag, _ := cmd.Flags().GetString("no-key-option")
+		keyOption, err := normalizeDestKeyOption(keyOptionFlag)
+		if err != nil {
+			return err
+		}
+		if !cmd.Flags().Changed("no-key-option") && !skipConfirm {
+			keyOption = destKeyOptionPrompt
+		}
 		outputFile, _ := cmd.Flags().GetString("output")
 		if !cmd.Flags().Changed("format") {
 			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
@@ -134,7 +156,7 @@ If --regions is omitted the regions from the last login are used.`,
 			}
 
 			// Subaccount-level destinations.
-			_, _, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			_, _, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt, keyOption)
 			if resolveErr != nil {
 				if errors.Is(resolveErr, errAborted) {
 					return errAborted
@@ -142,6 +164,7 @@ If --regions is omitted the regions from the last login are used.`,
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 			} else {
 				rawDests, fetchErr := destination.ListSubaccountDestinationsFull(ctx, destClient.URI, destClient.Token)
+				cleanupDestClients(destClient)
 				if fetchErr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
 				} else {
@@ -162,7 +185,7 @@ If --regions is omitted the regions from the last login are used.`,
 				if !matchesSpaceFilter(spacesFilter, sp) {
 					continue
 				}
-				_, clients, spErr := resolveSpaceDestClients(ctx, cmd, sp.GUID, creds, apiURLs)
+				_, clients, spErr := resolveSpaceDestClients(ctx, cmd, sp.GUID, creds, apiURLs, keyOption)
 				if spErr != nil {
 					if errors.Is(spErr, errAborted) {
 						return errAborted
@@ -190,6 +213,7 @@ If --regions is omitted the regions from the last login are used.`,
 						})
 					}
 				}
+				cleanupDestClients(clients...)
 			}
 		}
 
@@ -246,7 +270,9 @@ func init() {
 	destinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	destinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	destinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
-	destinationsCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — skip instances with no service key")
+	destinationsCmd.Flags().Bool("no-prompt", false, "Fail immediately (instead of prompting) when an org has no destination service instance at all")
+	destinationsCmd.Flags().String("no-key-option", "", "What to do with a destination service instance found with no service key: s/skip (default), c/create (auto-create one, kept), t/transient (create, use, then delete it), or a/abort; omit to be asked interactively per instance (unless -y), s/skip if -y is given")
+	destinationsCmd.Flags().BoolP("yes", "y", false, "Don't ask interactively about a missing destination service key — default to s/skip instead, unless --no-key-option is also given")
 	destinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	destinationsCmd.Flags().String("fields", "", "Comma-separated column names to limit output to, in the order given (org_id, org_name, space_id, space_name, instance_id, instance_name, or any destination property name exactly as the API casing has it)")
 	destinationsCmd.Flags().String("sort-by", "", "Comma-separated column names to sort by, each optionally suffixed with \":desc\" (default \":asc\")")

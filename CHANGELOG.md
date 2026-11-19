@@ -26,6 +26,10 @@
 
   Omitting `--space` scans every accessible space across every org in scope instead of requiring exactly one; output is grouped `org -> spaces -> destinations`. `--output`/`-o` was added, with `--format` auto-detected from its extension.
 
+- **`destinations`/`subaccount-destinations`/`space-destinations` — `--no-key-option` for a destination service instance with no service key**
+
+  Same `s/skip`, `c/create`, `t/transient`, `a/abort` shape as `html5-apps`' own `--no-key-option` (above), for a destination service instance found with no service key: `create`/`transient` auto-create a `bo-dest-key` service key via the CF API instead of only ever offering manual `cf create-service-key` instructions. Omitting the flag asks interactively each time instead of defaulting to a fixed choice, unless `-y` is given, which defaults straight to `skip`.
+
 - **`--format` auto-detected from `--output`'s extension, on every command that has both**
 
   Previously only `apps`/`html5-apps` inferred `.json`/`.csv`/`.toon` from the `--output` filename when `--format` wasn't explicitly given — now every command with both flags does.

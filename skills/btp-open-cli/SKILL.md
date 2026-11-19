@@ -154,7 +154,18 @@ they're logged in.
   including live secrets such as Password/ClientSecret — unredacted by
   default, with no `--full` flag to opt out of it; see "Handling commands
   that output secrets" below, and narrow with `--fields` to just the
-  columns you need, e.g. `Name,URL`, when you don't need the credentials).
+  columns you need, e.g. `Name,URL`, when you don't need the credentials.
+  All three are also read-only as long as you don't choose `create`/
+  `transient`: a destination service instance found with no service key
+  prompts interactively (`s`/skip, `c`/create, `t`/transient, or `a`/abort,
+  defaulting to skip on a blank line) unless `--no-key-option` was
+  explicitly given, or `-y` is passed to default straight to skip without
+  prompting — in an agent shell, always pass `-y` (or an explicit
+  `--no-key-option=s`) to avoid hanging on that prompt, same as any other
+  `[y/N]`-style prompt (see "Running non-interactively" above); `c`/create
+  and `t`/transient are write actions — they create a service key,
+  `t`/transient deleting it again afterward — so treat passing either like
+  the guardrails below).
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,

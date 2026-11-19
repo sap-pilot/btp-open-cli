@@ -841,7 +841,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 				return sdDestClient{}, false, nil
 			}
 
-			_, _, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			_, _, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt, destKeyOptionFromNoPrompt(noPrompt))
 			if resolveErr != nil {
 				if errors.Is(resolveErr, errAborted) {
 					saveHTML5Cache(cmd, creds)
@@ -850,6 +850,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 			} else {
 				rawDests, fetchErr := destination.ListSubaccountDestinationsFull(ctx, destClient.URI, destClient.Token)
+				cleanupDestClients(destClient)
 				if fetchErr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
 				} else {
@@ -881,7 +882,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 			if !matchesSpaceFilter(spacesFilter, sp) {
 				continue
 			}
-			_, clients, spErr := resolveSpaceDestClients(ctx, cmd, sp.GUID, creds, apiURLs)
+			_, clients, spErr := resolveSpaceDestClients(ctx, cmd, sp.GUID, creds, apiURLs, destKeyOptionFromNoPrompt(noPrompt))
 			if spErr != nil {
 				if errors.Is(spErr, errAborted) {
 					saveHTML5Cache(cmd, creds)
@@ -923,6 +924,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 					rows = append(rows, html5RowsFromDestAppHost(cmd, ctx, spRTClient, appHostID, name, region, c.InstanceName, c.InstanceGUID)...)
 				}
 			}
+			cleanupDestClients(clients...)
 			if spRTCleanup != nil {
 				spRTCleanup()
 			}

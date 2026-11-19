@@ -1235,7 +1235,7 @@ rolecollections:
 
 List all instance-level destinations across every destination service instance found in a given CF space — or, with `--space` omitted, across **every accessible space**.
 
-The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry, type 's' to skip that instance, or Ctrl-C to abort.
+The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). A destination service instance found with no service key is governed by `--no-key-option` (see below).
 
 ```bash
 # List destinations for one space — default output: every property (TOON)
@@ -1273,6 +1273,17 @@ bo space-destinations --fields space_name,Name,URL
 
 # Sort by one or more columns, in priority order (":desc" for descending)
 bo space-destinations --sort-by space_name,Name
+
+# Apply one choice to every destination service instance found with no
+# service key, instead of being asked interactively each time (default)
+bo space-destinations --no-key-option skip       # warn and move on
+bo space-destinations --no-key-option create     # auto-create 'bo-dest-key', keep it
+bo space-destinations --no-key-option transient  # auto-create 'bo-dest-key', use it, delete it
+bo space-destinations --no-key-option abort      # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option —
+# defaults straight to skip instead
+bo space-destinations -y
 ```
 
 Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
@@ -1302,7 +1313,9 @@ Use `--fields <column,...>` (comma-separated, in the order given — `org_id`, `
 
 Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `Name` within each space.
 
-⚠️ **Omitting `--space` scans every accessible space across every org** — on a large foundation this can be slow and will interactively prompt (once per instance, see above) for every destination service instance with no service key, unless you narrow scope with `--regions` or target a specific space with `--space`.
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to a destination service instance found with no service key: `skip` warns and moves on; `create` automatically creates a `bo-dest-key` service key on the instance and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens. **Omitting this flag asks interactively instead of defaulting to a fixed choice:** each time such an instance is found, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` instead — `-y` has no effect when `--no-key-option` is explicitly given.
+
+⚠️ **Omitting `--space` scans every accessible space across every org** — on a large foundation this can be slow, and will interactively prompt (once per instance, see above, unless `--no-key-option`/`-y` is given) for every destination service instance with no service key, unless you narrow scope with `--regions` or target a specific space with `--space`.
 
 ### `create-space-destinations`
 
@@ -1395,6 +1408,17 @@ bo destinations --org <org-guid-or-name> --sort-by space_name,Name
 # Write output to a file instead of stdout; --format is auto-detected from
 # -o's extension (.json, .csv, .toon) when not explicitly given
 bo destinations --org <org-guid-or-name> --output dests.csv
+
+# Apply one choice to every destination service instance found with no
+# service key, instead of being asked interactively each time (default)
+bo destinations --org <org-guid-or-name> --no-key-option skip       # warn and move on
+bo destinations --org <org-guid-or-name> --no-key-option create     # auto-create 'bo-dest-key', keep it
+bo destinations --org <org-guid-or-name> --no-key-option transient  # auto-create 'bo-dest-key', use it, delete it
+bo destinations --org <org-guid-or-name> --no-key-option abort      # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option —
+# defaults straight to skip instead
+bo destinations --org <org-guid-or-name> -y
 ```
 
 The result is a flat list, one row per destination: `org_id`, `org_name`, `space_id`, `space_name`, `instance_id`, and `instance_name` lead (`space_id`/`space_name`/`instance_id`/`instance_name` are empty for a subaccount-level destination, since it isn't tied to any one space or instance), followed — for `--format csv` — by every property key that appears anywhere in the result set, sorted alphabetically. `json`/`toon` output the same flat `{"rows": [...]}` list, each row an object carrying only its own properties plus the leading columns.
@@ -1410,13 +1434,15 @@ Use `--fields <column,...>` (comma-separated, in the order given — any of the 
 
 Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `org_name`, then `space_name` (subaccount-level rows sort first, having an empty `space_name`), then `Name`.
 
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to a destination service instance found with no service key: `skip` warns and moves on; `create` automatically creates a `bo-dest-key` service key on the instance and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens. **Omitting this flag asks interactively instead of defaulting to a fixed choice:** each time such an instance is found, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` instead — `-y` has no effect when `--no-key-option` is explicitly given. `--no-prompt` is the separate, unrelated case of an org having no destination service instance at all: with it, that fails immediately instead of prompting to create one.
+
 ### `subaccount-destinations`
 
 List all subaccount-level destinations using any destination service instance found in the target org.
 
 Unlike `space-destinations` (which queries instance-level destinations scoped to one CF space), `subaccount-destinations` calls `GET /destination-configuration/v1/subaccountDestinations` — destinations that are defined at the BTP subaccount/org level and available to all spaces within it. Any destination service instance found in any space of the target org is used to connect; only one instance is needed.
 
-Service key credentials (clientId, clientSecret) are fetched from CF on demand and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused until it expires or `bo logoff` is run. If no destination service instance or service key is found, a prompt prints CF CLI instructions to create them; use `--no-prompt` to skip.
+Service key credentials (clientId, clientSecret) are fetched from CF on demand and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused until it expires or `bo logoff` is run. If no destination service instance at all is found in the org, a prompt offers to create one and retry; use `--no-prompt` to fail immediately instead. A found instance with no service key is instead governed by `--no-key-option` (see below) — an independent setting from `--no-prompt`.
 
 If neither `--org` nor `--orgs` is given, the default org scope selected via
 [`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
@@ -1464,6 +1490,17 @@ bo subaccount-destinations --org <org-guid-or-name> --fields Name,URL
 
 # Sort by one or more columns, in priority order (":desc" for descending)
 bo subaccount-destinations --org <org-guid-or-name> --sort-by Name:desc
+
+# Apply one choice to every destination service instance found with no
+# service key, instead of being asked interactively each time (default)
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option skip       # warn and move on
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option create     # auto-create 'bo-dest-key', keep it
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option transient  # auto-create 'bo-dest-key', use it, delete it
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option abort      # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option —
+# defaults straight to skip instead
+bo subaccount-destinations --org <org-guid-or-name> -y
 ```
 
 Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
@@ -1485,6 +1522,8 @@ destinations:
 Use `--fields <column,...>` (comma-separated, in the order given — `org_id`, `org_name`, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns instead — switches `json`/`toon` to that same flat `{"rows": [...]}` view too (map keys in that JSON/TOON view marshal in their own alphabetical order regardless of `--fields`' order; only CSV's column order follows it exactly).
 
 Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `Name` within each org.
+
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to a destination service instance found with no service key: `skip` warns and moves on; `create` automatically creates a `bo-dest-key` service key on the instance and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens. **Omitting this flag asks interactively instead of defaulting to a fixed choice:** each time such an instance is found, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` instead — `-y` has no effect when `--no-key-option` is explicitly given, and has no effect on `--no-prompt` either (a separate setting for the unrelated "no destination service instance at all in the org" case).
 
 ### `create-subaccount-destinations`
 
