@@ -39,11 +39,10 @@ type appsOutApp struct {
 	// only when --include-env is given, and otherwise omitted entirely.
 	Env map[string]string `json:"app_env,omitempty" toon:"app_env,omitempty"`
 
-	// Labels holds the app's CF metadata.labels (cf.App.Metadata.Labels) —
-	// already returned by the same apps listing call that fetches
-	// everything else, so unlike Env this needs no extra API call —
-	// populated only when --include-labels is given, and otherwise omitted
-	// entirely.
+	// Labels holds the app's current CF metadata.labels, fetched via a
+	// dedicated per-app call (see enrichAppsDocWithLabels) rather than
+	// reused from the bulk apps listing — populated only when
+	// --include-labels is given, and otherwise omitted entirely.
 	Labels map[string]string `json:"app_labels,omitempty" toon:"app_labels,omitempty"`
 }
 
@@ -146,11 +145,12 @@ type appsRegionResult struct {
 	Err    error
 }
 
-// appsEnvConcurrency bounds how many /v3/apps/:guid/environment_variables
-// calls run at once across the whole matched app set when --include-env is
-// given, so a large result set doesn't open hundreds of simultaneous
-// requests against the CF API.
-const appsEnvConcurrency = 8
+// appsPerAppFetchConcurrency bounds how many per-app follow-up calls
+// (GET /v3/apps/:guid/environment_variables for --include-env, or
+// GET /v3/apps/:guid for --include-labels) run at once across the whole
+// matched app set, so a large result set doesn't open hundreds of
+// simultaneous requests against the CF API.
+const appsPerAppFetchConcurrency = 8
 
 // appsSkippedEnvKeys holds env var names (matched case-insensitively)
 // excluded from --include-env output. DEPLOY_ATTRIBUTES is injected by
@@ -224,12 +224,16 @@ another org/space. The written file (JSON or TOON) can be fed straight into
 org/space. This is sensitive output — treat it the same as
 'bo service-credentials'.
 
-Use --include-labels to also include each app's CF metadata labels (as
-"app_labels" — object in JSON/TOON, a JSON-encoded string in the app_labels
-CSV column, same representation as app_env). Unlike --include-env, this
-needs no extra API call — labels are already part of the same apps listing
-this command always fetches, so --include-labels is free and not sensitive
-the way --include-env is.
+Use --include-labels to also fetch and include each app's current CF
+metadata labels (as "app_labels" — object in JSON/TOON, a JSON-encoded
+string in the app_labels CSV column, same representation as app_env) via
+one extra API call per app, fetched directly rather than reused from the
+apps listing itself — a label set moments earlier (e.g. via
+'cf set-label') isn't always reflected yet in that listing on every CF
+platform, even though a direct per-app read already sees it. A per-app
+fetch failure is reported as a warning on stderr rather than aborting the
+whole command, and that app is simply left without app_labels. This is
+not sensitive output, unlike --include-env.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -412,14 +416,16 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		wg.Wait()
 
-		includeLabels, _ := cmd.Flags().GetBool("include-labels")
-		doc, errs := buildAppsDoc(results, includePattern, excludePattern, includeLabels)
+		doc, errs := buildAppsDoc(results, includePattern, excludePattern)
 		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 		}
 
 		if includeEnv, _ := cmd.Flags().GetBool("include-env"); includeEnv {
 			enrichAppsDocWithEnv(ctx, &doc, results)
+		}
+		if includeLabels, _ := cmd.Flags().GetBool("include-labels"); includeLabels {
+			enrichAppsDocWithLabels(ctx, &doc, results)
 		}
 
 		out, closeOut, err := resolveOutputWriter(outputFile)
@@ -474,7 +480,7 @@ func enrichAppsDocWithEnv(ctx context.Context, doc *appsOutDoc, results []appsRe
 	}
 
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, appsEnvConcurrency)
+	sem := make(chan struct{}, appsPerAppFetchConcurrency)
 	for ri := range doc.Regions {
 		client := clientByRegion[doc.Regions[ri].ID]
 		if client == nil {
@@ -508,9 +514,57 @@ func enrichAppsDocWithEnv(ctx context.Context, doc *appsOutDoc, results []appsRe
 	wg.Wait()
 }
 
+// enrichAppsDocWithLabels fetches each app's current CF metadata labels
+// directly (GET /v3/apps/:guid via cf.Client.GetApp), bounded concurrency
+// across the whole doc, and populates its Labels field in place. This
+// deliberately does not reuse the Metadata.Labels already embedded in the
+// bulk apps listing buildAppsDoc worked from — a label set moments earlier
+// (e.g. via 'cf set-label') isn't always reflected yet in that filtered
+// list response on every CF platform, even though a direct per-app read
+// already sees it; see cf.Client.GetApp. A per-app fetch failure is
+// reported as a warning on stderr and that app is simply left without
+// Labels, rather than aborting the whole command.
+func enrichAppsDocWithLabels(ctx context.Context, doc *appsOutDoc, results []appsRegionResult) {
+	clientByRegion := make(map[string]*cf.Client, len(results))
+	for _, r := range results {
+		if r.Client != nil {
+			clientByRegion[r.Region] = r.Client
+		}
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, appsPerAppFetchConcurrency)
+	for ri := range doc.Regions {
+		client := clientByRegion[doc.Regions[ri].ID]
+		if client == nil {
+			continue
+		}
+		for oi := range doc.Regions[ri].Orgs {
+			for si := range doc.Regions[ri].Orgs[oi].Spaces {
+				for ai := range doc.Regions[ri].Orgs[oi].Spaces[si].Apps {
+					app := &doc.Regions[ri].Orgs[oi].Spaces[si].Apps[ai]
+					wg.Add(1)
+					sem <- struct{}{}
+					go func(app *appsOutApp) {
+						defer wg.Done()
+						defer func() { <-sem }()
+						fresh, err := client.GetApp(ctx, app.ID)
+						if err != nil {
+							fmt.Fprintf(os.Stderr, "warning: app %q: fetching metadata labels: %v\n", app.Name, err)
+							return
+						}
+						app.Labels = fresh.Metadata.Labels
+					}(app)
+				}
+			}
+		}
+	}
+	wg.Wait()
+}
+
 // ── output builders ───────────────────────────────────────────────────────────
 
-func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern string, includeLabels bool) (appsOutDoc, []error) {
+func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern string) (appsOutDoc, []error) {
 	var doc appsOutDoc
 	var errs []error
 
@@ -550,9 +604,6 @@ func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern str
 						MemoryInMB:    proc.MemoryInMB,
 						DiskInMB:      proc.DiskInMB,
 						TotalMemoryMB: proc.Instances * proc.MemoryInMB,
-					}
-					if includeLabels {
-						a.Labels = app.Metadata.Labels
 					}
 					if appsMatchesIncludeExclude(a, includePattern, excludePattern) {
 						os_.Apps = append(os_.Apps, a)
@@ -634,7 +685,7 @@ func init() {
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().Bool("include-env", false, "Also fetch and include each app's own user-provided environment variables (app_env) — requires Space Developer access per app; this is sensitive output, see README")
-	appsCmd.Flags().Bool("include-labels", false, "Also include each app's CF metadata labels (app_labels) — already part of the apps listing this command fetches, so no extra API call")
+	appsCmd.Flags().Bool("include-labels", false, "Also fetch and include each app's current CF metadata labels (app_labels) via one extra API call per app, direct from the app itself rather than reused from the apps listing")
 	appsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as CSV; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
 	appsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
 }

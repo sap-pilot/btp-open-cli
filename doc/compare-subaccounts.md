@@ -45,7 +45,7 @@ A common audit question is "what's different between these two subaccounts?" —
 5. **Narrow each down to just the comparable columns:**
 
    ```bash
-   bo sort --fields=space_name,app_mta_id,app_name,app_labels us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
+   bo sort --fields=space_name,app_mta_id,app_name us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
    bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us10-pre-dest-full.csv --output=us10-pre-dest-sorted.csv
    bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us10-pre-html5-full.csv --output=us10-pre-html5-sorted.csv
    ```
@@ -64,7 +64,7 @@ A common audit question is "what's different between these two subaccounts?" —
    bo destinations --no-key-option=create --output=us20-pre-dest-full.csv
    bo html5-apps --no-runtime-option=create --no-key-option=create --output=us20-pre-html5-full.csv
    # (optional edits, same as step 4)
-   bo sort --fields=space_name,app_mta_id,app_name,app_labels us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
+   bo sort --fields=space_name,app_mta_id,app_name us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
    bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us20-pre-dest-full.csv --output=us20-pre-dest-sorted.csv
    bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us20-pre-html5-full.csv --output=us20-pre-html5-sorted.csv
    ```
@@ -73,7 +73,7 @@ A common audit question is "what's different between these two subaccounts?" —
 
 ## Apps
 
-`--include-env` adds the `app_env` column (each app's own user-provided environment variables, JSON-encoded) and requires at least Space Developer access to each app's space — this is sensitive output, see the README's note on `--include-env` before sharing this file. `--include-labels` adds the `app_labels` column (each app's CF metadata labels, JSON-encoded) — unlike `--include-env`, this needs no extra API call and isn't sensitive output. The `--fields` list in step 5 above keeps `app_labels` but drops `app_env` from the final sorted/compared file — add `app_env` back to that list too if you also want environment variables in the comparison.
+`--include-env` adds the `app_env` column (each app's own user-provided environment variables, JSON-encoded) and requires at least Space Developer access to each app's space — this is sensitive output, see the README's note on `--include-env` before sharing this file. `--include-labels` adds the `app_labels` column (each app's current CF metadata labels, JSON-encoded, fetched via one extra API call per app) — not sensitive output, unlike `--include-env`. The `--fields` list in step 5 above keeps `app_labels` but drops `app_env` from the final sorted/compared file — add `app_env` back to that list too if you also want environment variables in the comparison.
 
 Sample `...-apps-sorted.csv`:
 

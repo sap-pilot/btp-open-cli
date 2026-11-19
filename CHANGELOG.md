@@ -16,7 +16,7 @@
 
 - **`apps --include-labels` — include each app's CF metadata labels**
 
-  Adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's CF metadata labels — same representation as `--include-env`'s `app_env`, but unlike it, needs no extra API call, since labels are already part of the same `/v3/apps` listing this command always fetches. Not sensitive output.
+  Adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's current CF metadata labels — same representation as `--include-env`'s `app_env`. Fetched via one extra API call per app (`GET /v3/apps/:guid`) rather than reused from the apps listing itself, since a label set moments earlier (e.g. via `cf set-label`) isn't always reflected yet in that listing on every CF platform. Not sensitive output, unlike `app_env`.
 
 - **New `html5-apps` command — list HTML5 Application Repository app metadata**
 
