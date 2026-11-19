@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -90,9 +89,10 @@ func (c *Client) FindServiceInstance(ctx context.Context, name, spaceGUID string
 	return &page.Resources[0], nil
 }
 
-// CreateServiceInstance creates a managed service instance asynchronously.
-// CF returns 202 Accepted for async creation; this is treated as success.
-func (c *Client) CreateServiceInstance(ctx context.Context, name, spaceGUID, planGUID string) error {
+// CreateServiceInstance creates a managed service instance, waiting for CF's
+// job to finish if creation is asynchronous (same pattern as
+// CreateServiceCredentialBinding), and returns the created instance's GUID.
+func (c *Client) CreateServiceInstance(ctx context.Context, name, spaceGUID, planGUID string) (string, error) {
 	body := map[string]interface{}{
 		"type": "managed",
 		"name": name,
@@ -101,15 +101,54 @@ func (c *Client) CreateServiceInstance(ctx context.Context, name, spaceGUID, pla
 			"service_plan": map[string]interface{}{"data": map[string]string{"guid": planGUID}},
 		},
 	}
-	err := c.post(ctx, c.BaseURL()+"/v3/service_instances", body, nil)
+	data, err := json.Marshal(body)
 	if err != nil {
-		var apiErr *APIError
-		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusAccepted {
-			return nil
-		}
-		return err
+		return "", err
 	}
-	return nil
+
+	makeReq := func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL()+"/v3/service_instances", bytes.NewReader(data))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+c.accessToken)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json")
+		return req, nil
+	}
+
+	resp, respBody, err := c.doWithRetry(ctx, makeReq)
+	if err != nil {
+		return "", fmt.Errorf("POST /v3/service_instances: %w", err)
+	}
+	switch resp.StatusCode {
+	case http.StatusCreated:
+		var created struct {
+			GUID string `json:"guid"`
+		}
+		if err := json.Unmarshal(respBody, &created); err != nil {
+			return "", err
+		}
+		return created.GUID, nil
+	case http.StatusAccepted:
+		jobURL := resp.Header.Get("Location")
+		if jobURL == "" {
+			return "", fmt.Errorf("async service instance creation returned no job Location header")
+		}
+		if err := c.pollJob(ctx, jobURL); err != nil {
+			return "", err
+		}
+		inst, err := c.FindServiceInstance(ctx, name, spaceGUID)
+		if err != nil {
+			return "", err
+		}
+		if inst == nil {
+			return "", fmt.Errorf("service instance %q not found after its creation job completed", name)
+		}
+		return inst.GUID, nil
+	default:
+		return "", &APIError{StatusCode: resp.StatusCode, Body: respBody}
+	}
 }
 
 // ── service credential bindings (keys) ───────────────────────────────────────

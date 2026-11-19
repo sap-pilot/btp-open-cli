@@ -202,37 +202,73 @@ func resolveHTML5OrgsSpaces(ctx context.Context, creds *store.Credentials, apiUR
 	return results
 }
 
-// html5AutoKeyName is the service key name used both in the manual "cf
-// create-service-key" instructions shown interactively and by
-// --no-key-option=create's automatic creation, so the two stay in sync.
+// html5AutoKeyName is the service key name used by --no-key-option/
+// --no-runtime-option's automatic creation of a service key.
 const html5AutoKeyName = "bo-html5-key"
+
+// html5AutoRuntimeName is the service instance name used by
+// --no-runtime-option=c/cd's automatic creation of an html5-apps-repo/
+// app-runtime service instance.
+const html5AutoRuntimeName = "bo-html5-app-runtime"
 
 // html5KeyOption is the normalized value of --no-key-option, governing what
 // happens for every html5-apps-repo/app-runtime instance found with no
-// service key during one run (see normalizeHTML5KeyOption).
+// service key during one run (see normalizeHTML5KeyOption). The default
+// (skip) applies whenever --no-key-option is omitted.
 type html5KeyOption string
 
 const (
-	html5KeyOptionPrompt html5KeyOption = ""       // interactive retry/skip/abort prompt (default)
-	html5KeyOptionSkip   html5KeyOption = "skip"   // warn and skip, no prompt
-	html5KeyOptionCreate html5KeyOption = "create" // create a service key automatically
-	html5KeyOptionAbort  html5KeyOption = "abort"  // stop the whole command immediately
+	html5KeyOptionSkip         html5KeyOption = "skip"          // warn and skip (default)
+	html5KeyOptionCreate       html5KeyOption = "create"        // create a service key automatically, and keep it
+	html5KeyOptionCreateDelete html5KeyOption = "create-delete" // create a service key, use it, then delete it
+	html5KeyOptionAbort        html5KeyOption = "abort"         // stop the whole command immediately
 )
 
 // normalizeHTML5KeyOption validates and normalizes --no-key-option's raw
 // value (accepting both the short and long form of each option).
 func normalizeHTML5KeyOption(raw string) (html5KeyOption, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "":
-		return html5KeyOptionPrompt, nil
-	case "s", "skip":
+	case "", "s", "skip":
 		return html5KeyOptionSkip, nil
 	case "c", "create":
 		return html5KeyOptionCreate, nil
+	case "cd", "create-delete":
+		return html5KeyOptionCreateDelete, nil
 	case "a", "abort":
 		return html5KeyOptionAbort, nil
 	default:
-		return "", fmt.Errorf("invalid --no-key-option %q: must be one of s/skip, c/create, a/abort", raw)
+		return "", fmt.Errorf("invalid --no-key-option %q: must be one of s/skip, c/create, cd/create-delete, a/abort", raw)
+	}
+}
+
+// html5RuntimeOption is the normalized value of --no-runtime-option,
+// governing what happens when a space has no html5-apps-repo/app-runtime
+// service instance at all (as opposed to --no-key-option, which governs an
+// app-runtime instance that exists but has no service key). The default
+// (skip) applies whenever --no-runtime-option is omitted.
+type html5RuntimeOption string
+
+const (
+	html5RuntimeOptionSkip         html5RuntimeOption = "skip"          // warn and skip the space's app-hosts (default)
+	html5RuntimeOptionCreate       html5RuntimeOption = "create"        // create an app-runtime instance + service key, and keep them
+	html5RuntimeOptionCreateDelete html5RuntimeOption = "create-delete" // create an app-runtime instance + service key, use them, then delete both
+	html5RuntimeOptionAbort        html5RuntimeOption = "abort"         // stop the whole command immediately
+)
+
+// normalizeHTML5RuntimeOption validates and normalizes --no-runtime-option's
+// raw value (accepting both the short and long form of each option).
+func normalizeHTML5RuntimeOption(raw string) (html5RuntimeOption, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "s", "skip":
+		return html5RuntimeOptionSkip, nil
+	case "c", "create":
+		return html5RuntimeOptionCreate, nil
+	case "cd", "create-delete":
+		return html5RuntimeOptionCreateDelete, nil
+	case "a", "abort":
+		return html5RuntimeOptionAbort, nil
+	default:
+		return "", fmt.Errorf("invalid --no-runtime-option %q: must be one of s/skip, c/create, cd/create-delete, a/abort", raw)
 	}
 }
 
@@ -241,10 +277,15 @@ func normalizeHTML5KeyOption(raw string) (html5KeyOption, error) {
 // find-service-key / fetch-credentials / get-token flow as
 // resolveSpaceDestClients, cached under creds.SpaceHTML5Services. Returns
 // ok=false (with a warning already printed) when the instance has to be
-// skipped, or a non-nil error if the whole command must stop — either the
-// user cancelled an interactive retry prompt (errAborted) or chose
-// --no-key-option=abort.
-func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID string, inst cf.ServiceInstance, creds *store.Credentials, keyOption html5KeyOption) (sdDestClient, bool, error) {
+// skipped, or a non-nil error if the whole command must stop (chose
+// --no-key-option=abort).
+//
+// The returned cleanup is non-nil only under --no-key-option=create-delete,
+// when this call itself created the service key being returned: the caller
+// must call it exactly once, after it is done using the returned client, to
+// delete that temporary key (and drop it from the on-disk cache, since it
+// won't exist for a later run to reuse).
+func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, spaceGUID string, inst cf.ServiceInstance, creds *store.Credentials, keyOption html5KeyOption) (sdDestClient, bool, func(), error) {
 	if creds.SpaceHTML5Services == nil {
 		creds.SpaceHTML5Services = make(map[string]map[string]*store.DestInstanceCache)
 	}
@@ -256,72 +297,56 @@ func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient
 	needToken := cached == nil || cached.AccessToken == "" ||
 		time.Now().Add(60*time.Second).After(cached.TokenExpiry)
 
+	var createdBindingGUID string // set only when this call created the key under create-delete
+
 	if needToken {
 		key, keyErr := cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
 		if keyErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: finding service key for %q: %v\n", inst.Name, keyErr)
-			return sdDestClient{}, false, nil
+			return sdDestClient{}, false, nil, nil
 		}
 		if key == nil {
 			switch keyOption {
-			case html5KeyOptionSkip:
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: no service key for html5-apps-repo instance %q — skipping\n", inst.Name)
-				return sdDestClient{}, false, nil
-
 			case html5KeyOptionAbort:
-				return sdDestClient{}, false, fmt.Errorf(
+				return sdDestClient{}, false, nil, fmt.Errorf(
 					"no service key for html5-apps-repo instance %q (%s) — aborting (--no-key-option=abort)",
 					inst.Name, inst.GUID)
 
-			case html5KeyOptionCreate:
+			case html5KeyOptionCreate, html5KeyOptionCreateDelete:
 				fmt.Fprintf(cmd.ErrOrStderr(), "creating service key %q for html5-apps-repo instance %q...\n", html5AutoKeyName, inst.Name)
 				bindingGUID, createErr := cfClient.CreateServiceCredentialBinding(ctx, html5AutoKeyName, inst.GUID)
 				if createErr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: creating service key for %q: %v — skipping\n", inst.Name, createErr)
-					return sdDestClient{}, false, nil
+					return sdDestClient{}, false, nil, nil
 				}
 				key = &cf.ServiceCredentialBinding{GUID: bindingGUID, Name: html5AutoKeyName}
-
-			default: // html5KeyOptionPrompt
-				for key == nil {
-					fmt.Fprintf(cmd.ErrOrStderr(),
-						"\nWARNING: No service key found for html5-apps-repo/app-runtime instance %q (%s)\n"+
-							"  Create one manually, e.g. via CF CLI:\n"+
-							"    cf create-service-key %s %s\n"+
-							"  Then press Enter to retry, type 's' to skip this instance, or Ctrl-C to abort.\n"+
-							"  (Pass --no-key-option=skip/create/abort to apply one choice to every instance instead.)\n",
-						inst.Name, inst.GUID, inst.Name, html5AutoKeyName)
-					retry, skip := promptRetryOrSkip(ctx)
-					if !retry && !skip {
-						return sdDestClient{}, false, errAborted
-					}
-					if skip {
-						return sdDestClient{}, false, nil
-					}
-					key, keyErr = cfClient.FindAnyServiceCredentialBinding(ctx, inst.GUID)
-					if keyErr != nil || key == nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "warning: still no service key for %q\n", inst.Name)
-						key = nil
-					}
+				if keyOption == html5KeyOptionCreateDelete {
+					createdBindingGUID = bindingGUID
 				}
+
+			default: // html5KeyOptionSkip
+				fmt.Fprintf(cmd.ErrOrStderr(),
+					"warning: no service key for html5-apps-repo/app-runtime instance %q (%s) — skipping (pass --no-key-option=c/cd to create one automatically)\n",
+					inst.Name, inst.GUID)
+				return sdDestClient{}, false, nil, nil
 			}
 		}
 
 		details, detailErr := cfClient.GetServiceCredentialDetails(ctx, key.GUID)
 		if detailErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: fetching key details for %q: %v\n", inst.Name, detailErr)
-			return sdDestClient{}, false, nil
+			return sdDestClient{}, false, nil, nil
 		}
 		clientID, clientSecret, tokenURL, uri, missing := destCredentialsFromDetails(details)
 		if missing != "" {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: incomplete credentials in service key for %q (missing %q)\n", inst.Name, missing)
-			return sdDestClient{}, false, nil
+			return sdDestClient{}, false, nil, nil
 		}
 
 		newToken, expiry, tokErr := html5apps.GetAccessToken(ctx, tokenURL, clientID, clientSecret)
 		if tokErr != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: token for html5-apps-repo instance %q: %v\n", inst.Name, tokErr)
-			return sdDestClient{}, false, nil
+			return sdDestClient{}, false, nil, nil
 		}
 
 		if cached == nil {
@@ -336,14 +361,27 @@ func resolveHTML5InstanceToken(ctx context.Context, cmd *cobra.Command, cfClient
 	}
 
 	if cached == nil || cached.URI == "" {
-		return sdDestClient{}, false, nil
+		return sdDestClient{}, false, nil, nil
 	}
-	return sdDestClient{
+	client := sdDestClient{
 		InstanceGUID: inst.GUID,
 		InstanceName: cached.InstanceName,
 		URI:          cached.URI,
 		Token:        cached.AccessToken,
-	}, true, nil
+	}
+
+	var cleanup func()
+	if createdBindingGUID != "" {
+		instName, bindingGUID := inst.Name, createdBindingGUID
+		cleanup = func() {
+			fmt.Fprintf(cmd.ErrOrStderr(), "deleting temporary service key %q for html5-apps-repo instance %q...\n", html5AutoKeyName, instName)
+			if delErr := cfClient.DeleteServiceCredentialBinding(ctx, bindingGUID); delErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: deleting temporary service key for %q: %v\n", instName, delErr)
+			}
+			delete(spaceCache, inst.GUID)
+		}
+	}
+	return client, true, cleanup, nil
 }
 
 // saveHTML5Cache persists creds.SpaceHTML5Services the same way
@@ -398,7 +436,7 @@ func matchesSpaceFilter(filter map[string]bool, sp cf.Space) bool {
 // a service-key-derived OAuth token for each (per keyOption when none
 // exists — see resolveHTML5InstanceToken), and fetch
 // GET /applications/metadata from each.
-func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgGUID string, includeOrgs, excludeOrgs cosOrgSet, spacesFilter map[string]bool, keyOption html5KeyOption) ([]html5AppRow, error) {
+func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgGUID string, includeOrgs, excludeOrgs cosOrgSet, spacesFilter map[string]bool, keyOption html5KeyOption, runtimeOption html5RuntimeOption) ([]html5AppRow, error) {
 	regionResults := resolveHTML5OrgsSpaces(ctx, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs)
 
 	var rows []html5AppRow
@@ -454,28 +492,24 @@ func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, cred
 			// GUID alone, via the x-app-host-id header, scopes the result —
 			// see html5RowsFromAppHost), so there's no need for a
 			// separate token per app-host.
-			var rtClient sdDestClient
-			var haveRTClient bool
-			for _, inst := range runtimeInstances {
-				c, ok, resolveErr := resolveHTML5InstanceToken(ctx, cmd, rr.Client, sp.GUID, inst, creds, keyOption)
-				if resolveErr != nil {
-					saveHTML5Cache(cmd, creds)
-					return rows, resolveErr
-				}
-				if ok {
-					rtClient = c
-					haveRTClient = true
-					break
-				}
+			rtClient, haveRTClient, rtCleanup, rtErr := resolveAppRuntimeClient(ctx, cmd, rr.Client, rr.Region, sp.GUID, sp.Name, runtimeInstances, rr.AppRuntimePlanGUID, creds, keyOption, runtimeOption)
+			if rtErr != nil {
+				saveHTML5Cache(cmd, creds)
+				return rows, rtErr
 			}
 			if !haveRTClient {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: no usable html5-apps-repo/app-runtime service key — skipping %d app-host instance(s)\n",
-					rr.Region, spOrgName, sp.Name, len(appHosts))
+				if len(runtimeInstances) > 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: no usable html5-apps-repo/app-runtime service key — skipping %d app-host instance(s)\n",
+						rr.Region, spOrgName, sp.Name, len(appHosts))
+				}
 				continue
 			}
 
 			for _, appHost := range appHosts {
 				rows = append(rows, html5RowsFromAppHost(cmd, ctx, rtClient, appHost, rr.Region, spOrgName, sp.Name)...)
+			}
+			if rtCleanup != nil {
+				rtCleanup()
 			}
 		}
 	}
@@ -529,37 +563,121 @@ func findOrgAndSpaces(ctx context.Context, cmd *cobra.Command, orgFlag string, c
 	return "", "", "", nil, nil, fmt.Errorf("org %q not found in any accessible region", orgFlag)
 }
 
+// resolveAppRuntimeClient tries each of instances (html5-apps-repo/
+// app-runtime service instances already found in a space) in turn for a
+// usable service key (--no-key-option governs an instance with no key — see
+// resolveHTML5InstanceToken), returning the first one that works. If
+// instances is empty — no app-runtime service instance exists in the space
+// at all — --no-runtime-option governs what happens instead (see
+// resolveAppRuntimeInstanceNotFound).
+//
+// A non-nil error means the whole command must stop (--no-key-option=abort
+// or --no-runtime-option=abort). The returned cleanup, when non-nil, must be
+// called exactly once by the caller after it is done using the returned
+// client, to delete whatever this call created only for this one use (a
+// service key and/or service instance, under --no-key-option=create-delete
+// or --no-runtime-option=create-delete).
+func resolveAppRuntimeClient(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, region, spaceGUID, spaceName string, instances []cf.ServiceInstance, planGUID string, creds *store.Credentials, keyOption html5KeyOption, runtimeOption html5RuntimeOption) (sdDestClient, bool, func(), error) {
+	if len(instances) == 0 {
+		return resolveAppRuntimeInstanceNotFound(ctx, cmd, cfClient, region, spaceGUID, spaceName, planGUID, creds, keyOption, runtimeOption)
+	}
+	for _, inst := range instances {
+		c, ok, cleanup, resolveErr := resolveHTML5InstanceToken(ctx, cmd, cfClient, spaceGUID, inst, creds, keyOption)
+		if resolveErr != nil {
+			return sdDestClient{}, false, nil, resolveErr
+		}
+		if ok {
+			return c, true, cleanup, nil
+		}
+	}
+	return sdDestClient{}, false, nil, nil
+}
+
+// resolveAppRuntimeInstanceNotFound applies --no-runtime-option when a space
+// has no html5-apps-repo/app-runtime service instance at all: skip warns and
+// moves on (default); create provisions a new instance (named
+// html5AutoRuntimeName) plus a service key on it, keeping both; create-delete
+// does the same but deletes both again once the caller is done with them
+// (via the returned cleanup); abort stops the whole command.
+func resolveAppRuntimeInstanceNotFound(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, region, spaceGUID, spaceName, planGUID string, creds *store.Credentials, keyOption html5KeyOption, runtimeOption html5RuntimeOption) (sdDestClient, bool, func(), error) {
+	switch runtimeOption {
+	case html5RuntimeOptionAbort:
+		return sdDestClient{}, false, nil, fmt.Errorf(
+			"no html5-apps-repo/app-runtime service instance in space %q (%s) — aborting (--no-runtime-option=abort)",
+			spaceName, spaceGUID)
+
+	case html5RuntimeOptionCreate, html5RuntimeOptionCreateDelete:
+		fmt.Fprintf(cmd.ErrOrStderr(), "creating html5-apps-repo/app-runtime service instance %q in space %q...\n", html5AutoRuntimeName, spaceName)
+		instGUID, createErr := cfClient.CreateServiceInstance(ctx, html5AutoRuntimeName, spaceGUID, planGUID)
+		if createErr != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s: creating html5-apps-repo/app-runtime service instance: %v — skipping\n", region, spaceName, createErr)
+			return sdDestClient{}, false, nil, nil
+		}
+
+		// A fresh instance has no service key yet; always create one for it
+		// (an instance we just created ourselves is always safe to issue a
+		// key for, regardless of --no-key-option), deleting it together with
+		// the instance afterward under create-delete.
+		instKeyOption := html5KeyOptionCreate
+		if runtimeOption == html5RuntimeOptionCreateDelete {
+			instKeyOption = html5KeyOptionCreateDelete
+		}
+		inst := cf.ServiceInstance{GUID: instGUID, Name: html5AutoRuntimeName}
+		c, ok, keyCleanup, resolveErr := resolveHTML5InstanceToken(ctx, cmd, cfClient, spaceGUID, inst, creds, instKeyOption)
+		if resolveErr != nil {
+			return sdDestClient{}, false, nil, resolveErr
+		}
+		if !ok {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s: created html5-apps-repo/app-runtime service instance %q but could not obtain a service key for it\n", region, spaceName, html5AutoRuntimeName)
+			if runtimeOption == html5RuntimeOptionCreateDelete {
+				if delErr := cfClient.DeleteServiceInstance(ctx, instGUID); delErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: deleting html5-apps-repo/app-runtime service instance %q: %v\n", html5AutoRuntimeName, delErr)
+				}
+			}
+			return sdDestClient{}, false, nil, nil
+		}
+
+		if runtimeOption != html5RuntimeOptionCreateDelete {
+			return c, true, keyCleanup, nil
+		}
+		cleanup := func() {
+			if keyCleanup != nil {
+				keyCleanup()
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "deleting temporary html5-apps-repo/app-runtime service instance %q in space %q...\n", html5AutoRuntimeName, spaceName)
+			if delErr := cfClient.DeleteServiceInstance(ctx, instGUID); delErr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: deleting html5-apps-repo/app-runtime service instance %q: %v\n", html5AutoRuntimeName, delErr)
+			}
+		}
+		return c, true, cleanup, nil
+
+	default: // html5RuntimeOptionSkip
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"warning: [%s] %s: no html5-apps-repo/app-runtime service instance found — skipping app-host(s) in this space (pass --no-runtime-option=c/cd to create one automatically)\n",
+			region, spaceName)
+		return sdDestClient{}, false, nil, nil
+	}
+}
+
 // resolveAppRuntimeClientForSpace finds a usable html5-apps-repo/app-runtime
-// service key within spaceGUID, trying each app-runtime instance in that
-// space in turn until one yields a token (same key-resolution flow, and
-// --no-key-option handling, as the default service-instance discovery path —
-// see resolveHTML5InstanceToken). A non-nil error means the whole command
-// must stop (user aborted, or --no-key-option=abort); any other failure to
-// find a usable key just returns ok=false with a warning already printed.
-func resolveAppRuntimeClientForSpace(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, region, spaceGUID, spaceName string, creds *store.Credentials, keyOption html5KeyOption) (sdDestClient, bool, error) {
+// client within spaceGUID: it looks up the app-runtime plan and lists its
+// service instances in the space itself, then delegates to
+// resolveAppRuntimeClient.
+func resolveAppRuntimeClientForSpace(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, region, spaceGUID, spaceName string, creds *store.Credentials, keyOption html5KeyOption, runtimeOption html5RuntimeOption) (sdDestClient, bool, func(), error) {
 	plan, planErr := cfClient.FindServicePlan(ctx, "html5-apps-repo", "app-runtime")
 	if planErr != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s: looking up html5-apps-repo/app-runtime plan: %v\n", region, spaceName, planErr)
-		return sdDestClient{}, false, nil
+		return sdDestClient{}, false, nil, nil
 	}
 	if plan == nil {
-		return sdDestClient{}, false, nil
+		return sdDestClient{}, false, nil, nil
 	}
 	instances, err := cfClient.ListServiceInstancesInSpace(ctx, spaceGUID, plan.GUID)
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s: listing html5-apps-repo/app-runtime instances: %v\n", region, spaceName, err)
-		return sdDestClient{}, false, nil
+		return sdDestClient{}, false, nil, nil
 	}
-	for _, inst := range instances {
-		c, ok, resolveErr := resolveHTML5InstanceToken(ctx, cmd, cfClient, spaceGUID, inst, creds, keyOption)
-		if resolveErr != nil {
-			return sdDestClient{}, false, resolveErr
-		}
-		if ok {
-			return c, true, nil
-		}
-	}
-	return sdDestClient{}, false, nil
+	return resolveAppRuntimeClient(ctx, cmd, cfClient, region, spaceGUID, spaceName, instances, plan.GUID, creds, keyOption, runtimeOption)
 }
 
 // html5DestAppHostInfo reports whether dest carries both an "app_host_id"
@@ -614,7 +732,7 @@ func html5RowsFromDestAppHost(cmd *cobra.Command, ctx context.Context, rtClient 
 // destinations are skipped entirely — they aren't tied to any one space, so
 // they'd otherwise pull in app hosts outside the spaces the caller asked
 // for; only the matching spaces' instance-level destinations are queried.
-func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgTargets []string, spacesFilter map[string]bool, noPrompt bool, keyOption html5KeyOption) ([]html5AppRow, error) {
+func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgTargets []string, spacesFilter map[string]bool, noPrompt bool, keyOption html5KeyOption, runtimeOption html5RuntimeOption) ([]html5AppRow, error) {
 	var rows []html5AppRow
 	for _, target := range orgTargets {
 		region, _, orgName, cfClient, spaces, err := findOrgAndSpaces(ctx, cmd, target, creds, apiURLs)
@@ -629,18 +747,19 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 			// qualifying destination is actually found.
 			var orgRTClient sdDestClient
 			var orgRTTried, orgRTOK bool
+			var orgRTCleanup func()
 			resolveOrgRTClient := func() (sdDestClient, bool, error) {
 				if orgRTTried {
 					return orgRTClient, orgRTOK, nil
 				}
 				orgRTTried = true
 				for _, sp := range spaces {
-					c, ok, rErr := resolveAppRuntimeClientForSpace(ctx, cmd, cfClient, region, sp.GUID, sp.Name, creds, keyOption)
+					c, ok, cleanup, rErr := resolveAppRuntimeClientForSpace(ctx, cmd, cfClient, region, sp.GUID, sp.Name, creds, keyOption, runtimeOption)
 					if rErr != nil {
 						return sdDestClient{}, false, rErr
 					}
 					if ok {
-						orgRTClient, orgRTOK = c, true
+						orgRTClient, orgRTOK, orgRTCleanup = c, true, cleanup
 						return c, true, nil
 					}
 				}
@@ -677,6 +796,9 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 					}
 				}
 			}
+			if orgRTCleanup != nil {
+				orgRTCleanup()
+			}
 		}
 
 		// Instance-level destinations, per space.
@@ -696,6 +818,7 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 
 			var spRTClient sdDestClient
 			var spRTTried, spRTOK bool
+			var spRTCleanup func()
 
 			for _, c := range clients {
 				rawDests, fetchErr := destination.ListInstanceDestinationsFull(ctx, c.URI, c.Token)
@@ -711,12 +834,12 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 					}
 					if !spRTTried {
 						spRTTried = true
-						rtC, rtOK, rtErr := resolveAppRuntimeClientForSpace(ctx, cmd, cfClient, region, sp.GUID, sp.Name, creds, keyOption)
+						rtC, rtOK, cleanup, rtErr := resolveAppRuntimeClientForSpace(ctx, cmd, cfClient, region, sp.GUID, sp.Name, creds, keyOption, runtimeOption)
 						if rtErr != nil {
 							saveHTML5Cache(cmd, creds)
 							return rows, rtErr
 						}
-						spRTClient, spRTOK = rtC, rtOK
+						spRTClient, spRTOK, spRTCleanup = rtC, rtOK, cleanup
 					}
 					if !spRTOK {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s/%s] destination %q: no usable html5-apps-repo/app-runtime service key in this space — skipping\n", orgName, sp.Name, name)
@@ -724,6 +847,9 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 					}
 					rows = append(rows, html5RowsFromDestAppHost(cmd, ctx, spRTClient, appHostID, name, region, c.InstanceName, c.InstanceGUID)...)
 				}
+			}
+			if spRTCleanup != nil {
+				spRTCleanup()
 			}
 		}
 	}
@@ -858,17 +984,29 @@ to attribute it to). instance_name and app_host_id still come straight from
 the applications/metadata API response itself in this path too, same as
 without --from-destinations.
 
---no-key-option <s/skip|c/create|a/abort> applies one choice to every
-html5-apps-repo/app-runtime instance found with no service key during this
-run, instead of prompting interactively for each one: skip warns and moves
-on, create automatically runs the equivalent of
-'cf create-service-key <instance> bo-html5-key', and abort stops the whole
-command the first time it happens. Omit it to keep the interactive
-retry/skip/abort prompt (the default). This governs the html5-apps-repo/
-app-runtime service-key decision in both discovery paths — --no-prompt below
-is the equivalent for the separate destination-resolution prompts
-encountered under --from-destinations (reading destinations themselves, not
-the app-runtime key used to query them).
+--no-key-option <s/skip|c/create|cd/create-delete|a/abort> governs what
+happens to every html5-apps-repo/app-runtime instance found with no service
+key during this run — an instance that exists but has no key: skip (the
+default, no need to pass it) warns and moves on; create runs the equivalent
+of 'cf create-service-key <instance> bo-html5-key' and keeps the key;
+create-delete does the same but deletes that key again once it's no longer
+needed for this run; abort stops the whole command the first time it
+happens. This governs the html5-apps-repo/app-runtime service-key decision
+in both discovery paths — --no-prompt below is the equivalent for the
+separate destination-resolution prompts encountered under
+--from-destinations (reading destinations themselves, not the app-runtime
+key used to query them).
+
+--no-runtime-option <s/skip|c/create|cd/create-delete|a/abort> governs what
+happens when a space has no html5-apps-repo/app-runtime service instance at
+all (as opposed to --no-key-option above, which only applies once an
+app-runtime instance exists but lacks a key): skip (the default) warns and
+skips that space's app-host(s), with a hint to re-run with
+--no-runtime-option=c/cd to create one automatically; create provisions a
+new app-runtime service instance (named bo-html5-app-runtime) plus a service
+key on it, and keeps both; create-delete does the same but deletes both
+again once they're no longer needed for this run; abort stops the whole
+command the first time it happens. This too governs both discovery paths.
 
 --no-prompt skips interactive destination-resolution prompts encountered
 under --from-destinations, warning and skipping instead — useful for
@@ -898,6 +1036,11 @@ If --regions is omitted the regions from the last login are used.`,
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 		keyOptionFlag, _ := cmd.Flags().GetString("no-key-option")
 		keyOption, err := normalizeHTML5KeyOption(keyOptionFlag)
+		if err != nil {
+			return err
+		}
+		runtimeOptionFlag, _ := cmd.Flags().GetString("no-runtime-option")
+		runtimeOption, err := normalizeHTML5RuntimeOption(runtimeOptionFlag)
 		if err != nil {
 			return err
 		}
@@ -970,9 +1113,9 @@ If --regions is omitted the regions from the last login are used.`,
 			if targetsErr != nil {
 				return targetsErr
 			}
-			rows, err = fetchHTML5ViaDestinations(ctx, cmd, creds, apiURLs, orgTargets, spacesFilter, noPrompt, keyOption)
+			rows, err = fetchHTML5ViaDestinations(ctx, cmd, creds, apiURLs, orgTargets, spacesFilter, noPrompt, keyOption, runtimeOption)
 		} else {
-			rows, err = fetchHTML5ViaServiceInstances(ctx, cmd, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs, spacesFilter, keyOption)
+			rows, err = fetchHTML5ViaServiceInstances(ctx, cmd, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs, spacesFilter, keyOption, runtimeOption)
 		}
 		if err != nil {
 			if errors.Is(err, errAborted) {
@@ -1056,7 +1199,8 @@ func init() {
 	html5AppsCmd.Flags().String("include", "", "Only include rows where organization_name, space_name, instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where organization_name, space_name, instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
 	html5AppsCmd.Flags().Bool("from-destinations", false, "Discover app_host_id from subaccount/instance destinations carrying app_host_id + sap.cloud.service, then query each via a real html5-apps-repo/app-runtime service key (not the destination's own credentials)")
-	html5AppsCmd.Flags().String("no-key-option", "", "Apply one choice to every html5-apps-repo instance found with no service key, instead of prompting per instance: s/skip, c/create (auto-create one), or a/abort (stop the command); omit for the interactive prompt")
+	html5AppsCmd.Flags().String("no-key-option", "", "What to do with an html5-apps-repo/app-runtime instance found with no service key: s/skip (default), c/create (auto-create one, kept), cd/create-delete (create, use, then delete it), or a/abort (stop the command)")
+	html5AppsCmd.Flags().String("no-runtime-option", "", "What to do when a space has no html5-apps-repo/app-runtime service instance at all: s/skip (default), c/create (auto-create instance+key, kept), cd/create-delete (create, use, then delete both), or a/abort (stop the command)")
 	html5AppsCmd.Flags().Bool("no-prompt", false, "Skip interactive destination-resolution prompts under --from-destinations — warn and skip instead of prompting to create a missing destination service key")
 	html5AppsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (default: every column; see --help for the full list)")
 	html5AppsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, in priority order, each optionally suffixed with \":desc\" (default: \":asc\"); default sort order is region,organization_name,space_name,instance_name,application_name")

@@ -1714,11 +1714,19 @@ bo html5-apps --sort-by space_name:desc,application_name
 # See the raw applications/metadata response for each app host, before parsing
 bo html5-apps --debug
 
-# Apply one choice to every html5-apps-repo instance missing a service key,
-# instead of an interactive retry/skip/abort prompt per instance
-bo html5-apps --no-key-option skip     # warn and move on
-bo html5-apps --no-key-option create   # auto-create 'bo-html5-key' on each
-bo html5-apps --no-key-option abort    # stop the command on the first one
+# Apply one choice to every html5-apps-repo/app-runtime instance found with
+# no service key (default: skip)
+bo html5-apps --no-key-option skip            # warn and move on (default)
+bo html5-apps --no-key-option create          # auto-create 'bo-html5-key', keep it
+bo html5-apps --no-key-option create-delete   # auto-create 'bo-html5-key', use it, delete it
+bo html5-apps --no-key-option abort           # stop the command on the first one
+
+# Apply one choice to every space with no html5-apps-repo/app-runtime
+# service instance at all (default: skip)
+bo html5-apps --no-runtime-option skip            # warn and skip that space's app-hosts (default)
+bo html5-apps --no-runtime-option create          # auto-create instance 'bo-html5-app-runtime' + a key, keep both
+bo html5-apps --no-runtime-option create-delete   # auto-create both, use them, delete both
+bo html5-apps --no-runtime-option abort           # stop the command on the first one
 
 # Discover app_host_id from destinations instead of enumerating app-host
 # instances directly: scans subaccount- and instance-level destinations in
@@ -1746,7 +1754,11 @@ With `--from-destinations`, `instance_name` and `app_host_id` still come straigh
 
 `--from-destinations` also populates three destination-identifying columns, empty otherwise: `destination_name` is always the matching destination's own `Name`; `destination_instance_name`/`destination_instance_id` additionally identify the destination service instance it was found in when the destination is instance-level — a subaccount-level destination leaves both empty, since there's no single instance to attribute it to.
 
-By default, an html5-apps-repo/app-runtime instance found with no service key triggers an interactive "create one manually (`cf create-service-key <instance> bo-html5-key`), then press Enter to retry / 's' to skip / Ctrl-C to abort" prompt — once per such instance. `--no-key-option <s/skip|c/create|a/abort>` applies one choice to every instance hitting this during the run instead: `skip` warns and moves on, `create` automatically creates a `bo-html5-key` service key on the instance (the same thing the manual instruction does), and `abort` stops the whole command the first time it happens. This governs the html5-apps-repo/app-runtime service-key decision in both discovery paths; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (reading destinations themselves, not the app-runtime key used to query them — there, only skip-or-prompt is supported, not create/abort).
+`--no-key-option <s/skip|c/create|cd/create-delete|a/abort>` governs what happens to an html5-apps-repo/app-runtime instance that exists but has no service key, once per such instance hit during the run: `skip` (the default — no need to pass it) warns and moves on; `create` automatically creates a `bo-html5-key` service key on the instance (the same thing `cf create-service-key <instance> bo-html5-key` does) and keeps it; `create-delete` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens.
+
+`--no-runtime-option <s/skip|c/create|cd/create-delete|a/abort>` governs the separate case of a space with no html5-apps-repo/app-runtime service instance at all: `skip` (the default) warns and skips that space's app-host(s), with a hint to re-run with `--no-runtime-option=c/cd` to create one automatically; `create` provisions a new app-runtime service instance (named `bo-html5-app-runtime`) plus a service key on it, keeping both; `create-delete` does the same but deletes both again once they're no longer needed for this run; `abort` stops the whole command the first time it happens.
+
+Both flags govern the html5-apps-repo/app-runtime service-key/instance decision in both discovery paths; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (reading destinations themselves, not the app-runtime key/instance used to query them — there, only skip-or-prompt is supported).
 
 ### `service-credentials`
 
