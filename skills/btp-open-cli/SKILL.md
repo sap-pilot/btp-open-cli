@@ -187,7 +187,11 @@ they're logged in.
   sorts/narrows a CSV or JSON file already on disk (e.g. one a `bo` command
   wrote with `--output`), in place or to a new file. Safe to run freely; see
   "Compare two orgs/subaccounts to find differences" below for its main use
-  here.
+  here. A dotted field name in `--fields`/`--by` (e.g. `app_labels.commit_id`)
+  reaches into a nested field — e.g. one JSON-object-valued column like
+  `app_labels` (from `bo apps --include-labels`) — instead of the whole
+  object/JSON string, falling back to that field's whole value if it isn't
+  actually a JSON object.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -538,6 +542,12 @@ diff a.csv b.csv   # lines starting with "<" are only in A, ">" only in B
 # "Handling commands that output secrets" above
 bo destinations --org <org-A> --fields org_name,space_name,instance_name --sort-by Name --format csv -o a.csv
 bo destinations --org <org-B> --fields org_name,space_name,instance_name --sort-by Name --format csv -o b.csv
+
+# Comparing by one specific CF metadata label (not the whole app_labels
+# object): export with --include-labels, then narrow with `bo sort`'s
+# dotted-field support (app_labels, not apps itself, has --fields/--by)
+bo apps --org <org-A> --include-labels --format csv -o a-full.csv
+bo sort --fields=space_name,app_name,app_labels.commit_id a-full.csv -o a.csv
 diff a.csv b.csv
 ```
 

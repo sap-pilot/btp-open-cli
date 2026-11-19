@@ -14,6 +14,10 @@
   diff a.csv b.csv   # anything left/right-only is missing from the other org
   ```
 
+- **`bo sort` — dotted field names reach into a nested field**
+
+  A field name containing a dot in `--fields`/`--by` (e.g. `app_labels.commit_id`) reaches into a nested field instead of the whole thing: the named parent is read, and if its value is a JSON object — either already one, or a string holding one, exactly how a CSV cell or a JSON-encoded field carries it — the remaining segment is looked up as a key within it (several dots chain one segment at a time). The moment some segment's value isn't a JSON object, resolution stops there and that segment's own whole value is used as-is instead, so a dotted name against a plain, non-JSON value just falls back to the parent's own whole value. For `--fields`, a dotted entry adds its own new field under that exact literal name without dropping the named parent field. Lets `bo sort --fields=app_name,app_labels.commit_id` narrow/sort by one specific label out of `bo apps --include-labels`' `app_labels` object, for example.
+
 - **`apps --include-labels` — include each app's CF metadata labels**
 
   Adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's current CF metadata labels — same representation as `--include-env`'s `app_env`. Fetched via one extra API call per app (`GET /v3/apps/:guid`) rather than reused from the apps listing itself, since a label set moments earlier (e.g. via `cf set-label`) isn't always reflected yet in that listing on every CF platform. Not sensitive output, unlike `app_env`.

@@ -158,13 +158,67 @@ func sortValueAsString(v interface{}) string {
 	}
 }
 
+// resolveSortFieldValue returns row's value for field. A plain field name
+// (no dot) is just row[field] — nil if absent, the existing lenient
+// behavior for any unknown field. A dotted field name (e.g.
+// "app_labels.commit_id") instead walks row[field]'s first segment, then
+// each further dot-separated segment as a key into the previous segment's
+// own value: a segment's value is decomposed into an object first if
+// necessary — either already a map (a native JSON object) or a string that
+// itself decodes as one (e.g. a CSV cell, or a JSON string field holding
+// JSON, both exactly the "app_labels" shape 'bo apps --include-labels'
+// writes). The moment some segment's value is neither of those, resolution
+// stops there and that segment's own raw value is returned as-is instead
+// of nil — "not an object or JSON string, so treat the whole thing as
+// plain text" — which for the common one-dot case is exactly the named
+// parent field's own whole value. A segment that properly decomposes but
+// simply doesn't have the next key returns nil, same as any other missing
+// field.
+func resolveSortFieldValue(row map[string]interface{}, field string) interface{} {
+	if !strings.Contains(field, ".") {
+		return row[field]
+	}
+	segments := strings.Split(field, ".")
+	cur, ok := row[segments[0]]
+	if !ok {
+		return nil
+	}
+	for _, seg := range segments[1:] {
+		obj, isObj := asJSONObject(cur)
+		if !isObj {
+			return cur
+		}
+		cur = obj[seg]
+	}
+	return cur
+}
+
+// asJSONObject reports whether v is already a JSON object (decoded as
+// map[string]interface{}) or a string that decodes as one, returning it
+// either way as a map[string]interface{} — used by resolveSortFieldValue
+// to walk into a dotted field one segment at a time.
+func asJSONObject(v interface{}) (map[string]interface{}, bool) {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		return x, true
+	case string:
+		var m map[string]interface{}
+		if err := json.Unmarshal([]byte(x), &m); err != nil {
+			return nil, false
+		}
+		return m, true
+	default:
+		return nil, false
+	}
+}
+
 // sortRowsByKeys sorts rows in place by keys, in priority order (ties on one
 // key are broken by the next), stably preserving the existing order for
 // anything keys doesn't distinguish.
 func sortRowsByKeys(rows []map[string]interface{}, keys []sortByKey) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, k := range keys {
-			c := sortCompareValues(rows[i][k.Field], rows[j][k.Field])
+			c := sortCompareValues(resolveSortFieldValue(rows[i], k.Field), resolveSortFieldValue(rows[j], k.Field))
 			if c == 0 {
 				continue
 			}
@@ -245,7 +299,7 @@ func writeSortCSV(w io.Writer, header []string, rows []map[string]interface{}) e
 	for _, row := range rows {
 		cells := make([]string, len(header))
 		for i, h := range header {
-			cells[i] = sortValueAsString(row[h])
+			cells[i] = sortValueAsString(resolveSortFieldValue(row, h))
 		}
 		if err := cw.Write(cells); err != nil {
 			return err
@@ -362,21 +416,35 @@ func isJSONLeafValue(v interface{}) bool {
 
 // filterJSONRow applies --fields to one row: a leaf field is kept only if
 // fields is empty or names it; a non-leaf field (nested object/array) is
-// always kept, since --fields only ever selects among leaf fields.
+// always kept, since a plain (non-dotted) --fields entry only ever selects
+// among leaf fields. A dotted entry (e.g. "app_labels.commit_id") is purely
+// additive instead: it's resolved via resolveSortFieldValue and added as
+// its own new top-level key, literally named after the dotted entry, on top
+// of whatever the plain rule above already decided — it never removes the
+// named parent field (e.g. "app_labels" itself, still kept whole per that
+// rule) or anything else.
 func filterJSONRow(row map[string]interface{}, isLeaf map[string]bool, fields []string) map[string]interface{} {
 	if len(fields) == 0 {
 		return row
 	}
 	keep := make(map[string]bool, len(fields))
+	var dotted []string
 	for _, f := range fields {
-		keep[f] = true
+		if strings.Contains(f, ".") {
+			dotted = append(dotted, f)
+		} else {
+			keep[f] = true
+		}
 	}
-	out := make(map[string]interface{}, len(row))
+	out := make(map[string]interface{}, len(row)+len(dotted))
 	for k, v := range row {
 		if isLeaf[k] && !keep[k] {
 			continue
 		}
 		out[k] = v
+	}
+	for _, f := range dotted {
+		out[f] = resolveSortFieldValue(row, f)
 	}
 	return out
 }
@@ -562,6 +630,21 @@ out alphabetical, since encoding/json doesn't preserve (or accept) any
 other key order for a map; this is unrelated to --by, which sorts rows (not
 fields) and is unaffected by --fields either way.
 
+A field name containing a dot (e.g. "app_labels.commit_id", matching the
+app_labels field 'bo apps --include-labels' writes) reaches into a nested
+field, for both --fields and --by: the parent ("app_labels") is read, and
+if its value is a JSON object — either already one, or a string holding
+one, exactly how a CSV cell or a JSON-encoded field would carry it — the
+remaining segment ("commit_id") is looked up as a key within it; several
+dots chain this one segment at a time. The moment some segment's value
+isn't a JSON object (or JSON-object-holding string), resolution stops
+there and that segment's own whole value is used as-is instead — so
+"app_labels.commit_id" against a plain, non-JSON app_labels value just
+means "app_labels" itself, same as if no dot had been given. For --fields,
+a dotted entry adds its own new field under that exact literal name
+alongside whatever the plain rule above already decided — it never
+replaces or drops the named parent field.
+
 Without --output/-o, every matched file is sorted and overwritten in place:
 unless -y is given, a confirmation listing every file about to be
 overwritten is required first. --output instead writes the sorted result to
@@ -632,8 +715,8 @@ unambiguous which file the output came from).`,
 
 func init() {
 	rootCmd.AddCommand(sortCmd)
-	sortCmd.Flags().StringP("by", "b", "", "Comma-separated fields to sort by, in priority order, each optionally suffixed with \":desc\" (default \":asc\"); omit to sort by --fields' own fields if given, else every available field, in order")
-	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); omit to keep every field")
+	sortCmd.Flags().StringP("by", "b", "", "Comma-separated fields to sort by, in priority order, each optionally suffixed with \":desc\" (default \":asc\"); a dotted name (e.g. app_labels.commit_id) reaches into a nested field; omit to sort by --fields' own fields if given, else every available field, in order")
+	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); a dotted name (e.g. app_labels.commit_id) adds that nested field under its own literal name; omit to keep every field")
 	sortCmd.Flags().StringP("output", "o", "", "Write the sorted result to this file instead of overwriting the input (only valid with exactly one matching file)")
 	sortCmd.Flags().BoolP("yes", "y", false, "Skip the overwrite confirmation prompt")
 }
