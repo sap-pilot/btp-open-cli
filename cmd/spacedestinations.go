@@ -46,31 +46,22 @@ type sdOrgDoc struct {
 	Spaces  []sdSpaceDoc `json:"spaces"   toon:"spaces"`
 }
 
-// sdFlatRow is the flat, one-row-per-destination view of []sdOrgDoc — the
-// same shape as the CSV output. Only meaningful without --full, since with
-// it a destination's properties aren't a fixed set of columns (see the
-// RunE below, which rejects --fields/--sort-by together with --full).
-type sdFlatRow struct {
-	OrgID                  string `json:"org_id"                     toon:"org_id"`
-	OrgName                string `json:"org_name"                   toon:"org_name"`
-	SpaceID                string `json:"space_id"                   toon:"space_id"`
-	SpaceName              string `json:"space_name"                 toon:"space_name"`
-	DestinationServiceName string `json:"destination_service_name"   toon:"destination_service_name"`
-	DestinationName        string `json:"destination_name"           toon:"destination_name"`
-	DestinationURL         string `json:"destination_url"            toon:"destination_url"`
-	DestinationSapClient   string `json:"destination_sap_client"     toon:"destination_sap_client"`
-}
+// sdLeadingCols are space-destinations' own structural columns (see
+// destFlatRow) — org and space identity; the owning destination service
+// instance (destination_service_id/destination_service_name) is already
+// baked into each destination's own properties by sdTagDestInstance, so it
+// isn't a separate structural column here.
+var sdLeadingCols = []string{"org_id", "org_name", "space_id", "space_name"}
 
-// flattenSdRows converts docs into one flat row per destination.
-func flattenSdRows(docs []sdOrgDoc) []sdFlatRow {
-	var rows []sdFlatRow
+// flattenSdRows converts docs into one flat destFlatRow per destination.
+func flattenSdRows(docs []sdOrgDoc) []destFlatRow {
+	var rows []destFlatRow
 	for _, org := range docs {
 		for _, sp := range org.Spaces {
 			for _, d := range sp.Destinations {
-				rows = append(rows, sdFlatRow{
+				rows = append(rows, destFlatRow{
 					OrgID: org.OrgID, OrgName: org.OrgName, SpaceID: sp.SpaceID, SpaceName: sp.SpaceName,
-					DestinationServiceName: d["destination_service_name"], DestinationName: d["Name"],
-					DestinationURL: d["URL"], DestinationSapClient: d["sap-client"],
+					Props: d,
 				})
 			}
 		}
@@ -90,18 +81,6 @@ func sdTagDestInstance(dest map[string]string, instGUID, instName string) map[st
 	tagged["destination_service_id"] = instGUID
 	tagged["destination_service_name"] = instName
 	return tagged
-}
-
-// sdMinimalDest returns a copy of the destination map containing only the
-// Name, URL, and sap-client properties.
-func sdMinimalDest(raw map[string]string) map[string]string {
-	m := make(map[string]string, 3)
-	for _, k := range []string{"Name", "URL", "sap-client"} {
-		if v, ok := raw[k]; ok {
-			m[k] = v
-		}
-	}
-	return m
 }
 
 // sdMatchesFilter reports whether a destination matches the filter. The filter
@@ -524,13 +503,8 @@ func resolveAllOrgsSpacesForDest(ctx context.Context, creds *store.Credentials, 
 // Orgs/spaces with no matching destinations are omitted from the result
 // entirely, unlike the single --space path which always returns its one
 // target space even when empty.
-func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, full bool, includePattern, excludePattern string) ([]sdOrgDoc, error) {
+func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, includePattern, excludePattern string) ([]sdOrgDoc, error) {
 	regionResults := resolveAllOrgsSpacesForDest(ctx, creds, apiURLs)
-
-	fetchFn := destination.ListInstanceDestinations
-	if full {
-		fetchFn = destination.ListInstanceDestinationsFull
-	}
 
 	var docs []sdOrgDoc
 	for _, rr := range regionResults {
@@ -563,7 +537,7 @@ func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 
 				var dests []map[string]string
 				for _, c := range clients {
-					rawDests, fetchErr := fetchFn(ctx, c.URI, c.Token)
+					rawDests, fetchErr := destination.ListInstanceDestinationsFull(ctx, c.URI, c.Token)
 					if fetchErr != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s/%s] instance %q: listing destinations: %v\n",
 							org.Name, sp.Name, c.InstanceName, fetchErr)
@@ -576,11 +550,7 @@ func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 						if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
 							continue
 						}
-						d := raw
-						if !full {
-							d = sdMinimalDest(raw)
-						}
-						dests = append(dests, sdTagDestInstance(d, c.InstanceGUID, c.InstanceName))
+						dests = append(dests, sdTagDestInstance(raw, c.InstanceGUID, c.InstanceName))
 					}
 				}
 				if len(dests) == 0 {
@@ -606,13 +576,13 @@ func fetchAllSpaceDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 // shape); more than one — or zero — marshal as a list, same convention as
 // subaccount-destinations.
 
-func renderSpaceDestinationsJSON(w io.Writer, docs []sdOrgDoc, fieldIDs []string, sortKeys []sortKey) error {
+func renderSpaceDestinationsJSON(w io.Writer, docs []sdOrgDoc, fieldIDs []string, sortKeys []destSortKey) error {
 	if len(fieldIDs) > 0 || len(sortKeys) > 0 {
 		flatRows := flattenSdRows(docs)
 		if len(sortKeys) > 0 {
-			sortRowsBy(flatRows, sortKeys)
+			destSortRowsBy(flatRows, sortKeys)
 		}
-		out, err := json.MarshalIndent(flatDocValue(flatRows, fieldIDs), "", "  ")
+		out, err := json.MarshalIndent(flatRowsDoc{Rows: destRowMaps(flatRows, fieldIDs, sdLeadingCols)}, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encoding JSON: %w", err)
 		}
@@ -633,13 +603,13 @@ func renderSpaceDestinationsJSON(w io.Writer, docs []sdOrgDoc, fieldIDs []string
 	return nil
 }
 
-func renderSpaceDestinationsToon(w io.Writer, docs []sdOrgDoc, fieldIDs []string, sortKeys []sortKey) error {
+func renderSpaceDestinationsToon(w io.Writer, docs []sdOrgDoc, fieldIDs []string, sortKeys []destSortKey) error {
 	if len(fieldIDs) > 0 || len(sortKeys) > 0 {
 		flatRows := flattenSdRows(docs)
 		if len(sortKeys) > 0 {
-			sortRowsBy(flatRows, sortKeys)
+			destSortRowsBy(flatRows, sortKeys)
 		}
-		out, err := toonenc.Marshal(flatDocValue(flatRows, fieldIDs), toonenc.WithIndent(2))
+		out, err := toonenc.Marshal(flatRowsDoc{Rows: destRowMaps(flatRows, fieldIDs, sdLeadingCols)}, toonenc.WithIndent(2))
 		if err != nil {
 			return fmt.Errorf("encoding TOON: %w", err)
 		}
@@ -662,14 +632,14 @@ func renderSpaceDestinationsToon(w io.Writer, docs []sdOrgDoc, fieldIDs []string
 	return nil
 }
 
-func renderSpaceDestinationsCSV(w io.Writer, docs []sdOrgDoc, fieldIDs []string, sortKeys []sortKey) error {
+func renderSpaceDestinationsCSV(w io.Writer, docs []sdOrgDoc, fieldIDs []string, sortKeys []destSortKey) error {
 	flatRows := flattenSdRows(docs)
 	if len(sortKeys) > 0 {
-		sortRowsBy(flatRows, sortKeys)
+		destSortRowsBy(flatRows, sortKeys)
 	}
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
-	return writeFlatCSV(cw, flatRows, fieldIDs)
+	return destWriteCSV(cw, flatRows, fieldIDs, sdLeadingCols)
 }
 
 // ── command ───────────────────────────────────────────────────────────────────
@@ -691,30 +661,34 @@ always included, even if empty. With more than one org in the result,
 --format json/toon returns a list of per-org results instead of a single
 object.
 
-Without --full: only Name, URL, and sap-client are included per destination.
-With --full: all destination properties are returned as a flat object exactly as
-the destination service API responds — nothing is redacted, including sensitive
-fields such as Password, ClientSecret, and ProxyPassword.
+Every destination property is included exactly as the destination service
+API responds — nothing is redacted, including sensitive fields such as
+Password, ClientSecret, and ProxyPassword; this is sensitive output, see
+README.
 
 Use --include/--exclude to narrow results: each accepts a comma-separated
 list of keywords, matched against any destination property key or value —
 as a glob pattern (e.g. API*PP) if a keyword contains * ? [, otherwise as a
 case-insensitive substring.
 
-Use --format csv (without --full) to get a flat CSV with columns:
-  org_id,org_name,space_id,space_name,destination_service_name,destination_name,destination_url,destination_sap_client
+--format csv gives a flat CSV, one row per destination: org_id, org_name,
+space_id, and space_name lead, followed by every property key that appears
+anywhere in the result set (sorted alphabetically, and already including
+destination_service_id/destination_service_name — see below), so the
+column set reflects whatever destinations were actually returned.
 
-Use --fields <column,...> (case-insensitive, comma-separated, any of those
-columns, in the order given) to limit output to just those columns —
-switches json/toon to that same flat {"rows": [...]} view too (not
-supported together with --full, since a destination's properties aren't a
-fixed set of columns in that mode).
+Use --fields <column,...> (comma-separated, in the order given — org_id,
+org_name, space_id, space_name, or any destination property name, exactly
+as the API casing has it, e.g. "Name" not "name") to limit output to just
+those columns instead — switches json/toon to that same flat
+{"rows": [...]} view too. Omit it to get every column (csv) or the normal
+nested json/toon structure below.
 
 Use --sort-by <column,...> to sort rows by one or more of those same
-columns, each optionally suffixed with ":desc" for descending (":asc" is
-the default) — also switches json/toon to the flat view, and is likewise
-not supported with --full. Omit it to keep the default order: sorted by
-destination_name within each space.
+columns (any name accepted, matched the same way), each optionally
+suffixed with ":desc" for descending (":asc" is the default) — also
+switches json/toon to the flat view. Omit it to keep the default order:
+sorted by Name within each space.
 
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
@@ -724,7 +698,6 @@ default toon applies. Pass --format explicitly to override the extension.`,
 		spaceGUID, _ := cmd.Flags().GetString("space")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
-		full, _ := cmd.Flags().GetBool("full")
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		outputFile, _ := cmd.Flags().GetString("output")
@@ -734,17 +707,11 @@ default toon applies. Pass --format explicitly to override the extension.`,
 			}
 		}
 		fieldsFlag, _ := cmd.Flags().GetString("fields")
-		fieldIDs, err := parseFieldsFlag[sdFlatRow](fieldsFlag, "--fields")
-		if err != nil {
-			return err
-		}
+		fieldIDs := destParseFields(fieldsFlag)
 		sortByFlag, _ := cmd.Flags().GetString("sort-by")
-		sortKeys, err := parseSortByFlag[sdFlatRow](sortByFlag, "--sort-by")
+		sortKeys, err := destParseSortBy(sortByFlag, "--sort-by")
 		if err != nil {
 			return err
-		}
-		if full && (len(fieldIDs) > 0 || len(sortKeys) > 0) {
-			return fmt.Errorf("--fields/--sort-by are not supported with --full, since a destination's properties aren't a fixed set of columns in that mode; omit --full to use them")
 		}
 
 		creds, err := store.Load()
@@ -770,13 +737,9 @@ default toon applies. Pass --format explicitly to override the extension.`,
 				return resolveErr
 			}
 
-			fetchFn := destination.ListInstanceDestinations
-			if full {
-				fetchFn = destination.ListInstanceDestinationsFull
-			}
 			var dests []map[string]string
 			for _, c := range clients {
-				rawDests, fetchErr := fetchFn(ctx, c.URI, c.Token)
+				rawDests, fetchErr := destination.ListInstanceDestinationsFull(ctx, c.URI, c.Token)
 				if fetchErr != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing instance destinations: %v\n", c.InstanceName, fetchErr)
 					continue
@@ -788,11 +751,7 @@ default toon applies. Pass --format explicitly to override the extension.`,
 					if excludePattern != "" && sdMatchesAnyKeyword(excludePattern, raw) {
 						continue
 					}
-					d := raw
-					if !full {
-						d = sdMinimalDest(raw)
-					}
-					dests = append(dests, sdTagDestInstance(d, c.InstanceGUID, c.InstanceName))
+					dests = append(dests, sdTagDestInstance(raw, c.InstanceGUID, c.InstanceName))
 				}
 			}
 			sort.Slice(dests, func(i, j int) bool { return dests[i]["Name"] < dests[j]["Name"] })
@@ -807,7 +766,7 @@ default toon applies. Pass --format explicitly to override the extension.`,
 				}},
 			}}
 		} else {
-			docs, err = fetchAllSpaceDestinations(ctx, cmd, creds, apiURLs, full, includePattern, excludePattern)
+			docs, err = fetchAllSpaceDestinations(ctx, cmd, creds, apiURLs, includePattern, excludePattern)
 			if err != nil {
 				return err
 			}
@@ -823,9 +782,6 @@ default toon applies. Pass --format explicitly to override the extension.`,
 		case "json":
 			return renderSpaceDestinationsJSON(out, docs, fieldIDs, sortKeys)
 		case "csv":
-			if full {
-				return fmt.Errorf("--format csv is not supported with --full; use --format json or toon instead")
-			}
 			return renderSpaceDestinationsCSV(out, docs, fieldIDs, sortKeys)
 		default:
 			return renderSpaceDestinationsToon(out, docs, fieldIDs, sortKeys)
@@ -1022,13 +978,12 @@ func init() {
 	// space-destinations
 	spaceDestinationsCmd.Flags().String("space", "", "CF space GUID; if omitted, every accessible space is scanned instead")
 	spaceDestinationsCmd.Flags().String("regions", "", "Comma-separated CF regions to search (default: last login regions)")
-	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv (csv only without --full); auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
-	spaceDestinationsCmd.Flags().Bool("full", false, "Return all destination properties as-is from the API, including sensitive fields such as Password and ClientSecret (default: Name, URL, sap-client only)")
+	spaceDestinationsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	spaceDestinationsCmd.Flags().String("include", "", "Only include destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	spaceDestinationsCmd.Flags().String("exclude", "", "Exclude destinations where any property contains any of these comma-separated keywords (substring, or glob if a keyword has * ? [)")
 	spaceDestinationsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
-	spaceDestinationsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as csv; switches json/toon to a flat {rows:[...]} view too). Not supported with --full")
-	spaceDestinationsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to a flat {rows:[...]} view too. Not supported with --full")
+	spaceDestinationsCmd.Flags().String("fields", "", "Comma-separated column names to limit output to, in the order given (org_id, org_name, space_id, space_name, or any destination property name exactly as the API casing has it); switches json/toon to a flat {rows:[...]} view too")
+	spaceDestinationsCmd.Flags().String("sort-by", "", "Comma-separated column names to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to a flat {rows:[...]} view too")
 	spaceDestinationsCmd.GroupID = "destination"
 	rootCmd.AddCommand(spaceDestinationsCmd)
 

@@ -132,12 +132,17 @@ they're logged in.
 
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
   `org-users`, `org-space-users`, `users`, `apps`, `roles`, `role-collections`,
-  `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
-  `html5-apps`, `count-lines`, `service-credentials` (this one outputs raw secrets — see
-  "Handling commands that output secrets" below before using it),
-  `service-instances`, `service-keys` (both are read-only by default, but
-  `--full` fetches and prints live credentials on each — see "Handling
-  commands that output secrets" below before using `--full`).
+  `describe-subaccount`, `html5-apps`, `count-lines`, `service-credentials`
+  (this one outputs raw secrets — see "Handling commands that output
+  secrets" below before using it), `service-instances`, `service-keys`
+  (both are read-only by default, but `--full` fetches and prints live
+  credentials on each — see "Handling commands that output secrets" below
+  before using `--full`), `space-destinations`, `subaccount-destinations`,
+  and `destinations` (all three always include every destination property —
+  including live secrets such as Password/ClientSecret — unredacted by
+  default, with no `--full` flag to opt out of it; see "Handling commands
+  that output secrets" below, and narrow with `--fields` to just the
+  columns you need, e.g. `Name,URL`, when you don't need the credentials).
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
@@ -422,15 +427,18 @@ ones in full, unmasked, since that's exactly what `update-apps-env` needs
 to recreate them on a target app (the only variable it ever excludes is
 `DEPLOY_ATTRIBUTES`, deploy-tooling noise rather than a real secret) —
 `create-service-keys` creates service keys and fetches their credentials,
-and `service-instances --full` /
-`service-keys --full` fetch and include each matched (user-provided
-instance's or key's) existing credentials — passwords, client secrets,
-certificates, the lot — printing them as plain JSON/TOON/CSV.
-`service-credentials`, `apps --include-env`, and `service-instances`/
-`service-keys` even with `--full`, are read-only (nothing in BTP changes),
-while `create-service-keys` is a write command that also happens to output
-secrets; the same `service-credentials.json` shape is also what `create-ups`
-later reads as input, and `apps --include-env`'s output is what
+`service-instances --full` / `service-keys --full` fetch and include each
+matched (user-provided instance's or key's) existing credentials, and
+`space-destinations`/`subaccount-destinations`/`destinations` always
+include every destination property unredacted by default — there's no
+`--full` flag on these three, so there's nothing to opt out of — passwords,
+client secrets, certificates, the lot — printing them as plain JSON/TOON/CSV.
+`service-credentials`, `apps --include-env`, `service-instances`/
+`service-keys` even with `--full`, and `space-destinations`/
+`subaccount-destinations`/`destinations`, are all read-only (nothing in BTP
+changes), while `create-service-keys` is a write command that also happens
+to output secrets; the same `service-credentials.json` shape is also what
+`create-ups` later reads as input, and `apps --include-env`'s output is what
 `update-apps-env` (see guardrail #15 above) later reads as input. Treat all
 of this as sensitive:
 
@@ -446,8 +454,10 @@ of this as sensitive:
   silent about it.
 - Narrow with `--services`/`--spaces`/`--apps` (on `service-credentials`),
   `--spaces`/`--service-instances` (on `create-service-keys` and
-  `service-instances`), or `--spaces`/`--service-instances`/`--service-keys`
-  (on `service-keys`) to the minimum needed, and only pass `--full` on
+  `service-instances`), `--spaces`/`--service-instances`/`--service-keys`
+  (on `service-keys`), or `--fields` (on `space-destinations`/
+  `subaccount-destinations`/`destinations`, e.g. `--fields Name,URL` to skip
+  every credential column) to the minimum needed, and only pass `--full` on
   `service-instances`/`service-keys` (or `--include-env` on `apps`) when you
   actually need the credentials — omit it for a plain metadata inventory.
 
@@ -462,8 +472,10 @@ bo orgs --include prod --format csv -o prod-orgs.csv
 # User Access Review export across those orgs
 bo users --orgs prod-orgs.csv --format uar.csv -o uar-export.csv
 
-# Destinations matching a keyword or glob, across the same scope
-bo subaccount-destinations --orgs prod-orgs.csv --include "API*PP" --format csv
+# Destinations matching a keyword or glob, across the same scope — --fields
+# keeps this to non-sensitive columns (see "Handling commands that output
+# secrets" above; omit --fields only when you actually need the credentials)
+bo subaccount-destinations --orgs prod-orgs.csv --include "API*PP" --format csv --fields Name,URL
 
 # Extract hana credentials for *-srv apps in the prod space, to a file —
 # see "Handling service-credentials output" above before running this
@@ -495,8 +507,8 @@ bo delete-org-space-users targets.csv --include sap.default -y             # aft
 ### Sync destinations across orgs (highest caution — no confirm step exists)
 
 ```bash
-bo subaccount-destinations --orgs target-orgs.csv --format json   # current state
-# show dests.json's contents to the user before proceeding
+bo subaccount-destinations --orgs target-orgs.csv --format json -o dests.json  # current state (now contains live secrets — see "Handling commands that output secrets" above; don't paste its contents into the conversation)
+# show the user where dests.json landed so they can review it themselves before proceeding
 bo update-subaccount-destinations --orgs target-orgs.csv --destinations dests.json --no-prompt
 ```
 

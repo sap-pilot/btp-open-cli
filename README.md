@@ -145,6 +145,7 @@ mv bo ~/.local/bin/   # optional
 | [`create-space-destinations`](#create-space-destinations) | Create instance-level destinations in all destination service instances of a CF space |
 | [`update-space-destinations`](#update-space-destinations) | Update instance-level destinations in all destination service instances of a CF space |
 | [`delete-space-destinations`](#delete-space-destinations) | Delete named instance-level destinations from all destination service instances of a CF space |
+| [`destinations`](#destinations) | List both subaccount-level and instance-level destinations for the target orgs |
 
 ### Subaccount Automation
 
@@ -1229,22 +1230,17 @@ List all instance-level destinations across every destination service instance f
 The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry, type 's' to skip that instance, or Ctrl-C to abort.
 
 ```bash
-# List destinations for one space — default output: Name, URL, sap-client (TOON)
+# List destinations for one space — default output: every property (TOON)
 bo space-destinations --space <space-guid>
 
 # Omit --space to scan every accessible space across every org instead
 bo space-destinations
 
-# JSON output (Name, URL, sap-client)
+# JSON output
 bo space-destinations --space <space-guid> --format json
 
-# CSV output (org_id, org_name, space_id, space_name, destination_service_name,
-# destination_name, destination_url, destination_sap_client)
+# CSV output
 bo space-destinations --space <space-guid> --format csv
-
-# All destination properties as a flat object (TOON or JSON)
-bo space-destinations --space <space-guid> --full
-bo space-destinations --space <space-guid> --full --format json
 
 # Only include destinations where any property contains any of these
 # comma-separated keywords (substring, case-insensitive)
@@ -1257,9 +1253,6 @@ bo space-destinations --space <space-guid> --include "API*PP"
 # Exclude destinations where any property contains any of these keywords
 bo space-destinations --space <space-guid> --exclude sandbox,test
 
-# Combine: full properties + include
-bo space-destinations --space <space-guid> --full --include "API*PP"
-
 # Scope region search
 bo space-destinations --space <space-guid> --regions us10,us20,eu10
 
@@ -1268,15 +1261,15 @@ bo space-destinations --space <space-guid> --regions us10,us20,eu10
 bo space-destinations -o all-space-destinations.csv
 
 # Limit output to just these columns, in this order, for any --format
-# (switches json/toon to the flat {rows:[...]} view too; not with --full)
-bo space-destinations --fields space_name,destination_name,destination_url
+bo space-destinations --fields space_name,Name,URL
 
-# Sort by one or more columns, in priority order (":desc" for descending;
-# also switches json/toon to the flat view; not with --full)
-bo space-destinations --sort-by space_name,destination_name
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo space-destinations --sort-by space_name,Name
 ```
 
-Default TOON output (without `--full`) — `org_id`/`org_name` identify the space's org, and each destination carries its own `destination_service_id`/`destination_service_name` since destinations are flattened directly under their space rather than grouped by instance:
+Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+Default TOON output — `org_id`/`org_name` identify the space's org, and each destination carries its own `destination_service_id`/`destination_service_name` since destinations are flattened directly under their space rather than grouped by instance:
 ```
 org_id: <org-guid>
 org_name: my-org
@@ -1287,29 +1280,19 @@ spaces:
       - Name: API_S4_HTTP_PP
         URL: http://qr1:443
         sap-client: "100"
-        destination_service_id: <instance-guid>
-        destination_service_name: my-dest-service
-      - Name: API_MDG_HTTP_PP
-        URL: http://qrg:443
-        sap-client: "100"
+        Authentication: NoAuthentication
+        Type: HTTP
         destination_service_id: <instance-guid>
         destination_service_name: my-dest-service
 ```
 
 With `--space` omitted and more than one org turns up a result, `--format json` returns a plain JSON array of these per-org objects instead of a single one, and `--format toon` wraps them as `{orgs: [...]}` — same convention as [`subaccount-destinations`](#subaccount-destinations). Orgs/spaces with no matching destinations are left out of this all-spaces result entirely; with `--space` given, that one target space is always included in the result, even when it has no destinations.
 
-CSV output (`--format csv`, without `--full`) — columns: `org_id,org_name,space_id,space_name,destination_service_name,destination_name,destination_url,destination_sap_client`:
-```
-org_id,org_name,space_id,space_name,destination_service_name,destination_name,destination_url,destination_sap_client
-<org-guid>,my-org,<space-guid>,dev,my-dest-service,API_S4_HTTP_PP,http://qr1:443,100
-<org-guid>,my-org,<space-guid>,dev,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
-```
+`--format csv` gives a flat CSV, one row per destination: `org_id`, `org_name`, `space_id`, and `space_name` lead, followed by every property key that appears anywhere in the result set (sorted alphabetically, already including `destination_service_id`/`destination_service_name`), so the column set reflects whatever destinations were actually returned.
 
-With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is (plus the same `destination_service_id`/`destination_service_name`) — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV, `--fields`, and `--sort-by` are not supported with `--full`, since a destination's properties aren't a fixed set of columns in that mode.
+Use `--fields <column,...>` (comma-separated, in the order given — `org_id`, `org_name`, `space_id`, `space_name`, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns instead — switches `json`/`toon` to that same flat `{"rows": [...]}` view too (map keys in that JSON/TOON view marshal in their own alphabetical order regardless of `--fields`' order; only CSV's column order follows it exactly).
 
-Use `--fields <column,...>` (case-insensitive, comma-separated, any of the CSV columns above, in the order given) to limit output to just those columns — switches `json`/`toon` to that same flat `{"rows": [...]}` view too.
-
-Use `--sort-by <column,...>` to sort rows by one or more of those same columns, each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `destination_name` within each space.
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `Name` within each space.
 
 ⚠️ **Omitting `--space` scans every accessible space across every org** — on a large foundation this can be slow and will interactively prompt (once per instance, see above) for every destination service instance with no service key, unless you narrow scope with `--regions` or target a specific space with `--space`.
 
@@ -1370,6 +1353,55 @@ bo delete-space-destinations --space <space-guid> --destinations ./destinations.
 
 Only the `Name` field is read from the JSON file; all other properties are ignored.
 
+### `destinations`
+
+List both subaccount-level and instance-level destinations for the target org(s) in one combined result — the view [`subaccount-destinations`](#subaccount-destinations) and [`space-destinations`](#space-destinations) each give separately.
+
+For each target org: subaccount-level destinations are fetched via any destination service instance found in the org, and instance-level destinations are fetched from every destination service instance in every space of the org (or just the spaces named by `--spaces`). Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used.
+
+```bash
+# Combined destinations for the default org scope — TOON output
+bo destinations
+
+# A specific org, JSON or CSV output
+bo destinations --org <org-guid-or-name> --format json
+bo destinations --org <org-guid-or-name> --format csv
+
+# Narrow instance-level destinations to specific spaces (doesn't affect
+# subaccount-level destinations, which aren't tied to any space)
+bo destinations --org <org-guid-or-name> --spaces dev,qa
+
+# Only include destinations where any property contains any of these
+# comma-separated keywords (substring, or glob if a keyword has * ? [)
+bo destinations --org <org-guid-or-name> --include MDG
+bo destinations --org <org-guid-or-name> --exclude sandbox,test
+
+# Limit output to just these columns, in this order, for any --format
+bo destinations --org <org-guid-or-name> --fields space_name,instance_name,Name,URL
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo destinations --org <org-guid-or-name> --sort-by space_name,Name
+
+# Write output to a file instead of stdout; --format is auto-detected from
+# -o's extension (.json, .csv, .toon) when not explicitly given
+bo destinations --org <org-guid-or-name> --output dests.csv
+```
+
+The result is a flat list, one row per destination: `org_id`, `org_name`, `space_id`, `space_name`, `instance_id`, and `instance_name` lead (`space_id`/`space_name`/`instance_id`/`instance_name` are empty for a subaccount-level destination, since it isn't tied to any one space or instance), followed — for `--format csv` — by every property key that appears anywhere in the result set, sorted alphabetically. `json`/`toon` output the same flat `{"rows": [...]}` list, each row an object carrying only its own properties plus the leading columns.
+
+CSV example (one subaccount-level row, one instance-level row):
+```
+org_id,org_name,space_id,space_name,instance_id,instance_name,Name,URL,...
+<org-guid>,my-org,,,,,API_S4_HTTP_PP,http://qr1:443,...
+<org-guid>,my-org,<space-guid>,dev,<instance-guid>,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,...
+```
+
+Use `--fields <column,...>` (comma-separated, in the order given — any of the leading columns above, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `org_name`, then `space_name` (subaccount-level rows sort first, having an empty `space_name`), then `Name`.
+
 ### `subaccount-destinations`
 
 List all subaccount-level destinations using any destination service instance found in the target org.
@@ -1384,7 +1416,7 @@ first or pass `--org`/`--orgs` directly. With more than one target org,
 `--format json`/`toon` returns a list of per-org results instead of a single object.
 
 ```bash
-# List subaccount destinations (default: Name, URL, sap-client) — TOON output
+# List subaccount destinations (every property) — TOON output
 bo subaccount-destinations --org <org-guid-or-name>
 
 # Every org in the default scope selected via `bo orgs`
@@ -1393,12 +1425,8 @@ bo subaccount-destinations
 # JSON output
 bo subaccount-destinations --org <org-guid-or-name> --format json
 
-# CSV output (org_name, destination_name, destination_url, destination_sap_client)
+# CSV output
 bo subaccount-destinations --org <org-guid-or-name> --format csv
-
-# All destination properties as a flat object (TOON or JSON)
-bo subaccount-destinations --org <org-guid-or-name> --full
-bo subaccount-destinations --org <org-guid-or-name> --full --format json
 
 # Only include destinations where any property contains any of these
 # comma-separated keywords (substring, case-insensitive)
@@ -1424,15 +1452,15 @@ bo subaccount-destinations --orgs target-orgs.csv
 bo subaccount-destinations --org <org-guid-or-name> --output dests.json --format json
 
 # Limit output to just these columns, in this order, for any --format
-# (switches json/toon to the flat {rows:[...]} view too; not with --full)
-bo subaccount-destinations --org <org-guid-or-name> --fields destination_name,destination_url
+bo subaccount-destinations --org <org-guid-or-name> --fields Name,URL
 
-# Sort by one or more columns, in priority order (":desc" for descending;
-# also switches json/toon to the flat view; not with --full)
-bo subaccount-destinations --org <org-guid-or-name> --sort-by destination_name:desc
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo subaccount-destinations --org <org-guid-or-name> --sort-by Name:desc
 ```
 
-Default TOON output (without `--full`):
+Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+Default TOON output:
 ```
 org_id: <org-guid>
 org_name: my-org
@@ -1440,19 +1468,15 @@ destinations:
   - Name: API_S4_HTTP_PP
     URL: http://qr1:443
     sap-client: "100"
-  - Name: API_MDG_HTTP_PP
-    URL: http://qrg:443
-    sap-client: "100"
+    Authentication: NoAuthentication
+    Type: HTTP
 ```
 
-CSV output (`--format csv`, without `--full`) — columns: `org_name,destination_name,destination_url,destination_sap_client`:
-```
-org_name,destination_name,destination_url,destination_sap_client
-my-org,API_S4_HTTP_PP,http://qr1:443,100
-my-org,API_MDG_HTTP_PP,http://qrg:443,100
-```
+`--format csv` gives a flat CSV, one row per destination: `org_id` and `org_name` lead, followed by every property key that appears anywhere in the result set (sorted alphabetically), so the column set reflects whatever destinations were actually returned.
 
-With `--full`, each destination is a flat object containing **all** properties returned by the destination service API exactly as-is — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
+Use `--fields <column,...>` (comma-separated, in the order given — `org_id`, `org_name`, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns instead — switches `json`/`toon` to that same flat `{"rows": [...]}` view too (map keys in that JSON/TOON view marshal in their own alphabetical order regardless of `--fields`' order; only CSV's column order follows it exactly).
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `Name` within each org.
 
 ### `create-subaccount-destinations`
 
