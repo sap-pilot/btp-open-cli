@@ -239,11 +239,23 @@ only `bo login`/`bo logoff` clear it.
 If an org-aware command is run with no `--org`/`--orgs` and no default scope has
 been set yet, it prints an error telling you to run `bo orgs` first.
 
+**`--select <pattern>` picks matching orgs and sets the default scope with no
+prompt at all — meant for batch scripts.** Unlike `--all` (which still checks
+for a TTY before it would otherwise show the picker), `--select` never
+touches the terminal. `pattern` is a comma-separated, case-insensitive
+keyword list — same convention as `--include`/`--exclude` — but matched
+against both `org_name` *and* `org_id`, so a script can target an exact org
+by GUID as reliably as by name substring. It's applied after
+`--include`/`--exclude` filtering, takes precedence over `--all` when both
+are given, and errors out if nothing matches rather than silently clearing
+the scope.
+
 **`--output`/`-o` writes to a file and skips the picker entirely.** Rather than
 writing the *selected* scope, passing `--output` makes `bo orgs` print the
 full list of accessible orgs (after `--include`/`--exclude` filtering)
-straight to that file, with no prompting and no waiting for input — `--all`
-is ignored in this mode, and the default org scope is left untouched.
+straight to that file, with no prompting and no waiting for input — both
+`--all` and `--select` are ignored in this mode, and the default org scope
+is left untouched.
 `--format` is only valid together with `--output`, since without a file the
 command's output is the interactive picker itself, not a listing one of
 these formats could represent. If `--format` is not explicitly given, it is
@@ -265,6 +277,11 @@ bo orgs --exclude sandbox,test
 
 # Specific regions
 bo orgs --regions us10,us20,eu10
+
+# Batch-script friendly: switch the default org scope non-interactively by
+# name or org_id, no TTY required, selection echoed to stdout
+bo orgs --select prod-org
+bo orgs --select <org-guid>
 
 # Non-interactive: dump every accessible org straight to a file, skipping
 # the picker — shell '>' doesn't work here since the interactive picker

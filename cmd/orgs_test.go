@@ -184,6 +184,130 @@ func TestOrgs_IncludeCSVKeywords(t *testing.T) {
 	}
 }
 
+// TestOrgs_SelectByName verifies --select matches by org_name, skips the
+// interactive picker with no TTY required, echoes the selection, and
+// persists it as the default org scope — the batch-script path.
+func TestOrgs_SelectByName(t *testing.T) {
+	twoOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": twoOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--select", "prod")
+	if err != nil {
+		t.Fatalf("orgs --select failed: %v", err)
+	}
+	if !strings.Contains(stdout, "prod-org") {
+		t.Errorf("expected prod-org in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev-org") {
+		t.Errorf("dev-org should not have been selected, got: %q", stdout)
+	}
+
+	creds, err := store.Load()
+	if err != nil {
+		t.Fatalf("loading creds: %v", err)
+	}
+	if len(creds.DefaultOrgScope) != 1 || creds.DefaultOrgScope[0].Name != "prod-org" {
+		t.Errorf("expected default scope to be set to prod-org, got: %+v", creds.DefaultOrgScope)
+	}
+}
+
+// TestOrgs_SelectByID verifies --select also matches against org_id, not
+// just org_name.
+func TestOrgs_SelectByID(t *testing.T) {
+	twoOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": twoOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--select", "g2")
+	if err != nil {
+		t.Fatalf("orgs --select by id failed: %v", err)
+	}
+	if !strings.Contains(stdout, "dev-org") {
+		t.Errorf("expected dev-org (matched by id g2) in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "prod-org") {
+		t.Errorf("prod-org should not have been selected, got: %q", stdout)
+	}
+}
+
+// TestOrgs_SelectCSVKeywords verifies --select accepts a comma-separated
+// keyword list, same convention as --include/--exclude.
+func TestOrgs_SelectCSVKeywords(t *testing.T) {
+	threeOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "staging-org"},
+			{"guid": "g3", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": threeOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--select", "prod,staging")
+	if err != nil {
+		t.Fatalf("orgs --select with keyword list failed: %v", err)
+	}
+	if !strings.Contains(stdout, "prod-org") || !strings.Contains(stdout, "staging-org") {
+		t.Errorf("expected prod-org and staging-org in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev-org") {
+		t.Errorf("dev-org should not have been selected, got: %q", stdout)
+	}
+}
+
+// TestOrgs_SelectNoMatches verifies --select errors clearly when nothing
+// matches, rather than silently clearing the default org scope.
+func TestOrgs_SelectNoMatches(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("g1", "my-org"),
+	})
+	setupTestEnv(t, srv.URL)
+
+	_, _, err := runCmd(t, "orgs", "--select", "nonexistent")
+	if err == nil {
+		t.Fatal("expected error when no orgs match --select")
+	}
+	if !strings.Contains(err.Error(), "--select") {
+		t.Errorf("expected error to mention --select, got: %v", err)
+	}
+}
+
+// TestOrgs_SelectTakesPrecedenceOverAll verifies --select narrows the
+// selection even when --all is also given.
+func TestOrgs_SelectTakesPrecedenceOverAll(t *testing.T) {
+	twoOrgs := mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]string{
+			{"guid": "g1", "name": "prod-org"},
+			{"guid": "g2", "name": "dev-org"},
+		},
+	})
+	srv := fakeCFServer(t, map[string]string{"/v3/organizations": twoOrgs})
+	setupTestEnv(t, srv.URL)
+
+	stdout, _, err := runCmd(t, "orgs", "--all", "--select", "prod")
+	if err != nil {
+		t.Fatalf("orgs --all --select failed: %v", err)
+	}
+	if strings.Contains(stdout, "dev-org") {
+		t.Errorf("--select should take precedence over --all, got: %q", stdout)
+	}
+}
+
 func TestOrgs_Exclude(t *testing.T) {
 	twoOrgs := mustJSONStr(map[string]interface{}{
 		"pagination": map[string]interface{}{"total_pages": 1},

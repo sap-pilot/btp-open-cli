@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.22.0 — 2026-11-19
+
+### Added
+
+- **`orgs --select <pattern>` — switch the default org scope non-interactively**
+
+  Selects every accessible org whose `org_name` or `org_id` matches `pattern` (a comma-separated, case-insensitive keyword list — same convention as `--include`/`--exclude`, but also checked against `org_id`), sets them as the session's default org scope, and echoes the selection — all without the interactive picker and with no TTY requirement at all, unlike `--all`. Meant for batch scripts that need to switch org scope unattended, including by exact org GUID. Applied after `--include`/`--exclude` filtering, takes precedence over `--all` when both are given, and errors out if nothing matches.
+
 ## v0.21.0 — 2026-11-18
 
 ### Added

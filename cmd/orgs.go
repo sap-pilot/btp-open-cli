@@ -129,6 +129,16 @@ Use --include/--exclude to narrow which orgs appear in the picker (or get
 auto-selected with --all): each accepts a comma-separated list of keywords,
 and an org matches if org_name contains any of them (case-insensitive).
 
+Use --select <pattern> to pick matching orgs and set them as the default org
+scope with no prompting at all — not even --all's interactive-skip-but-still-
+a-TTY-check, since --select never touches the terminal. This is meant for
+batch scripts that need to switch org scope unattended: pattern is a
+comma-separated list of case-insensitive keywords, same convention as
+--include/--exclude, but matched against both org_name and org_id (so a
+script can select by exact org GUID as reliably as by name substring).
+--select is applied after --include/--exclude filtering, takes precedence
+over --all when both are given, and errors if nothing matches.
+
 The selection is saved to ~/.bo/credentials.json and applies only to the
 current login session: running 'bo login' or 'bo logoff' clears it, and you
 will be prompted to run 'bo orgs' again (or pass --org/--orgs) the next time
@@ -139,9 +149,10 @@ you can tweak the scope instead of starting over — only login/logoff clear it.
 Use --output/-o to write this listing to a file instead of stdout — shell '>'
 redirection won't work here since the interactive picker also writes to
 stdout. When --output is given, the interactive picker is skipped entirely
-(no prompting, no waiting on user input, and --all is ignored): the full
-list of accessible orgs (after --include/--exclude filtering) is written
-straight to the file, and the default org scope is left untouched.
+(no prompting, no waiting on user input, and both --all and --select are
+ignored): the full list of accessible orgs (after --include/--exclude
+filtering) is written straight to the file, and the default org scope is
+left untouched.
 
 Output formats (--format), columns/fields ordered region, org_name, org_id
 to match the picker. --format is only valid together with --output, since
@@ -165,6 +176,7 @@ If --regions is omitted the regions from the last login are used.`,
 		includePattern, _ := cmd.Flags().GetString("include")
 		excludePattern, _ := cmd.Flags().GetString("exclude")
 		allOrgs, _ := cmd.Flags().GetBool("all")
+		selectPattern, _ := cmd.Flags().GetString("select")
 		outputFile, _ := cmd.Flags().GetString("output")
 
 		if outputFile == "" && cmd.Flags().Changed("format") {
@@ -240,9 +252,22 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 
 		var selected []orgChoice
-		if allOrgs {
+		switch {
+		case selectPattern != "":
+			// Non-interactive, no-TTY-required selection for batch scripts:
+			// matches both org_name and org_id, unlike --include/--exclude
+			// (name only), so a script can target an exact org by GUID.
+			for _, c := range candidates {
+				if skipMatches(selectPattern, c.Name, c.ID) {
+					selected = append(selected, c)
+				}
+			}
+			if len(selected) == 0 {
+				return fmt.Errorf("no orgs match the given --select pattern")
+			}
+		case allOrgs:
 			selected = candidates
-		} else {
+		default:
 			// Reflect the org scope selected earlier in this login session (if
 			// any) as the picker's starting selection, so re-running `bo orgs`
 			// is a tweak rather than starting over. This is cleared only by
@@ -340,5 +365,6 @@ func init() {
 	orgsCmd.Flags().String("include", "", "Only show/select orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().Bool("all", false, "Select every matching org without prompting for interactive selection")
+	orgsCmd.Flags().String("select", "", "Select orgs matching this comma-separated, case-insensitive pattern (matched against org_name or org_id) and set them as the default org scope with no prompt at all — for batch scripts; takes precedence over --all, ignored when --output is given")
 	orgsCmd.Flags().StringP("output", "o", "", "Write the list of accessible orgs to this file, skipping the interactive picker")
 }
