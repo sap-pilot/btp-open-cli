@@ -30,7 +30,7 @@ A common audit question is "what's different between these two subaccounts?" —
 
    ```bash
    bo apps --include-env --include-labels --output=us10-pre-apps-full.csv
-   bo destinations --no-key-option=create --output=us10-pre-dest-full.csv
+   bo destinations --no-key-option=create --output=us10-pre-dest-full.json
    bo html5-apps --no-runtime-option=create --no-key-option=create --output=us10-pre-html5-full.csv
    ```
 
@@ -45,12 +45,14 @@ A common audit question is "what's different between these two subaccounts?" —
 5. **Narrow each down to just the comparable columns:**
 
    ```bash
-   bo sort --fields=space_name,app_mta_id,app_name us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
-   bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us10-pre-dest-full.csv --output=us10-pre-dest-sorted.csv
+   bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
+   bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us10-pre-dest-full.json --output=us10-pre-dest-sorted.json
    bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us10-pre-html5-full.csv --output=us10-pre-html5-sorted.csv
    ```
 
-   > `--by` isn't needed here: with `--fields` given and no `--by`, [`bo sort`](../README.md#sort) sorts by `--fields`' own fields, in that order — exactly the columns you just narrowed down to.
+   > `app_labels.mta_id` is a standard label for BTP mta hash; comparing it will tell whether the deployed mta/app are the same. 
+   > 
+   > On the other hand custom labels - `app_labels.mta_version` and `app_labels.commit_id` can be defined via `cf set-label app <myapp> mta_version=<extract_version_from_mta.yaml>` and `cf set-label app <myapp> commit_id=<extract_repo_commit_id>` after mta/apps deployment
 
 6. **Select the second subaccount and repeat steps 3–5:**
 
@@ -59,19 +61,23 @@ A common audit question is "what's different between these two subaccounts?" —
    #   > 01 [ ] us10/us10-pre (a1b2c3d4-...)
    #     02 [x] us20/us20-pre (e5f6g7h8-...)
    #   Default org scope set to 1 org(s) for this login session.
+   ```
 
+   ```bash
    bo apps --include-env --include-labels --output=us20-pre-apps-full.csv
-   bo destinations --no-key-option=create --output=us20-pre-dest-full.csv
+   bo destinations --no-key-option=create --output=us20-pre-dest-full.json
    bo html5-apps --no-runtime-option=create --no-key-option=create --output=us20-pre-html5-full.csv
    # (optional edits, same as step 4)
-   bo sort --fields=space_name,app_mta_id,app_name us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
-   bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us20-pre-dest-full.csv --output=us20-pre-dest-sorted.csv
+   bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
+   bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us20-pre-dest-full.json --output=us20-pre-dest-sorted.json
    bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us20-pre-html5-full.csv --output=us20-pre-html5-sorted.csv
    ```
 
 7. **Compare each pair of sorted files** — in VS Code (open both, right-click one → *Select for Compare*, right-click the other → *Compare with Selected*) or SAP Business Application Studio (same VS Code-based diff). Anything shown is either missing from one side or genuinely different between them.
 
-## Apps
+## Additional Notes
+
+### Apps
 
 `--include-env` adds the `app_env` column (each app's own user-provided environment variables, JSON-encoded) and requires at least Space Developer access to each app's space — this is sensitive output, see the README's note on `--include-env` before sharing this file. `--include-labels` adds the `app_labels` column (each app's current CF metadata labels, JSON-encoded, fetched via one extra API call per app) — not sensitive output, unlike `--include-env`. The `--fields` list in step 5 above keeps `app_labels` but drops `app_env` from the final sorted/compared file — add `app_env` back to that list too if you also want environment variables in the comparison.
 
@@ -84,21 +90,42 @@ prod,myapp,myapp-srv,"{""team"":""payments""}"
 prod,myapp,myapp-ui,"{}"
 ```
 
-## Destinations
+### Destinations
 
 ⚠️ **`bo destinations` always includes every destination property unredacted by default — including live secrets like `Password` and `ClientSecret`.** There's no `--full`/safe-mode flag to opt out of this (see the README). Treat every file in this section as a secret: don't commit it, don't paste its contents into a chat/ticket, and delete it once you're done comparing.
 
 `space_name`/`instance_name` are empty for a subaccount-level destination (only instance-level ones have a space/instance) — that's expected, not a gap. Destination property names (`Name`, `URL`, `Type`, `Authentication`, `User`, `Password`) are matched exactly as the destination service itself stores them, case-sensitive.
 
-Sample `...-dest-sorted.csv` (passwords below are fictional placeholders, not real secrets):
+Sample `...-dest-sorted.json` (passwords below are fictional placeholders, not real secrets):
 
-```csv
-space_name,instance_name,Name,URL,Type,Authentication,User,Password
-,,API_HUB,https://api.example.com,HTTP,BasicAuthentication,api-user,N0tAReal-P@ss1
-prod,my-dest-svc,S4_BACKEND,https://s4.example.com,HTTP,OAuth2SAMLBearerAssertion,,
+```json
+{
+  "rows": [
+    {
+      "space_name": "",
+      "instance_name": "",
+      "Name": "API_HUB",
+      "URL": "https://api.example.com",
+      "Type": "HTTP",
+      "Authentication": "BasicAuthentication",
+      "User": "api-user",
+      "Password": "N0tAReal-P@ss1"
+    },
+    {
+      "space_name": "prod",
+      "instance_name": "my-dest-svc",
+      "Name": "S4_BACKEND",
+      "URL": "https://s4.example.com",
+      "Type": "HTTP",
+      "Authentication": "OAuth2SAMLBearerAssertion",
+      "User": "",
+      "Password": ""
+    }
+  ]
+}
 ```
 
-## HTML5 apps
+### HTML5 apps
 
 `--no-runtime-option=create --no-key-option=create` automatically create a temporary `html5-apps-repo`/`app-runtime` service instance and/or service key in any space that doesn't already have one, so no space gets silently skipped for lack of one — see the README's `html5-apps` section for the full set of options (`skip`/`create`/`transient`/`abort`) and what each does. Passing both explicitly like this also avoids the interactive `s/c/t/a` prompt that `bo html5-apps` would otherwise show for a missing instance/key.
 
@@ -110,6 +137,47 @@ Sample `...-html5-sorted.csv`:
 space_name,instance_name,sap_cloud_service,application_id,application_name,application_version
 prod,html5-apps-repo-host,com.acme.myapp,com.acme.myapp,My App,1.2.3
 prod,html5-apps-repo-host,com.acme.myapp.admin,com.acme.myapp.admin,My App Admin,1.0.1
+```
+
+### Batch Job Processing
+
+Use `bo orgs --select <org_name_or_id>` to switch orgs without prompt.
+
+Sample script to extract the info for background job or pipeline execution:
+
+```bash
+TODAY=$(date +%Y%m%d)
+
+# update below variables accordingly
+CF_USERNAME="username"
+CF_PASSWORD="password"
+ENV_PREFIX="pre"
+REGION_1="us10"
+REGION_2="us20"
+ORG_1="first-org"
+ORG_2="second-org"
+
+# create and enter a new folder for data extraction
+mkdir "${ENV_PREFIX}-${TODAY}" && cd "${ENV_PREFIX}-${TODAY}"
+
+# make sure to install BO first, see: https://github.com/sap-pilot/btp-open-cli#installation
+bo login --regions "${REGION_1},${REGION_2}" --username "${CF_USERNAME}" --password "${CF_PASSWORD}"
+REGION="${REGION_1}"
+bo orgs --select "${ORG_1}"
+bo apps --include-env --include-labels --output=${REGION}-${ENV_PREFIX}-apps-full.csv
+bo destinations --no-key-option=create --output=${REGION}-${ENV_PREFIX}-dest-full.json
+bo html5-apps --no-runtime-option=create --no-key-option=create --output=${REGION}-${ENV_PREFIX}-html5-full.csv
+bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id ${REGION}-${ENV_PREFIX}-apps-full.csv --output=${REGION}-${ENV_PREFIX}-apps-sorted.csv
+bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password ${REGION}-${ENV_PREFIX}-dest-full.json --output=${REGION}-${ENV_PREFIX}-dest-sorted.json
+bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version ${REGION}-${ENV_PREFIX}-html5-full.csv --output=${REGION}-${ENV_PREFIX}-html5-sorted.csv
+REGION="${REGION_2}"
+bo orgs --select "${ORG_2}"
+bo apps --include-env --include-labels --output=${REGION}-${ENV_PREFIX}-apps-full.csv
+bo destinations --no-key-option=create --output=${REGION}-${ENV_PREFIX}-dest-full.json
+bo html5-apps --no-runtime-option=create --no-key-option=create --output=${REGION}-${ENV_PREFIX}-html5-full.csv
+bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id ${REGION}-${ENV_PREFIX}-apps-full.csv --output=${REGION}-${ENV_PREFIX}-apps-sorted.csv
+bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password ${REGION}-${ENV_PREFIX}-dest-full.json --output=${REGION}-${ENV_PREFIX}-dest-sorted.json
+bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version ${REGION}-${ENV_PREFIX}-html5-full.csv --output=${REGION}-${ENV_PREFIX}-html5-sorted.csv
 ```
 
 ## Command reference
