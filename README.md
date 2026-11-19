@@ -161,6 +161,7 @@ mv bo ~/.local/bin/   # optional
 | [`completion`](#completion) | Generate shell autocompletion script (bash, zsh, fish, PowerShell) |
 | [`count-lines`](#count-lines) | Count total lines of source code files within a folder |
 | [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
+| [`sort`](#sort) | Sort the rows of CSV/JSON file(s) on disk, in place or to a new file |
 
 ### `login`
 
@@ -2303,6 +2304,36 @@ bo clear-logs
 # Skip confirmation prompt
 bo clear-logs -y
 ```
+
+### `sort`
+
+Sorts the rows of one or more CSV or JSON files already on disk — e.g. a file a previous `bo` command wrote with `--output` — rather than talking to BTP/CF at all. Each `file_pattern` argument is a shell-style glob (`*`, `?`, `[...]`) or a literal path, expanded independently and combined (duplicates removed); a pattern matching nothing is only a warning, as long as at least one file is matched overall. The file extension (`.csv` or `.json`) selects how each matched file is read and written; anything else is an error.
+
+A CSV file's header row supplies its column names. A JSON file must decode to either a flat array of objects (`[{...}, {...}, ...]`) or a single-key object wrapping one (e.g. `{"rows": [...]}`, the shape several `bo` commands themselves write) — that wrapping key, if any, is kept on write. A bare JSON array of plain values (not objects) is sorted directly; `--by`/`--fields` don't apply to it.
+
+```bash
+# Sort a CSV in place by every column (no --by given), confirming first
+bo sort users.csv
+
+# Sort several files matched by glob, skipping the overwrite confirmation
+bo sort "exports/*.csv" -y
+
+# Sort by one or more fields, in priority order ("desc" for descending)
+bo sort orgs.json --by region,org_name:desc
+
+# Keep only these fields in the output, dropping every other leaf field
+bo sort orgs.json --fields org_id,org_name
+
+# Write the sorted result to a different file instead of overwriting the input
+# (only valid with exactly one matching file)
+bo sort orgs.csv -o orgs.sorted.csv
+```
+
+Use `--by`/`-b <field[:desc],...>` to sort by one or more fields, in priority order (ties on the first are broken by the next, and so on); suffix a field with `:desc` for descending (`:asc` is the default). Field names are matched exactly (case-sensitive) and aren't validated — a field absent from one file's data just compares as empty there, with no error, so one invocation can cover several files with different columns/fields. Omit `--by` to sort by every available field, ascending, in that format's natural order: a CSV file's header order, or — since JSON object keys carry no reliable order once decoded — alphabetical for JSON (the same convention `bo` already uses elsewhere for dynamic, schema-less rows, e.g. [`destinations`](#destinations)). Each field's values are compared numerically when both sides parse as a number, otherwise as plain text.
+
+Use `--fields`/`-f <field,...>` to keep only those leaf fields in the output, dropping every other leaf field. For CSV, every column is a leaf field, so this is a plain column selector. For JSON, a "leaf" field is one that only ever holds a plain value (string/number/bool/null) across the rows read — a nested object or array is never a leaf field and is always kept regardless of `--fields`, since `--fields` only ever selects among leaf fields. A CSV column `--fields` names that a row doesn't actually have renders as an empty cell; for JSON, naming a field that doesn't exist (or isn't a leaf) in a given row simply has no effect on that row. Omit `--fields` to keep every field. `--fields`' given order is only honored by CSV output (its header is exactly the fields given, in that order) — a JSON object's keys always come out alphabetical, since `encoding/json` doesn't preserve (or accept) any other key order for a map; this is unrelated to `--by`, which sorts rows (not fields) and is unaffected by `--fields` either way.
+
+Without `--output`/`-o`, every matched file is sorted and overwritten in place: unless `-y` is given, a confirmation listing every file about to be overwritten is required first. `--output` instead writes the sorted result to a different file, and only accepts exactly one matched input file (so it's unambiguous which file the output came from).
 
 ### `update`
 
