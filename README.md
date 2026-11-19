@@ -218,8 +218,13 @@ without `--org` or `--orgs`.
 Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
 Controls: up/down to move the highlight, space to toggle the highlighted org,
 type an org's number to jump to and toggle it directly, `a` to select every
-org, `c` to clear the selection, and enter to confirm — or just confirm the
-highlighted org if nothing was checked.
+org, `c` to clear the selection, enter to confirm — or just confirm the
+highlighted org if nothing was checked — and Esc (or Ctrl-C) to abort without
+changing any previously saved selection. When the list is longer than fits on
+screen, it scrolls to fit the terminal's actual height instead of leaving
+duplicate rows behind — PageUp/PageDown (besides up/down past either edge of
+what's visible) scroll a full screen at a time, and a status line reports
+which entries are currently shown.
 
 **The selection applies only to the current login session.** It's saved to
 `~/.bo/credentials.json`, but running `bo login` or `bo logoff` clears it — you'll

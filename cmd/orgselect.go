@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/term"
 
@@ -102,15 +103,24 @@ func orgNumWidth(n int) int {
 
 // selectOrgsInteractive renders a numbered checkbox list of orgs — one per
 // line as "{number} [ ] {region}/{org.name} ({org.id})" — and lets the user
-// navigate with the up/down arrow keys, toggle the highlighted entry with
-// space, type an org's number to jump to and toggle it directly, press 'a'
-// to select every org or 'c' to clear the selection, and confirm with enter.
-// If enter is pressed with nothing checked, the currently highlighted entry
-// is selected. Numbers are zero-padded to a fixed width (1 digit for fewer
-// than 10 orgs, 2 for fewer than 100, 3 otherwise) so a digit sequence of
-// that width unambiguously identifies one entry. preselectedIDs (keyed by
-// org ID) controls which entries start out checked — pass nil for none.
-// Returns the selected orgs in list order.
+// navigate with the up/down arrow keys (or PageUp/PageDown to move a full
+// screen at a time), toggle the highlighted entry with space, type an org's
+// number to jump to and toggle it directly, press 'a' to select every org or
+// 'c' to clear the selection, confirm with enter, or press Esc (or Ctrl-C) to
+// abort — returning an error and leaving any previously saved selection
+// untouched. If enter is pressed with nothing checked, the currently
+// highlighted entry is selected. Numbers
+// are zero-padded to a fixed width (1 digit for fewer than 10 orgs, 2 for
+// fewer than 100, 3 otherwise) so a digit sequence of that width
+// unambiguously identifies one entry. preselectedIDs (keyed by org ID)
+// controls which entries start out checked — pass nil for none. Returns the
+// selected orgs in list order.
+//
+// When the list is longer than fits on screen, only a scrolling window of it
+// is drawn at a time (sized to the terminal's actual height, so nothing
+// scrolls past the top of the screen and leaves duplicate rows behind) —
+// moving the highlight past either edge of that window scrolls it, and a
+// status line reports which entries are currently visible.
 func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselectedIDs map[string]bool) ([]orgChoice, error) {
 	if len(choices) == 0 {
 		return nil, fmt.Errorf("no accessible orgs found")
@@ -142,17 +152,55 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselected
 		}
 	}
 	cursor := 0
-	const headerLines = 2
+	scrollOffset := 0
+	// 2 header lines + 1 status line + 1 trailing blank line, around however
+	// many item rows fit in what's left of the screen.
+	const reservedLines = 4
+
+	visibleRows := len(choices)
+	if _, height, sizeErr := term.GetSize(fd); sizeErr == nil && height > 0 {
+		if v := height - reservedLines; v >= 1 {
+			visibleRows = v
+		} else {
+			visibleRows = 1
+		}
+	}
+	effectiveRows := visibleRows
+	if len(choices) < effectiveRows {
+		effectiveRows = len(choices)
+	}
+	totalLines := effectiveRows + reservedLines
+
+	clampScroll := func() {
+		if cursor < scrollOffset {
+			scrollOffset = cursor
+		}
+		if cursor >= scrollOffset+effectiveRows {
+			scrollOffset = cursor - effectiveRows + 1
+		}
+		if maxOffset := len(choices) - effectiveRows; scrollOffset > maxOffset {
+			scrollOffset = maxOffset
+		}
+		if scrollOffset < 0 {
+			scrollOffset = 0
+		}
+	}
 
 	render := func(first bool) {
+		clampScroll()
 		if !first {
 			// Move the cursor back to the top of the list and clear downward
 			// before redrawing, so the list updates in place.
-			fmt.Fprintf(os.Stdout, "\033[%dA\033[J", len(choices)+headerLines+1)
+			fmt.Fprintf(os.Stdout, "\033[%dA\033[J", totalLines)
 		}
-		fmt.Fprint(os.Stdout, "Select orgs — up/down move, digits jump, space toggle, a=all, c=clear\r\n")
-		fmt.Fprint(os.Stdout, "Enter to confirm (confirms the highlighted org if none are checked):\r\n")
-		for i, c := range choices {
+		moveKeys := "up/down move"
+		if effectiveRows < len(choices) {
+			moveKeys = "up/down/PageUp/PageDown move"
+		}
+		fmt.Fprintf(os.Stdout, "Select orgs — %s, digits jump, space toggle, a=all, c=clear\r\n", moveKeys)
+		fmt.Fprint(os.Stdout, "Enter to confirm (confirms the highlighted org if none are checked), Esc to abort:\r\n")
+		for i := scrollOffset; i < scrollOffset+effectiveRows; i++ {
+			c := choices[i]
 			mark := " "
 			if selected[i] {
 				mark = "x"
@@ -165,28 +213,60 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselected
 				fmt.Fprintf(os.Stdout, "  %s\r\n", line)
 			}
 		}
+		if effectiveRows < len(choices) {
+			fmt.Fprintf(os.Stdout, "— showing %d-%d of %d —\r\n", scrollOffset+1, scrollOffset+effectiveRows, len(choices))
+		} else {
+			fmt.Fprint(os.Stdout, "\r\n")
+		}
 		fmt.Fprint(os.Stdout, "\r\n")
 	}
 	render(true)
 
+	// One persistent background reader feeds every byte stdin produces onto
+	// inputCh — readByte/readByteTimeout only ever select against it, so
+	// there's never more than one goroutine calling reader.ReadByte() at a
+	// time (spawning a fresh one per call, as readByteTimeout's timeout path
+	// would need, would race two concurrent reads on the same bufio.Reader).
 	reader := bufio.NewReader(os.Stdin)
-	readByte := func() (byte, error) {
-		type result struct {
-			b   byte
-			err error
-		}
-		ch := make(chan result, 1)
-		go func() {
+	type readResult struct {
+		b   byte
+		err error
+	}
+	inputCh := make(chan readResult)
+	go func() {
+		for {
 			b, err := reader.ReadByte()
-			ch <- result{b, err}
-		}()
+			inputCh <- readResult{b, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	readByte := func() (byte, error) {
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
-		case r := <-ch:
+		case r := <-inputCh:
 			return r.b, r.err
 		}
 	}
+	// readByteTimeout waits up to d for the next byte; ok is false if none
+	// arrived in time (used to tell a lone Esc keypress — nothing follows
+	// it — apart from the Esc that leads every arrow/PageUp/PageDown escape
+	// sequence, whose remaining bytes arrive in the same burst).
+	readByteTimeout := func(d time.Duration) (b byte, ok bool, err error) {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		case r := <-inputCh:
+			return r.b, true, r.err
+		case <-timer.C:
+			return 0, false, nil
+		}
+	}
+	const escSequenceTimeout = 50 * time.Millisecond
 
 	var digitBuf []byte
 
@@ -238,24 +318,57 @@ func selectOrgsInteractive(ctx context.Context, choices []orgChoice, preselected
 				digitBuf = digitBuf[:0]
 			}
 			render(false)
-		case b == 27: // ESC — start of an arrow-key escape sequence
+		case b == 27: // Esc alone aborts; Esc '[' starts an arrow/page escape sequence
 			digitBuf = digitBuf[:0]
-			b2, err := readByte()
-			if err != nil || b2 != '[' {
+			b2, ok, err := readByteTimeout(escSequenceTimeout)
+			if err != nil {
+				return nil, fmt.Errorf("aborted")
+			}
+			if !ok {
+				// Nothing followed within the timeout — a lone Esc keypress.
+				return nil, fmt.Errorf("aborted")
+			}
+			if b2 != '[' {
 				continue
 			}
 			b3, err := readByte()
 			if err != nil {
 				continue
 			}
-			switch b3 {
-			case 'A': // up
+			switch {
+			case b3 == 'A': // up
 				if cursor > 0 {
 					cursor--
 				}
-			case 'B': // down
+			case b3 == 'B': // down
 				if cursor < len(choices)-1 {
 					cursor++
+				}
+			case b3 >= '0' && b3 <= '9':
+				// Multi-byte sequence, e.g. "\x1b[5~" (PageUp) / "\x1b[6~"
+				// (PageDown): keep reading until the terminating '~'.
+				seq := []byte{b3}
+				for {
+					b4, err := readByte()
+					if err != nil {
+						break
+					}
+					seq = append(seq, b4)
+					if b4 == '~' {
+						break
+					}
+				}
+				switch string(seq) {
+				case "5~": // Page Up
+					cursor -= effectiveRows
+					if cursor < 0 {
+						cursor = 0
+					}
+				case "6~": // Page Down
+					cursor += effectiveRows
+					if cursor > len(choices)-1 {
+						cursor = len(choices) - 1
+					}
 				}
 			}
 			render(false)
