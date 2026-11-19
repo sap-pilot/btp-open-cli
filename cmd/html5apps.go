@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -25,14 +26,36 @@ import (
 
 // ── output types ──────────────────────────────────────────────────────────────
 
+// html5AppRow mirrors every field GET .../applications/metadata/ is
+// observed to return (see html5apps.Application), plus region (not part of
+// that response) and the destination_* columns (--from-destinations only).
 type html5AppRow struct {
-	Region                     string `json:"region"                         toon:"region"`
-	OrgID                      string `json:"org_id"                         toon:"org_id"`
-	OrgName                    string `json:"org_name"                       toon:"org_name"`
-	SpaceID                    string `json:"space_id"                       toon:"space_id"`
-	SpaceName                  string `json:"space_name"                     toon:"space_name"`
-	AppHostServiceInstanceName string `json:"app_host_service_instance_name" toon:"app_host_service_instance_name"`
-	AppHostServiceInstanceID   string `json:"app_host_service_instance_id"   toon:"app_host_service_instance_id"`
+	Region string `json:"region" toon:"region"`
+
+	ApplicationID      string `json:"application_id"      toon:"application_id"`
+	ApplicationName    string `json:"application_name"    toon:"application_name"`
+	ApplicationVersion string `json:"application_version" toon:"application_version"`
+	ApplicationType    string `json:"application_type"    toon:"application_type"`
+	SapCloudService    string `json:"sap_cloud_service"   toon:"sap_cloud_service"`
+	UITechnology       string `json:"ui_technology"        toon:"ui_technology"`
+	Public             bool   `json:"public"               toon:"public"`
+	IsDefault          bool   `json:"is_default"           toon:"is_default"`
+	ChangedOn          string `json:"changed_on"           toon:"changed_on"`
+	CreatedOn          string `json:"created_on"           toon:"created_on"`
+
+	OrganizationID   string `json:"organization_id"   toon:"organization_id"`
+	OrganizationName string `json:"organization_name" toon:"organization_name"`
+	SpaceID          string `json:"space_id"          toon:"space_id"`
+	SpaceName        string `json:"space_name"        toon:"space_name"`
+	SubaccountID     string `json:"subaccount_id"     toon:"subaccount_id"`
+	ZoneID           string `json:"zone_id"           toon:"zone_id"`
+	Subdomain        string `json:"subdomain"         toon:"subdomain"`
+	GlobalAccountID  string `json:"global_account_id" toon:"global_account_id"`
+
+	InstanceName    string `json:"instance_name"    toon:"instance_name"`
+	AppHostID       string `json:"app_host_id"      toon:"app_host_id"`
+	DeployID        string `json:"deploy_id"        toon:"deploy_id"`
+	ContentProvider bool   `json:"content_provider" toon:"content_provider"`
 
 	// The following three are only populated with --from-destinations: the
 	// destination record itself (DestinationName) and, when it was found at
@@ -42,31 +65,229 @@ type html5AppRow struct {
 	DestinationInstanceName string `json:"destination_instance_name,omitempty" toon:"destination_instance_name,omitempty"`
 	DestinationInstanceID   string `json:"destination_instance_id,omitempty"   toon:"destination_instance_id,omitempty"`
 	DestinationName         string `json:"destination_name,omitempty"          toon:"destination_name,omitempty"`
+}
 
-	ApplicationName    string `json:"application_name"               toon:"application_name"`
-	ApplicationVersion string `json:"application_version"            toon:"application_version"`
-	ChangedOn          string `json:"changed_on"                     toon:"changed_on"`
-	CreatedOn          string `json:"created_on"                     toon:"created_on"`
-	IsDefault          bool   `json:"is_default"                     toon:"is_default"`
-	Public             bool   `json:"public"                         toon:"public"`
+// html5RowFromApplication copies every field the applications/metadata API
+// returned for one application into an output row, adding the region (not
+// part of the API response) and, under --from-destinations, the
+// destination-identifying columns (empty otherwise).
+func html5RowFromApplication(a html5apps.Application, region, destInstanceName, destInstanceID, destName string) html5AppRow {
+	return html5AppRow{
+		Region:             region,
+		ApplicationID:      a.ApplicationID,
+		ApplicationName:    a.ApplicationName,
+		ApplicationVersion: a.ApplicationVersion,
+		ApplicationType:    a.ApplicationType,
+		SapCloudService:    a.SapCloudService,
+		UITechnology:       a.UITechnology,
+		Public:             a.Public,
+		IsDefault:          a.IsDefault,
+		ChangedOn:          a.ChangedOn,
+		CreatedOn:          a.CreatedOn,
+		OrganizationID:     a.OrganizationID,
+		OrganizationName:   a.OrganizationName,
+		SpaceID:            a.SpaceID,
+		SpaceName:          a.SpaceName,
+		SubaccountID:       a.SubaccountID,
+		ZoneID:             a.ZoneID,
+		Subdomain:          a.Subdomain,
+		GlobalAccountID:    a.GlobalAccountID,
+		InstanceName:       a.InstanceName,
+		AppHostID:          a.AppHostID,
+		DeployID:           a.DeployID,
+		ContentProvider:    a.ContentProvider,
+
+		DestinationInstanceName: destInstanceName,
+		DestinationInstanceID:   destInstanceID,
+		DestinationName:         destName,
+	}
 }
 
 type html5AppsDoc struct {
 	Apps []html5AppRow `json:"apps" toon:"apps"`
 }
 
+// html5FieldIDs returns html5AppRow's own JSON field names, in struct
+// declaration order — the canonical column list used for CSV headers, to
+// validate --fields, and as the default (full) field order.
+func html5FieldIDs() []string {
+	t := reflect.TypeOf(html5AppRow{})
+	ids := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		ids = append(ids, strings.Split(t.Field(i).Tag.Get("json"), ",")[0])
+	}
+	return ids
+}
+
+// html5ParseFields validates --fields' comma-separated column IDs
+// case-insensitively against html5FieldIDs(), preserving the order given —
+// that order is then used for CSV's columns and, when narrowing, for the
+// JSON/TOON field order too (see html5BuildFilteredRows). Returns nil
+// (meaning "every field, in canonical order") when raw is empty.
+func html5ParseFields(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	allIDs := html5FieldIDs()
+	valid := make(map[string]string, len(allIDs))
+	for _, id := range allIDs {
+		valid[strings.ToLower(id)] = id
+	}
+	out := make([]string, 0, len(allIDs))
+	for _, f := range splitCSV(raw) {
+		id, ok := valid[strings.ToLower(strings.TrimSpace(f))]
+		if !ok {
+			return nil, fmt.Errorf("invalid --fields value %q: must be one of %s", f, strings.Join(allIDs, ", "))
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// html5SortKey is one --sort-by criterion: a column ID plus direction.
+type html5SortKey struct {
+	ID   string
+	Desc bool
+}
+
+// html5ParseSort validates --sort-by's comma-separated column IDs
+// case-insensitively against html5FieldIDs() (the same columns --fields
+// accepts), preserving the order given as the tie-breaking priority. Each
+// column may be suffixed with ":desc" or ":asc" (":asc" is the default, so
+// it's only useful for clarity). Returns nil (meaning "no explicit
+// --sort-by"; the command's own default order applies) when raw is empty.
+func html5ParseSort(raw string) ([]html5SortKey, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	allIDs := html5FieldIDs()
+	valid := make(map[string]string, len(allIDs))
+	for _, id := range allIDs {
+		valid[strings.ToLower(id)] = id
+	}
+	keys := make([]html5SortKey, 0, len(allIDs))
+	for _, f := range splitCSV(raw) {
+		f = strings.TrimSpace(f)
+		field, dir := f, ""
+		if idx := strings.LastIndex(f, ":"); idx >= 0 {
+			field = strings.TrimSpace(f[:idx])
+			dir = strings.ToLower(strings.TrimSpace(f[idx+1:]))
+		}
+		id, ok := valid[strings.ToLower(field)]
+		if !ok {
+			return nil, fmt.Errorf("invalid --sort-by value %q: must be one of %s, each optionally suffixed with \":desc\" or \":asc\"", f, strings.Join(allIDs, ", "))
+		}
+		var desc bool
+		switch dir {
+		case "", "asc":
+			desc = false
+		case "desc":
+			desc = true
+		default:
+			return nil, fmt.Errorf("invalid --sort-by direction %q for field %q: must be \"asc\" or \"desc\"", dir, id)
+		}
+		keys = append(keys, html5SortKey{ID: id, Desc: desc})
+	}
+	return keys, nil
+}
+
+// html5CompareValues orders two html5FieldValue results of the same field
+// (both strings or both bools; false < true) — <0 if a<b, 0 if equal, >0 if
+// a>b.
+func html5CompareValues(a, b interface{}) int {
+	switch av := a.(type) {
+	case string:
+		bv, _ := b.(string)
+		switch {
+		case av < bv:
+			return -1
+		case av > bv:
+			return 1
+		default:
+			return 0
+		}
+	case bool:
+		bv, _ := b.(bool)
+		switch {
+		case av == bv:
+			return 0
+		case !av && bv:
+			return -1
+		default:
+			return 1
+		}
+	default:
+		return 0
+	}
+}
+
+// html5FieldValue returns r's value for one of html5FieldIDs()' column IDs
+// (a string or a bool), or ok=false if id isn't a field of html5AppRow.
+func html5FieldValue(r html5AppRow, id string) (val interface{}, ok bool) {
+	v := reflect.ValueOf(r)
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		if strings.Split(t.Field(i).Tag.Get("json"), ",")[0] == id {
+			return v.Field(i).Interface(), true
+		}
+	}
+	return nil, false
+}
+
+// html5BuildFilteredRows uses reflect.StructOf to build, at runtime, a
+// struct type containing only fieldIDs (in that order), copying each
+// field's type and original tag from html5AppRow — so JSON/TOON marshaling
+// (which just reflects over whatever value it's given) emits exactly those
+// fields, in that order, the same way --fields narrows CSV's columns.
+func html5BuildFilteredRows(rows []html5AppRow, fieldIDs []string) interface{} {
+	srcType := reflect.TypeOf(html5AppRow{})
+	srcIndexByID := make(map[string]int, srcType.NumField())
+	for i := 0; i < srcType.NumField(); i++ {
+		id := strings.Split(srcType.Field(i).Tag.Get("json"), ",")[0]
+		srcIndexByID[id] = i
+	}
+
+	structFields := make([]reflect.StructField, 0, len(fieldIDs))
+	srcIndexes := make([]int, 0, len(fieldIDs))
+	for _, id := range fieldIDs {
+		idx, ok := srcIndexByID[id]
+		if !ok {
+			continue
+		}
+		srcField := srcType.Field(idx)
+		structFields = append(structFields, reflect.StructField{
+			Name: srcField.Name,
+			Type: srcField.Type,
+			Tag:  srcField.Tag,
+		})
+		srcIndexes = append(srcIndexes, idx)
+	}
+
+	dynType := reflect.StructOf(structFields)
+	out := reflect.MakeSlice(reflect.SliceOf(dynType), len(rows), len(rows))
+	for i, r := range rows {
+		rv := reflect.ValueOf(r)
+		dst := out.Index(i)
+		for j, idx := range srcIndexes {
+			dst.Field(j).Set(rv.Field(idx))
+		}
+	}
+	return out.Interface()
+}
+
 // ── service-instance based discovery ────────────────────────────────────────
 
 // html5RegionResult holds one region's orgs/spaces plus the
-// html5-apps-repo/app-runtime plan GUID found in that region (empty if the
-// plan isn't offered there).
+// html5-apps-repo/app-runtime and /app-host plan GUIDs found in that region
+// (empty if a plan isn't offered there).
 type html5RegionResult struct {
-	Region   string
-	Client   *cf.Client
-	Orgs     []cf.Organization
-	Spaces   []cf.Space
-	PlanGUID string
-	Err      error
+	Region             string
+	Client             *cf.Client
+	Orgs               []cf.Organization
+	Spaces             []cf.Space
+	AppRuntimePlanGUID string
+	AppHostPlanGUID    string
+	Err                error
 }
 
 // resolveHTML5OrgsSpaces lists orgs/spaces (filtered per org/orgGUID/
@@ -126,16 +347,23 @@ func resolveHTML5OrgsSpaces(ctx context.Context, creds *store.Credentials, apiUR
 				return
 			}
 
-			var planGUID string
+			var appRuntimePlanGUID string
 			if plan, planErr := client.FindServicePlan(ctx, "html5-apps-repo", "app-runtime"); planErr != nil {
 				fmt.Fprintf(os.Stderr, "warning: [%s] looking up html5-apps-repo/app-runtime plan: %v\n", regionName, planErr)
 			} else if plan != nil {
-				planGUID = plan.GUID
+				appRuntimePlanGUID = plan.GUID
+			}
+			var appHostPlanGUID string
+			if plan, planErr := client.FindServicePlan(ctx, "html5-apps-repo", "app-host"); planErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: [%s] looking up html5-apps-repo/app-host plan: %v\n", regionName, planErr)
+			} else if plan != nil {
+				appHostPlanGUID = plan.GUID
 			}
 
 			results[idx] = html5RegionResult{
 				Region: regionName, Client: client,
-				Orgs: filteredOrgs, Spaces: spaces, PlanGUID: planGUID,
+				Orgs: filteredOrgs, Spaces: spaces,
+				AppRuntimePlanGUID: appRuntimePlanGUID, AppHostPlanGUID: appHostPlanGUID,
 			}
 		}(i, apiURL)
 	}
@@ -302,23 +530,24 @@ func saveHTML5Cache(cmd *cobra.Command, creds *store.Credentials) {
 	}
 }
 
-func html5RowsFromInstanceClient(cmd *cobra.Command, ctx context.Context, c sdDestClient, region, orgID, orgName, spaceID, spaceName string) []html5AppRow {
-	apps, err := html5apps.ListApplicationsMetadata(ctx, c.URI, c.Token)
+// html5RowsFromAppHost fetches application metadata for one app-host plan
+// service instance (appHost), via an already-resolved app-runtime instance's
+// URI/token (rtClient) and the app-host's own GUID passed as the
+// "x-app-host-id" header — see html5apps.ListApplicationsForAppHost. This
+// mirrors the SAP/cf-html5-apps-repo-cli-plugin's "cf html5-list": app-host
+// and app-runtime instances are never bound together, only correlated at
+// request time via that header, with the app-host instance's own CF GUID
+// used directly as its app_host_id (no separate lookup).
+func html5RowsFromAppHost(cmd *cobra.Command, ctx context.Context, rtClient sdDestClient, appHost cf.ServiceInstance, region, orgName, spaceName string) []html5AppRow {
+	apps, err := html5apps.ListApplicationsForAppHost(ctx, rtClient.URI, rtClient.Token, appHost.GUID)
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: instance %q: listing applications metadata: %v\n",
-			region, orgName, spaceName, c.InstanceName, err)
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: app-host %q: listing applications metadata: %v\n",
+			region, orgName, spaceName, appHost.Name, err)
 		return nil
 	}
 	rows := make([]html5AppRow, 0, len(apps))
 	for _, a := range apps {
-		rows = append(rows, html5AppRow{
-			Region: region, OrgID: orgID, OrgName: orgName,
-			SpaceID: spaceID, SpaceName: spaceName,
-			AppHostServiceInstanceName: c.InstanceName, AppHostServiceInstanceID: c.InstanceGUID,
-			ApplicationName: a.ApplicationName, ApplicationVersion: a.ApplicationVersion,
-			ChangedOn: a.ChangedOn, CreatedOn: a.CreatedOn,
-			IsDefault: a.IsDefault, Public: a.Public,
-		})
+		rows = append(rows, html5RowFromApplication(a, region, "", "", ""))
 	}
 	return rows
 }
@@ -350,8 +579,12 @@ func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, cred
 		if rr.Client == nil || len(rr.Spaces) == 0 {
 			continue
 		}
-		if rr.PlanGUID == "" {
+		if rr.AppRuntimePlanGUID == "" {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] html5-apps-repo/app-runtime service plan not found — skipping region\n", rr.Region)
+			continue
+		}
+		if rr.AppHostPlanGUID == "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] html5-apps-repo/app-host service plan not found — skipping region\n", rr.Region)
 			continue
 		}
 
@@ -367,22 +600,51 @@ func fetchHTML5ViaServiceInstances(ctx context.Context, cmd *cobra.Command, cred
 			spOrgGUID := sp.Relationships.Organization.Data.GUID
 			spOrgName := orgByGUID[spOrgGUID]
 
-			instances, err := rr.Client.ListServiceInstancesInSpace(ctx, sp.GUID, rr.PlanGUID)
+			appHosts, err := rr.Client.ListServiceInstancesInSpace(ctx, sp.GUID, rr.AppHostPlanGUID)
 			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: listing html5-apps-repo instances: %v\n",
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: listing html5-apps-repo/app-host instances: %v\n",
 					rr.Region, spOrgName, sp.Name, err)
 				continue
 			}
-			for _, inst := range instances {
+			if len(appHosts) == 0 {
+				continue
+			}
+
+			runtimeInstances, err := rr.Client.ListServiceInstancesInSpace(ctx, sp.GUID, rr.AppRuntimePlanGUID)
+			if err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: listing html5-apps-repo/app-runtime instances: %v\n",
+					rr.Region, spOrgName, sp.Name, err)
+				continue
+			}
+
+			// Resolve one app-runtime token for the whole space: per the
+			// SAP CLI plugin, any single app-runtime key's URI/token is used
+			// to query every app-host instance in the space (the app-host
+			// GUID alone, via the x-app-host-id header, scopes the result —
+			// see html5RowsFromAppHost), so there's no need for a
+			// separate token per app-host.
+			var rtClient sdDestClient
+			var haveRTClient bool
+			for _, inst := range runtimeInstances {
 				c, ok, resolveErr := resolveHTML5InstanceToken(ctx, cmd, rr.Client, sp.GUID, inst, creds, keyOption)
 				if resolveErr != nil {
 					saveHTML5Cache(cmd, creds)
 					return rows, resolveErr
 				}
-				if !ok {
-					continue
+				if ok {
+					rtClient = c
+					haveRTClient = true
+					break
 				}
-				rows = append(rows, html5RowsFromInstanceClient(cmd, ctx, c, rr.Region, spOrgGUID, spOrgName, sp.GUID, sp.Name)...)
+			}
+			if !haveRTClient {
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s/%s: no usable html5-apps-repo/app-runtime service key — skipping %d app-host instance(s)\n",
+					rr.Region, spOrgName, sp.Name, len(appHosts))
+				continue
+			}
+
+			for _, appHost := range appHosts {
+				rows = append(rows, html5RowsFromAppHost(cmd, ctx, rtClient, appHost, rr.Region, spOrgName, sp.Name)...)
 			}
 		}
 	}
@@ -408,8 +670,8 @@ func destPropCI(dest map[string]string, key string) string {
 
 // findOrgAndSpaces looks up an org by GUID (exact) or name (case-insensitive
 // substring) across apiURLs — the same matching rule resolveOrgDestClient
-// uses — and returns its region, identity, and spaces.
-func findOrgAndSpaces(ctx context.Context, cmd *cobra.Command, orgFlag string, creds *store.Credentials, apiURLs []string) (region, orgGUID, orgName string, spaces []cf.Space, err error) {
+// uses — and returns its region, identity, a client for it, and its spaces.
+func findOrgAndSpaces(ctx context.Context, cmd *cobra.Command, orgFlag string, creds *store.Credentials, apiURLs []string) (region, orgGUID, orgName string, cfClient *cf.Client, spaces []cf.Space, err error) {
 	fl := strings.ToLower(orgFlag)
 	for _, apiURL := range apiURLs {
 		tok, ok := creds.Tokens[apiURL]
@@ -427,106 +689,161 @@ func findOrgAndSpaces(ctx context.Context, cmd *cobra.Command, orgFlag string, c
 			if strings.EqualFold(org.GUID, orgFlag) || strings.Contains(strings.ToLower(org.Name), fl) {
 				sp, spErr := c.ListOrganizationSpaces(ctx, org.GUID)
 				if spErr != nil {
-					return store.APIURLToRegion(apiURL), org.GUID, org.Name, nil, fmt.Errorf("listing spaces in org %q: %w", org.Name, spErr)
+					return store.APIURLToRegion(apiURL), org.GUID, org.Name, c, nil, fmt.Errorf("listing spaces in org %q: %w", org.Name, spErr)
 				}
-				return store.APIURLToRegion(apiURL), org.GUID, org.Name, sp, nil
+				return store.APIURLToRegion(apiURL), org.GUID, org.Name, c, sp, nil
 			}
 		}
 	}
-	return "", "", "", nil, fmt.Errorf("org %q not found in any accessible region", orgFlag)
+	return "", "", "", nil, nil, fmt.Errorf("org %q not found in any accessible region", orgFlag)
 }
 
-// html5RowsFromDestination inspects one destination and, if it carries both
-// an "app_host_id" and a "sap.cloud.service" property (the marker for a
-// destination exposing one app host's content), uses its OAuth2 client
-// credentials to fetch and return that app host's application metadata.
-// Returns nil if the destination doesn't match or the fetch fails (a warning
-// is printed in the latter case). destInstanceName/destInstanceID identify
-// the destination service instance the destination was found in — pass ""
-// for both when dest is a subaccount-level destination.
-func html5RowsFromDestination(ctx context.Context, cmd *cobra.Command, dest map[string]string, region, orgID, orgName, spaceID, spaceName, destInstanceName, destInstanceID string) []html5AppRow {
-	appHostID := destPropCI(dest, "app_host_id")
+// resolveAppRuntimeClientForSpace finds a usable html5-apps-repo/app-runtime
+// service key within spaceGUID, trying each app-runtime instance in that
+// space in turn until one yields a token (same key-resolution flow, and
+// --no-key-option handling, as the default service-instance discovery path —
+// see resolveHTML5InstanceToken). A non-nil error means the whole command
+// must stop (user aborted, or --no-key-option=abort); any other failure to
+// find a usable key just returns ok=false with a warning already printed.
+func resolveAppRuntimeClientForSpace(ctx context.Context, cmd *cobra.Command, cfClient *cf.Client, region, spaceGUID, spaceName string, creds *store.Credentials, keyOption html5KeyOption) (sdDestClient, bool, error) {
+	plan, planErr := cfClient.FindServicePlan(ctx, "html5-apps-repo", "app-runtime")
+	if planErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s: looking up html5-apps-repo/app-runtime plan: %v\n", region, spaceName, planErr)
+		return sdDestClient{}, false, nil
+	}
+	if plan == nil {
+		return sdDestClient{}, false, nil
+	}
+	instances, err := cfClient.ListServiceInstancesInSpace(ctx, spaceGUID, plan.GUID)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] %s: listing html5-apps-repo/app-runtime instances: %v\n", region, spaceName, err)
+		return sdDestClient{}, false, nil
+	}
+	for _, inst := range instances {
+		c, ok, resolveErr := resolveHTML5InstanceToken(ctx, cmd, cfClient, spaceGUID, inst, creds, keyOption)
+		if resolveErr != nil {
+			return sdDestClient{}, false, resolveErr
+		}
+		if ok {
+			return c, true, nil
+		}
+	}
+	return sdDestClient{}, false, nil
+}
+
+// html5DestAppHostInfo reports whether dest carries both an "app_host_id"
+// and a "sap.cloud.service" property — the marker for a destination
+// exposing one app host's content — and if so returns that app_host_id and
+// the destination's own "Name".
+func html5DestAppHostInfo(dest map[string]string) (appHostID, name string, ok bool) {
+	appHostID = destPropCI(dest, "app_host_id")
 	cloudService := destPropCI(dest, "sap.cloud.service")
 	if appHostID == "" || cloudService == "" {
-		return nil
+		return "", "", false
 	}
+	return appHostID, destPropCI(dest, "Name"), true
+}
 
-	name := destPropCI(dest, "Name")
-	// "uri" is the actual html5-apps-repo runtime service endpoint (e.g.
-	// https://html5-apps-repo-rt.<landscape>) and is what must be called for
-	// /applications/metadata. "URL" is the destination's advertised target —
-	// for an html5 app-hosting destination that's often a placeholder like
-	// "https://sap.com/DUMMY_URL" (the real content is served via the
-	// approuter, not this URL directly), so it's only a fallback for a
-	// destination that happens not to carry "uri".
-	uri := destPropCI(dest, "uri")
-	if uri == "" {
-		uri = destPropCI(dest, "URL")
-	}
-	clientID := destPropCI(dest, "clientId")
-	clientSecret := destPropCI(dest, "clientSecret")
-	tokenURL := destPropCI(dest, "tokenServiceURL")
-	if uri == "" || clientID == "" || clientSecret == "" || tokenURL == "" {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"warning: destination %q has app_host_id/sap.cloud.service but is missing uri/URL/clientId/clientSecret/tokenServiceURL — skipping\n", name)
+// html5RowsFromDestAppHost fetches application metadata for one app_host_id
+// discovered from a destination (see html5DestAppHostInfo), via an
+// already-resolved CF html5-apps-repo/app-runtime client (rtClient) — this
+// mirrors the SAP/cf-html5-apps-repo-cli-plugin's "-d/--destination" flag: a
+// destination's app_host_id is only ever used to select which app host to
+// query; the actual API call always authenticates with a real CF
+// app-runtime service key, never with the destination's own credentials.
+// destInstanceName/destInstanceID identify the destination service instance
+// the destination was found in — pass "" for both when dest is
+// subaccount-level.
+func html5RowsFromDestAppHost(cmd *cobra.Command, ctx context.Context, rtClient sdDestClient, appHostID, name, region, destInstanceName, destInstanceID string) []html5AppRow {
+	apps, err := html5apps.ListApplicationsForAppHost(ctx, rtClient.URI, rtClient.Token, appHostID)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: destination %q (app_host_id %s): listing applications metadata: %v\n", name, appHostID, err)
 		return nil
 	}
-
-	token, _, tokErr := html5apps.GetAccessToken(ctx, tokenURL, clientID, clientSecret)
-	if tokErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: destination %q: getting token: %v\n", name, tokErr)
-		return nil
-	}
-	apps, fetchErr := html5apps.ListApplicationsMetadata(ctx, uri, token)
-	if fetchErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "warning: destination %q: listing applications metadata: %v\n", name, fetchErr)
-		return nil
-	}
-
 	rows := make([]html5AppRow, 0, len(apps))
 	for _, a := range apps {
-		rows = append(rows, html5AppRow{
-			Region: region, OrgID: orgID, OrgName: orgName,
-			SpaceID: spaceID, SpaceName: spaceName,
-			AppHostServiceInstanceName: name, AppHostServiceInstanceID: appHostID,
-			DestinationInstanceName: destInstanceName, DestinationInstanceID: destInstanceID, DestinationName: name,
-			ApplicationName: a.ApplicationName, ApplicationVersion: a.ApplicationVersion,
-			ChangedOn: a.ChangedOn, CreatedOn: a.CreatedOn,
-			IsDefault: a.IsDefault, Public: a.Public,
-		})
+		rows = append(rows, html5RowFromApplication(a, region, destInstanceName, destInstanceID, name))
 	}
 	return rows
 }
 
 // fetchHTML5ViaDestinations is the --from-destinations discovery path: for
 // every target org, it inspects both subaccount-level destinations and
-// every space's instance-level destinations, extracting application
-// metadata from whichever ones carry an app_host_id/sap.cloud.service pair
-// (see html5RowsFromDestination), instead of going through service
-// instance keys directly.
-func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgTargets []string, spacesFilter map[string]bool, noPrompt bool) ([]html5AppRow, error) {
+// every space's instance-level destinations, extracting app_host_id from
+// whichever ones carry an app_host_id/sap.cloud.service pair (see
+// html5DestAppHostInfo), then fetches that app host's metadata via a real CF
+// html5-apps-repo/app-runtime service key — never the destination's own
+// credentials — matching the SAP CLI plugin's own "-d/--destination"
+// behavior. The app-runtime client is resolved once per space (reused for
+// every destination found there) and once more, lazily, for subaccount-level
+// destinations (tried across spacesFilter-matching spaces in the org, since
+// a subaccount-level destination isn't tied to one space).
+//
+// When spacesFilter narrows scope (--spaces given), subaccount-level
+// destinations are skipped entirely — they aren't tied to any one space, so
+// they'd otherwise pull in app hosts outside the spaces the caller asked
+// for; only the matching spaces' instance-level destinations are queried.
+func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *store.Credentials, apiURLs []string, orgTargets []string, spacesFilter map[string]bool, noPrompt bool, keyOption html5KeyOption) ([]html5AppRow, error) {
 	var rows []html5AppRow
 	for _, target := range orgTargets {
-		region, orgGUID, orgName, spaces, err := findOrgAndSpaces(ctx, cmd, target, creds, apiURLs)
+		region, _, orgName, cfClient, spaces, err := findOrgAndSpaces(ctx, cmd, target, creds, apiURLs)
 		if err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", err)
 			continue
 		}
 
-		// Subaccount-level destinations.
-		_, _, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
-		if resolveErr != nil {
-			if errors.Is(resolveErr, errAborted) {
-				return rows, errAborted
+		if spacesFilter == nil {
+			// Subaccount-level destinations: resolve an app-runtime client
+			// lazily, by trying spaces in the org in turn, and only if a
+			// qualifying destination is actually found.
+			var orgRTClient sdDestClient
+			var orgRTTried, orgRTOK bool
+			resolveOrgRTClient := func() (sdDestClient, bool, error) {
+				if orgRTTried {
+					return orgRTClient, orgRTOK, nil
+				}
+				orgRTTried = true
+				for _, sp := range spaces {
+					c, ok, rErr := resolveAppRuntimeClientForSpace(ctx, cmd, cfClient, region, sp.GUID, sp.Name, creds, keyOption)
+					if rErr != nil {
+						return sdDestClient{}, false, rErr
+					}
+					if ok {
+						orgRTClient, orgRTOK = c, true
+						return c, true, nil
+					}
+				}
+				return sdDestClient{}, false, nil
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
-		} else {
-			rawDests, fetchErr := destination.ListSubaccountDestinationsFull(ctx, destClient.URI, destClient.Token)
-			if fetchErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
+
+			_, _, destClient, resolveErr := resolveOrgDestClient(ctx, cmd, target, creds, apiURLs, noPrompt)
+			if resolveErr != nil {
+				if errors.Is(resolveErr, errAborted) {
+					saveHTML5Cache(cmd, creds)
+					return rows, errAborted
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %v\n", resolveErr)
 			} else {
-				for _, raw := range rawDests {
-					rows = append(rows, html5RowsFromDestination(ctx, cmd, raw, region, orgGUID, orgName, "", "", "", "")...)
+				rawDests, fetchErr := destination.ListSubaccountDestinationsFull(ctx, destClient.URI, destClient.Token)
+				if fetchErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] listing subaccount destinations: %v\n", orgName, fetchErr)
+				} else {
+					for _, raw := range rawDests {
+						appHostID, name, ok := html5DestAppHostInfo(raw)
+						if !ok {
+							continue
+						}
+						rtClient, rtOK, rtErr := resolveOrgRTClient()
+						if rtErr != nil {
+							saveHTML5Cache(cmd, creds)
+							return rows, rtErr
+						}
+						if !rtOK {
+							fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s] destination %q: no usable html5-apps-repo/app-runtime service key found in any space — skipping\n", orgName, name)
+							continue
+						}
+						rows = append(rows, html5RowsFromDestAppHost(cmd, ctx, rtClient, appHostID, name, region, "", "")...)
+					}
 				}
 			}
 		}
@@ -539,11 +856,16 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 			_, clients, spErr := resolveSpaceDestClients(ctx, cmd, sp.GUID, creds, apiURLs)
 			if spErr != nil {
 				if errors.Is(spErr, errAborted) {
+					saveHTML5Cache(cmd, creds)
 					return rows, errAborted
 				}
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s/%s] %v\n", orgName, sp.Name, spErr)
 				continue
 			}
+
+			var spRTClient sdDestClient
+			var spRTTried, spRTOK bool
+
 			for _, c := range clients {
 				rawDests, fetchErr := destination.ListInstanceDestinationsFull(ctx, c.URI, c.Token)
 				if fetchErr != nil {
@@ -552,18 +874,41 @@ func fetchHTML5ViaDestinations(ctx context.Context, cmd *cobra.Command, creds *s
 					continue
 				}
 				for _, raw := range rawDests {
-					rows = append(rows, html5RowsFromDestination(ctx, cmd, raw, region, orgGUID, orgName, sp.GUID, sp.Name, c.InstanceName, c.InstanceGUID)...)
+					appHostID, name, ok := html5DestAppHostInfo(raw)
+					if !ok {
+						continue
+					}
+					if !spRTTried {
+						spRTTried = true
+						rtC, rtOK, rtErr := resolveAppRuntimeClientForSpace(ctx, cmd, cfClient, region, sp.GUID, sp.Name, creds, keyOption)
+						if rtErr != nil {
+							saveHTML5Cache(cmd, creds)
+							return rows, rtErr
+						}
+						spRTClient, spRTOK = rtC, rtOK
+					}
+					if !spRTOK {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: [%s/%s] destination %q: no usable html5-apps-repo/app-runtime service key in this space — skipping\n", orgName, sp.Name, name)
+						continue
+					}
+					rows = append(rows, html5RowsFromDestAppHost(cmd, ctx, spRTClient, appHostID, name, region, c.InstanceName, c.InstanceGUID)...)
 				}
 			}
 		}
 	}
+	saveHTML5Cache(cmd, creds)
 	return rows, nil
 }
 
 // ── rendering ────────────────────────────────────────────────────────────────
 
-func renderHTML5AppsToon(w io.Writer, doc html5AppsDoc, color bool) error {
-	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+// renderHTML5AppsToon and renderHTML5AppsJSON take val as returned by either
+// html5AppsDoc{Apps: rows} (no --fields) or html5BuildFilteredRows wrapped
+// the same way (see the RunE below) — both are just Go values that
+// toonenc/json reflect over, so narrowing the fields is transparent to them.
+
+func renderHTML5AppsToon(w io.Writer, val interface{}, color bool) error {
+	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
@@ -575,8 +920,8 @@ func renderHTML5AppsToon(w io.Writer, doc html5AppsDoc, color bool) error {
 	return err
 }
 
-func renderHTML5AppsJSON(w io.Writer, doc html5AppsDoc) error {
-	out, err := json.MarshalIndent(doc, "", "  ")
+func renderHTML5AppsJSON(w io.Writer, val interface{}) error {
+	out, err := json.MarshalIndent(val, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
@@ -584,27 +929,35 @@ func renderHTML5AppsJSON(w io.Writer, doc html5AppsDoc) error {
 	return nil
 }
 
-func renderHTML5AppsCSV(w io.Writer, doc html5AppsDoc, color bool) error {
+// renderHTML5AppsCSV writes fieldIDs (html5FieldIDs() when empty, i.e. every
+// column) as the header, then one row per app with each cell looked up via
+// html5FieldValue.
+func renderHTML5AppsCSV(w io.Writer, rows []html5AppRow, color bool, fieldIDs []string) error {
+	ids := fieldIDs
+	if len(ids) == 0 {
+		ids = html5FieldIDs()
+	}
+
 	csvW := newRainbowCSVWriter(w, color)
 	defer csvW.Flush()
 
-	if err := csvW.Write([]string{
-		"region", "org_id", "org_name", "space_id", "space_name",
-		"app_host_service_instance_name", "app_host_service_instance_id",
-		"destination_instance_name", "destination_instance_id", "destination_name",
-		"application_name", "application_version",
-		"changed_on", "created_on", "is_default", "public",
-	}); err != nil {
+	if err := csvW.Write(ids); err != nil {
 		return err
 	}
-	for _, a := range doc.Apps {
-		if err := csvW.Write([]string{
-			a.Region, a.OrgID, a.OrgName, a.SpaceID, a.SpaceName,
-			a.AppHostServiceInstanceName, a.AppHostServiceInstanceID,
-			a.DestinationInstanceName, a.DestinationInstanceID, a.DestinationName,
-			a.ApplicationName, a.ApplicationVersion,
-			a.ChangedOn, a.CreatedOn, fmt.Sprintf("%t", a.IsDefault), fmt.Sprintf("%t", a.Public),
-		}); err != nil {
+	for _, a := range rows {
+		cells := make([]string, len(ids))
+		for i, id := range ids {
+			val, _ := html5FieldValue(a, id)
+			switch v := val.(type) {
+			case bool:
+				cells[i] = fmt.Sprintf("%t", v)
+			case string:
+				cells[i] = v
+			default:
+				cells[i] = fmt.Sprintf("%v", v)
+			}
+		}
+		if err := csvW.Write(cells); err != nil {
 			return err
 		}
 	}
@@ -617,20 +970,28 @@ var html5AppsCmd = &cobra.Command{
 	Use:   "html5-apps",
 	Short: "List HTML5 application metadata from HTML5 Application Repository service instances",
 	Long: `List the applications stored in every accessible HTML5 Application Repository
-Service (html5-apps-repo) app-runtime service instance, across one or more
+Service (html5-apps-repo) app-host service instance, across one or more
 regions and organizations.
 
-For each matching service instance, an OAuth2 client_credentials token is
-obtained from its service key (creating one interactively if none exists,
-following the same flow as the SAP/cf-html5-apps-repo-cli-plugin CF CLI
-plugin) and GET {uri}/applications/metadata is called to list its
-applications.
+This follows the same discovery flow as the SAP/cf-html5-apps-repo-cli-plugin
+CF CLI plugin's "cf html5-list": for each space, every html5-apps-repo/
+app-host plan service instance is found (its CF service-instance GUID is
+itself the app_host_id the API expects — the two plans are never bound
+together, only correlated at request time), and an OAuth2 client_credentials
+token is obtained from any one html5-apps-repo/app-runtime plan instance's
+service key in that same space (creating one interactively if none exists).
+GET {app-runtime uri}/applications/metadata is then called once per app-host
+instance, with that instance's GUID passed in the "x-app-host-id" header, to
+list its applications.
 
-The result is a flat list, one row per application, with columns: region,
-org_id, org_name, space_id, space_name, app_host_service_instance_name,
-app_host_service_instance_id, destination_instance_name,
-destination_instance_id, destination_name, application_name,
-application_version, changed_on, created_on, is_default, public. The
+The result is a flat list, one row per application, with every field the
+applications/metadata API itself returns (confirmed via --debug against a
+live service), plus region: region, application_id, application_name,
+application_version, application_type, sap_cloud_service, ui_technology,
+public, is_default, changed_on, created_on, organization_id,
+organization_name, space_id, space_name, subaccount_id, zone_id, subdomain,
+global_account_id, instance_name, app_host_id, deploy_id, content_provider,
+destination_instance_name, destination_instance_id, destination_name. The
 destination_* columns are only populated with --from-destinations (see
 below).
 
@@ -639,15 +1000,28 @@ Output formats (--format):
   json  JSON document
   csv   Flat CSV rows, one per application
 
+Use --fields <column,...> to limit output to just those columns (any of the
+ones listed above, case-insensitive, comma-separated) — the order given is
+the order they're output in, for every format. Omit it to get every column.
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, in priority order (ties on the first column are broken by the next
+one, and so on) — suffix a column with ":desc" for descending (":asc" is
+the default, so it's only useful for clarity), e.g.
+--sort-by space_name:desc,application_name. Omit it to keep the default order:
+region, organization_name, space_name, instance_name, application_name
+(all ascending).
+
 If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. Use --spaces to further narrow to specific space names or
 GUIDs (comma-separated, case-insensitive).
 
 Use --include/--exclude to narrow results further: each accepts a
-comma-separated list of keywords, and a row matches if org_name, space_name,
-app_host_service_instance_name, destination_instance_name,
-destination_name, application_name, or application_version contains any of
-them (case-insensitive).
+comma-separated list of keywords, and a row matches if organization_name,
+space_name, instance_name, destination_instance_name, destination_name,
+application_name, or application_version contains any of them
+(case-insensitive) — regardless of what --fields selects for the output
+itself.
 
 Use --output/-o to write the result to a file instead of stdout. If --format
 is not explicitly given, it is auto-detected from --output's extension:
@@ -656,21 +1030,29 @@ is not explicitly given, it is auto-detected from --output's extension:
 to override the extension.
 
 Use --from-destinations to discover applications via destinations instead of
-service instance keys: subaccount-level and instance-level destinations in
-the targeted orgs/spaces are scanned for ones carrying both an "app_host_id"
-and a "sap.cloud.service" property, and each such destination's own OAuth2
-client credentials (clientId/clientSecret/tokenServiceURL, and its "uri" —
-not "URL", which for an html5 app-hosting destination is often just a
-placeholder like https://sap.com/DUMMY_URL — falling back to "URL" only if
-"uri" is absent) are used to fetch that one app host's metadata directly —
-app_host_service_instance_name and app_host_service_instance_id are then
-the destination's own Name and app_host_id, since no CF service instance
-is involved in this path.
+enumerating app-host service instances directly: subaccount-level and
+instance-level destinations in the targeted orgs/spaces are scanned for ones
+carrying both an "app_host_id" and a "sap.cloud.service" property, and each
+such destination's app_host_id is used — exactly like the
+SAP/cf-html5-apps-repo-cli-plugin's own "-d/--destination" flag — only to
+select which app host to query; the actual metadata call always
+authenticates with a real CF html5-apps-repo/app-runtime service key (found
+in the same space for an instance-level destination, or in any space in the
+org for a subaccount-level one), never with the destination's own
+clientId/clientSecret/uri. This also sidesteps destinations that point at a
+design-time-only ("-dt") html5-apps-repo host, since the destination's own
+"uri" is never called.
+When --spaces narrows scope, subaccount-level destinations are
+skipped entirely instead — they aren't tied to any one space, so scanning
+them would otherwise pull in app hosts outside the spaces asked for; only
+those spaces' instance-level destinations are queried.
 destination_name is always the destination's own Name; for an
 instance-level destination, destination_instance_name/id additionally
 identify the destination service instance it was found in, while a
-subaccount-level destination leaves both empty (there is no single
-instance to attribute it to).
+subaccount-level destination leaves both empty (there is no single instance
+to attribute it to). instance_name and app_host_id still come straight from
+the applications/metadata API response itself in this path too, same as
+without --from-destinations.
 
 --no-key-option <s/skip|c/create|a/abort> applies one choice to every
 html5-apps-repo/app-runtime instance found with no service key during this
@@ -678,14 +1060,19 @@ run, instead of prompting interactively for each one: skip warns and moves
 on, create automatically runs the equivalent of
 'cf create-service-key <instance> bo-html5-key', and abort stops the whole
 command the first time it happens. Omit it to keep the interactive
-retry/skip/abort prompt (the default). This only governs the service-key
-decision for html5-apps-repo instances (the default, non
---from-destinations path) — --no-prompt below is the equivalent for
-destination-resolution prompts under --from-destinations.
+retry/skip/abort prompt (the default). This governs the html5-apps-repo/
+app-runtime service-key decision in both discovery paths — --no-prompt below
+is the equivalent for the separate destination-resolution prompts
+encountered under --from-destinations (reading destinations themselves, not
+the app-runtime key used to query them).
 
 --no-prompt skips interactive destination-resolution prompts encountered
 under --from-destinations, warning and skipping instead — useful for
 non-interactive/CI runs.
+
+--debug prints each applications/metadata request's raw JSON response body
+to stderr before it's parsed — useful to check for any field the API starts
+returning beyond the ones this command currently surfaces.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -710,6 +1097,18 @@ If --regions is omitted the regions from the last login are used.`,
 		if err != nil {
 			return err
 		}
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := html5ParseFields(fieldsFlag)
+		if err != nil {
+			return err
+		}
+		sortFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := html5ParseSort(sortFlag)
+		if err != nil {
+			return err
+		}
+		debugFlag, _ := cmd.Flags().GetBool("debug")
+		html5apps.Debug = debugFlag
 
 		creds, err := store.Load()
 		if err != nil {
@@ -767,7 +1166,7 @@ If --regions is omitted the regions from the last login are used.`,
 			if targetsErr != nil {
 				return targetsErr
 			}
-			rows, err = fetchHTML5ViaDestinations(ctx, cmd, creds, apiURLs, orgTargets, spacesFilter, noPrompt)
+			rows, err = fetchHTML5ViaDestinations(ctx, cmd, creds, apiURLs, orgTargets, spacesFilter, noPrompt, keyOption)
 		} else {
 			rows, err = fetchHTML5ViaServiceInstances(ctx, cmd, creds, apiURLs, orgGUID, includeOrgs, excludeOrgs, spacesFilter, keyOption)
 		}
@@ -781,7 +1180,7 @@ If --regions is omitted the regions from the last login are used.`,
 		filtered := make([]html5AppRow, 0, len(rows))
 		for _, r := range rows {
 			fields := []string{
-				r.OrgName, r.SpaceName, r.AppHostServiceInstanceName,
+				r.OrganizationName, r.SpaceName, r.InstanceName,
 				r.DestinationInstanceName, r.DestinationName,
 				r.ApplicationName, r.ApplicationVersion,
 			}
@@ -795,21 +1194,39 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		rows = filtered
 
-		sort.Slice(rows, func(i, j int) bool {
-			if rows[i].Region != rows[j].Region {
-				return rows[i].Region < rows[j].Region
-			}
-			if rows[i].OrgName != rows[j].OrgName {
-				return rows[i].OrgName < rows[j].OrgName
-			}
-			if rows[i].SpaceName != rows[j].SpaceName {
-				return rows[i].SpaceName < rows[j].SpaceName
-			}
-			if rows[i].AppHostServiceInstanceName != rows[j].AppHostServiceInstanceName {
-				return rows[i].AppHostServiceInstanceName < rows[j].AppHostServiceInstanceName
-			}
-			return rows[i].ApplicationName < rows[j].ApplicationName
-		})
+		if len(sortKeys) > 0 {
+			sort.SliceStable(rows, func(i, j int) bool {
+				for _, key := range sortKeys {
+					vi, _ := html5FieldValue(rows[i], key.ID)
+					vj, _ := html5FieldValue(rows[j], key.ID)
+					c := html5CompareValues(vi, vj)
+					if c == 0 {
+						continue
+					}
+					if key.Desc {
+						return c > 0
+					}
+					return c < 0
+				}
+				return false
+			})
+		} else {
+			sort.Slice(rows, func(i, j int) bool {
+				if rows[i].Region != rows[j].Region {
+					return rows[i].Region < rows[j].Region
+				}
+				if rows[i].OrganizationName != rows[j].OrganizationName {
+					return rows[i].OrganizationName < rows[j].OrganizationName
+				}
+				if rows[i].SpaceName != rows[j].SpaceName {
+					return rows[i].SpaceName < rows[j].SpaceName
+				}
+				if rows[i].InstanceName != rows[j].InstanceName {
+					return rows[i].InstanceName < rows[j].InstanceName
+				}
+				return rows[i].ApplicationName < rows[j].ApplicationName
+			})
+		}
 
 		out, closeOut, err := resolveOutputWriter(outputFile)
 		if err != nil {
@@ -819,14 +1236,19 @@ If --regions is omitted the regions from the last login are used.`,
 		colorMode, _ := cmd.Flags().GetString("color")
 		color := consoleColorEnabled(outputFile, colorMode)
 
-		doc := html5AppsDoc{Apps: rows}
+		var docVal interface{} = html5AppsDoc{Apps: rows}
+		if len(fieldIDs) > 0 {
+			docVal = struct {
+				Apps interface{} `json:"apps" toon:"apps"`
+			}{Apps: html5BuildFilteredRows(rows, fieldIDs)}
+		}
 		switch strings.ToLower(format) {
 		case "json":
-			return renderHTML5AppsJSON(out, doc)
+			return renderHTML5AppsJSON(out, docVal)
 		case "csv":
-			return renderHTML5AppsCSV(out, doc, color)
+			return renderHTML5AppsCSV(out, rows, color, fieldIDs)
 		default:
-			return renderHTML5AppsToon(out, doc, color)
+			return renderHTML5AppsToon(out, docVal, color)
 		}
 	},
 }
@@ -841,9 +1263,12 @@ func init() {
 	html5AppsCmd.Flags().String("spaces", "", "Comma-separated space names or GUIDs to narrow down to (default: every space in scope)")
 	html5AppsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 	html5AppsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
-	html5AppsCmd.Flags().String("include", "", "Only include rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
-	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where org_name, space_name, app_host_service_instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
-	html5AppsCmd.Flags().Bool("from-destinations", false, "Discover applications via subaccount/instance destinations carrying app_host_id + sap.cloud.service, instead of via service instance keys")
+	html5AppsCmd.Flags().String("include", "", "Only include rows where organization_name, space_name, instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
+	html5AppsCmd.Flags().String("exclude", "", "Exclude rows where organization_name, space_name, instance_name, destination_instance_name, destination_name, application_name, or application_version contain any of these comma-separated keywords")
+	html5AppsCmd.Flags().Bool("from-destinations", false, "Discover app_host_id from subaccount/instance destinations carrying app_host_id + sap.cloud.service, then query each via a real html5-apps-repo/app-runtime service key (not the destination's own credentials)")
 	html5AppsCmd.Flags().String("no-key-option", "", "Apply one choice to every html5-apps-repo instance found with no service key, instead of prompting per instance: s/skip, c/create (auto-create one), or a/abort (stop the command); omit for the interactive prompt")
 	html5AppsCmd.Flags().Bool("no-prompt", false, "Skip interactive destination-resolution prompts under --from-destinations — warn and skip instead of prompting to create a missing destination service key")
+	html5AppsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (default: every column; see --help for the full list)")
+	html5AppsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, in priority order, each optionally suffixed with \":desc\" (default: \":asc\"); default sort order is region,organization_name,space_name,instance_name,application_name")
+	html5AppsCmd.Flags().Bool("debug", false, "Print each applications/metadata request's raw response body to stderr before parsing")
 }

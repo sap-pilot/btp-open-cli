@@ -1540,9 +1540,9 @@ Updating an app's environment variables does not by itself make a running instan
 
 ### `html5-apps`
 
-List the applications stored in every accessible HTML5 Application Repository Service (`html5-apps-repo`) app-runtime service instance, across one or more regions and organizations.
+List the applications stored in every accessible HTML5 Application Repository Service (`html5-apps-repo`) app-host service instance, across one or more regions and organizations.
 
-For each matching service instance, an OAuth2 client_credentials token is obtained from its service key (creating one interactively if none exists, following the same flow as the [SAP/cf-html5-apps-repo-cli-plugin](https://github.com/SAP/cf-html5-apps-repo-cli-plugin) CF CLI plugin) and `GET {uri}/applications/metadata` is called to list its applications. The result is a flat list, one row per application.
+This follows the same discovery flow as the [SAP/cf-html5-apps-repo-cli-plugin](https://github.com/SAP/cf-html5-apps-repo-cli-plugin) CF CLI plugin's `cf html5-list`: for each space, every `html5-apps-repo`/`app-host` plan service instance is found — its CF service-instance GUID is itself the `app_host_id` the API expects, so app-host and app-runtime instances are never bound to each other, only correlated at request time — and an OAuth2 client_credentials token is obtained from any one `html5-apps-repo`/`app-runtime` plan instance's service key in that same space (creating one interactively if none exists). `GET {app-runtime uri}/applications/metadata` is then called once per app-host instance, with that instance's GUID passed in the `x-app-host-id` header, to list its applications. The result is a flat list, one row per application.
 
 If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used. Use `--spaces` to further narrow to specific space names or GUIDs.
 
@@ -1566,32 +1566,48 @@ bo html5-apps --include myapp
 # Write output to a file (--format auto-detected from the extension)
 bo html5-apps --output html5-apps.csv
 
+# Limit output to just these columns, in this order, for any --format
+bo html5-apps --fields application_name,application_version,space_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo html5-apps --sort-by space_name:desc,application_name
+
+# See the raw applications/metadata response for each app host, before parsing
+bo html5-apps --debug
+
 # Apply one choice to every html5-apps-repo instance missing a service key,
 # instead of an interactive retry/skip/abort prompt per instance
 bo html5-apps --no-key-option skip     # warn and move on
 bo html5-apps --no-key-option create   # auto-create 'bo-html5-key' on each
 bo html5-apps --no-key-option abort    # stop the command on the first one
 
-# Discover applications via destinations instead of service instance keys:
-# scans subaccount- and instance-level destinations in the targeted orgs/
-# spaces for ones carrying both an "app_host_id" and a "sap.cloud.service"
-# property, and uses each matching destination's own OAuth2 client
-# credentials to fetch that app host's metadata directly
+# Discover app_host_id from destinations instead of enumerating app-host
+# instances directly: scans subaccount- and instance-level destinations in
+# the targeted orgs/spaces for ones carrying both an "app_host_id" and a
+# "sap.cloud.service" property, then queries each via a real
+# html5-apps-repo/app-runtime service key (same as the plugin's own
+# -d/--destination flag — never the destination's own credentials)
 bo html5-apps --from-destinations --org <org-guid-or-name>
 
 # Skip interactive destination-resolution prompts under --from-destinations
 bo html5-apps --from-destinations --org <org-guid-or-name> --no-prompt
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name,app_host_service_instance_name,app_host_service_instance_id,destination_instance_name,destination_instance_id,destination_name,application_name,application_version,changed_on,created_on,is_default,public`
+Columns (every field the `applications/metadata` API itself returns, confirmed via `--debug` against a live service, plus `region`): `region,application_id,application_name,application_version,application_type,sap_cloud_service,ui_technology,public,is_default,changed_on,created_on,organization_id,organization_name,space_id,space_name,subaccount_id,zone_id,subdomain,global_account_id,instance_name,app_host_id,deploy_id,content_provider,destination_instance_name,destination_instance_id,destination_name`.
 
-The `--include`/`--exclude` flags match case-insensitively against: `org_name`, `space_name`, `app_host_service_instance_name`, `destination_instance_name`, `destination_name`, `application_name`, and `application_version`.
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given — applies to every `--format` the same way, not just CSV. Omit it to get every column.
 
-With `--from-destinations`, `app_host_service_instance_name` and `app_host_service_instance_id` come from the matching destination's own `Name` and `app_host_id` properties instead of a CF service instance, since no service instance key is involved in that path; `--excludeOrgs` is ignored (destination discovery is per-org, not per-filtered-org-list) — use `--org`/`--orgs` to scope it instead.
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order (ties on the first are broken by the next, and so on); suffix a column with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: `region,organization_name,space_name,instance_name,application_name` (all ascending).
+
+The `--include`/`--exclude` flags match case-insensitively against: `organization_name`, `space_name`, `instance_name`, `destination_instance_name`, `destination_name`, `application_name`, and `application_version` — regardless of what `--fields` selects for the output itself.
+
+`--debug` prints each `applications/metadata` request's raw JSON response body to stderr before it's parsed — useful to check for any field the API starts returning beyond the ones listed above.
+
+With `--from-destinations`, `instance_name` and `app_host_id` still come straight from the `applications/metadata` API response itself, same as without it — the destination's own `app_host_id` property is only used to select which app host to query; the actual metadata call always authenticates with a real `html5-apps-repo`/`app-runtime` service key, found in the same space for an instance-level destination or in any space in the org for a subaccount-level one, never with the destination's own `clientId`/`clientSecret`/`uri`. This also means a destination pointing at a design-time-only (`-dt`) `html5-apps-repo` host is no longer a problem, since the destination's own `uri` is never called. When `--spaces` narrows scope, subaccount-level destinations are skipped entirely — they aren't tied to any one space, so scanning them would otherwise pull in app hosts outside the spaces asked for — and only those spaces' instance-level destinations are queried. `--excludeOrgs` is ignored (destination discovery is per-org, not per-filtered-org-list) — use `--org`/`--orgs` to scope it instead.
 
 `--from-destinations` also populates three destination-identifying columns, empty otherwise: `destination_name` is always the matching destination's own `Name`; `destination_instance_name`/`destination_instance_id` additionally identify the destination service instance it was found in when the destination is instance-level — a subaccount-level destination leaves both empty, since there's no single instance to attribute it to.
 
-By default, an html5-apps-repo/app-runtime instance found with no service key triggers an interactive "create one manually (`cf create-service-key <instance> bo-html5-key`), then press Enter to retry / 's' to skip / Ctrl-C to abort" prompt — once per such instance. `--no-key-option <s/skip|c/create|a/abort>` applies one choice to every instance hitting this during the run instead: `skip` warns and moves on, `create` automatically creates a `bo-html5-key` service key on the instance (the same thing the manual instruction does), and `abort` stops the whole command the first time it happens. This only governs the html5-apps-repo service-key decision in the default (non `--from-destinations`) path; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (there, only skip-or-prompt is supported, not create/abort).
+By default, an html5-apps-repo/app-runtime instance found with no service key triggers an interactive "create one manually (`cf create-service-key <instance> bo-html5-key`), then press Enter to retry / 's' to skip / Ctrl-C to abort" prompt — once per such instance. `--no-key-option <s/skip|c/create|a/abort>` applies one choice to every instance hitting this during the run instead: `skip` warns and moves on, `create` automatically creates a `bo-html5-key` service key on the instance (the same thing the manual instruction does), and `abort` stops the whole command the first time it happens. This governs the html5-apps-repo/app-runtime service-key decision in both discovery paths; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (reading destinations themselves, not the app-runtime key used to query them — there, only skip-or-prompt is supported, not create/abort).
 
 ### `service-credentials`
 
