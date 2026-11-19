@@ -13,7 +13,8 @@ type AppAnnotations struct {
 }
 
 type AppMetadata struct {
-	Annotations AppAnnotations `json:"annotations"`
+	Annotations AppAnnotations    `json:"annotations"`
+	Labels      map[string]string `json:"labels"`
 }
 
 type appRelationships struct {

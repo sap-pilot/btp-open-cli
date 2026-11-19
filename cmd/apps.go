@@ -38,6 +38,13 @@ type appsOutApp struct {
 	// VCAP_SERVICES or any other derived/system environment) — populated
 	// only when --include-env is given, and otherwise omitted entirely.
 	Env map[string]string `json:"app_env,omitempty" toon:"app_env,omitempty"`
+
+	// Labels holds the app's CF metadata.labels (cf.App.Metadata.Labels) —
+	// already returned by the same apps listing call that fetches
+	// everything else, so unlike Env this needs no extra API call —
+	// populated only when --include-labels is given, and otherwise omitted
+	// entirely.
+	Labels map[string]string `json:"app_labels,omitempty" toon:"app_labels,omitempty"`
 }
 
 type appsOutSpace struct {
@@ -82,11 +89,13 @@ type appsFlatRow struct {
 	ProcessDiskInMB   int    `json:"process_disk_in_mb"    toon:"process_disk_in_mb"`
 	AppTotalMemoryMB  int    `json:"app_total_memory_mb"   toon:"app_total_memory_mb"`
 	AppEnv            string `json:"app_env"               toon:"app_env"`
+	AppLabels         string `json:"app_labels"            toon:"app_labels"`
 }
 
 // flattenAppsRows converts doc's nested region/org/space structure into one
-// flat row per app, encoding a.Env (if any) as a JSON string — the same
-// representation renderAppsCSV always used for its "app_env" column.
+// flat row per app, encoding a.Env/a.Labels (if any) as JSON strings — the
+// same representation renderAppsCSV always used for its "app_env"/
+// "app_labels" columns.
 func flattenAppsRows(doc appsOutDoc) ([]appsFlatRow, error) {
 	var rows []appsFlatRow
 	for _, r := range doc.Regions {
@@ -101,6 +110,14 @@ func flattenAppsRows(doc appsOutDoc) ([]appsFlatRow, error) {
 						}
 						envCol = string(envJSON)
 					}
+					var labelsCol string
+					if len(a.Labels) > 0 {
+						labelsJSON, err := json.Marshal(a.Labels)
+						if err != nil {
+							return nil, fmt.Errorf("encoding app_labels for %q: %w", a.Name, err)
+						}
+						labelsCol = string(labelsJSON)
+					}
 					rows = append(rows, appsFlatRow{
 						RegionID: r.ID, OrgID: o.ID, OrgName: o.Name,
 						SpaceID: sp.ID, SpaceName: sp.Name,
@@ -108,7 +125,7 @@ func flattenAppsRows(doc appsOutDoc) ([]appsFlatRow, error) {
 						AppCreatedAt: a.CreatedAt, AppUpdatedAt: a.UpdatedAt,
 						ProcessInstances: a.Instances, ProcessMemoryInMB: a.MemoryInMB,
 						ProcessDiskInMB: a.DiskInMB, AppTotalMemoryMB: a.TotalMemoryMB,
-						AppEnv: envCol,
+						AppEnv: envCol, AppLabels: labelsCol,
 					})
 				}
 			}
@@ -180,8 +197,8 @@ to override the extension.
 CSV is always a flat list, one row per app, with columns: region_id, org_id,
 org_name, space_id, space_name, app_mta_id, app_id, app_name, app_state,
 app_created_at, app_updated_at, process_instances, process_memory_in_mb,
-process_disk_in_mb, app_total_memory_mb, app_env. json/toon normally nest
-regions/orgs/spaces/apps instead, but switch to that same flat
+process_disk_in_mb, app_total_memory_mb, app_env, app_labels. json/toon
+normally nest regions/orgs/spaces/apps instead, but switch to that same flat
 {"rows": [...]} view whenever --fields or --sort-by is given.
 
 Use --fields <column,...> (case-insensitive, comma-separated, any of the
@@ -206,6 +223,13 @@ another org/space. The written file (JSON or TOON) can be fed straight into
 'bo update-apps-env' to replay those same values onto a different
 org/space. This is sensitive output — treat it the same as
 'bo service-credentials'.
+
+Use --include-labels to also include each app's CF metadata labels (as
+"app_labels" — object in JSON/TOON, a JSON-encoded string in the app_labels
+CSV column, same representation as app_env). Unlike --include-env, this
+needs no extra API call — labels are already part of the same apps listing
+this command always fetches, so --include-labels is free and not sensitive
+the way --include-env is.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -388,7 +412,8 @@ If --regions is omitted the regions from the last login are used.`,
 		}
 		wg.Wait()
 
-		doc, errs := buildAppsDoc(results, includePattern, excludePattern)
+		includeLabels, _ := cmd.Flags().GetBool("include-labels")
+		doc, errs := buildAppsDoc(results, includePattern, excludePattern, includeLabels)
 		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "warning: %v\n", e)
 		}
@@ -485,7 +510,7 @@ func enrichAppsDocWithEnv(ctx context.Context, doc *appsOutDoc, results []appsRe
 
 // ── output builders ───────────────────────────────────────────────────────────
 
-func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern string) (appsOutDoc, []error) {
+func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern string, includeLabels bool) (appsOutDoc, []error) {
 	var doc appsOutDoc
 	var errs []error
 
@@ -525,6 +550,9 @@ func buildAppsDoc(results []appsRegionResult, includePattern, excludePattern str
 						MemoryInMB:    proc.MemoryInMB,
 						DiskInMB:      proc.DiskInMB,
 						TotalMemoryMB: proc.Instances * proc.MemoryInMB,
+					}
+					if includeLabels {
+						a.Labels = app.Metadata.Labels
 					}
 					if appsMatchesIncludeExclude(a, includePattern, excludePattern) {
 						os_.Apps = append(os_.Apps, a)
@@ -606,6 +634,7 @@ func init() {
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().String("exclude", "", "Exclude apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
 	appsCmd.Flags().Bool("include-env", false, "Also fetch and include each app's own user-provided environment variables (app_env) — requires Space Developer access per app; this is sensitive output, see README")
+	appsCmd.Flags().Bool("include-labels", false, "Also include each app's CF metadata labels (app_labels) — already part of the apps listing this command fetches, so no extra API call")
 	appsCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as CSV; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
 	appsCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
 }

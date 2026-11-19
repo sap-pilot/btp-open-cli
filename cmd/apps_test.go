@@ -299,6 +299,93 @@ func TestApps_WithoutIncludeEnv_NoEnvField(t *testing.T) {
 	}
 }
 
+// appsPageJSONWithLabels is appsPageJSON plus a metadata.labels map, for
+// --include-labels tests — labels come from this same /v3/apps response,
+// unlike env vars which need a separate call.
+func appsPageJSONWithLabels(appGUID, appName, spaceGUID string, labels map[string]string) string {
+	return mustJSONStr(map[string]interface{}{
+		"pagination": map[string]interface{}{"total_pages": 1},
+		"resources": []map[string]interface{}{
+			{
+				"guid":       appGUID,
+				"name":       appName,
+				"state":      "STARTED",
+				"created_at": "2024-01-01T00:00:00Z",
+				"updated_at": "2024-01-01T00:00:00Z",
+				"metadata": map[string]interface{}{
+					"annotations": map[string]string{"mta_id": ""},
+					"labels":      labels,
+				},
+				"relationships": map[string]interface{}{
+					"space": map[string]interface{}{
+						"data": map[string]string{"guid": spaceGUID},
+					},
+				},
+			},
+		},
+	})
+}
+
+func TestApps_IncludeLabels(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSONWithLabels("app1", "my-app", "sp1", map[string]string{"team": "payments", "tier": "1"}),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-labels", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps --include-labels failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"app_labels"`) || !strings.Contains(stdout, `"team": "payments"`) {
+		t.Errorf("expected app_labels with team=payments in output, got: %q", stdout)
+	}
+}
+
+func TestApps_WithoutIncludeLabels_NoLabelsField(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSONWithLabels("app1", "my-app", "sp1", map[string]string{"team": "payments"}),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "apps", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps failed: %v", err)
+	}
+	if strings.Contains(stdout, "app_labels") {
+		t.Errorf("expected no app_labels field without --include-labels, got: %q", stdout)
+	}
+}
+
+func TestApps_IncludeLabels_CSV(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSONWithLabels("app1", "my-app", "sp1", map[string]string{"team": "payments"}),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-labels", "--format", "csv")
+	if err != nil {
+		t.Fatalf("apps --include-labels --format csv failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "app_labels") {
+		t.Errorf("expected app_labels column in CSV header, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"{""team"":""payments""}"`) {
+		t.Errorf("expected JSON-encoded labels in CSV cell, got: %q", stdout)
+	}
+}
+
 func TestApps_OrgFilter(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": mustJSONStr(map[string]interface{}{

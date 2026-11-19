@@ -26,13 +26,15 @@ A common audit question is "what's different between these two subaccounts?" —
 
 3. **Extract apps, destinations, and HTML5 apps for this subaccount, in one pass:**
 
+   > CAUTION: if destination service key or html5-app-runtime instance/service-key is missing then below commands will create those missing keys or service instance for the extraction to work (see below destinatons/apps section for more detail); Threfore - recommend to test in QA/PREPROD subaccounts first prior to running these command in PRODUCTION subaccounts. 
+
    ```bash
-   bo apps --include-env --output=us10-pre-apps-full.csv
-   bo destinations --output=us10-pre-dest-full.csv
+   bo apps --include-env --include-labels --output=us10-pre-apps-full.csv
+   bo destinations --no-key-option=create --output=us10-pre-dest-full.csv
    bo html5-apps --no-runtime-option=create --no-key-option=create --output=us10-pre-html5-full.csv
    ```
 
-   `.csv` is auto-detected from each filename. See "Apps"/"Destinations"/"HTML5 apps" below for what each command needs and what to watch out for.
+   > `.csv` is auto-detected from each filename. See "Apps"/"Destinations"/"HTML5 apps" below for what each command needs and what to watch out for.
 
 4. **(Optional) open any of the three `...-full.csv` files** and fix up anything that would otherwise show as a false difference or impact sorting, eg: an irregularly-named space, a one-off app/destination/HTML5 app you know isn't meant to exist on the other side, etc. For a quick text substitution across a whole file, `sed` works just as well as opening it in an editor:
 
@@ -43,12 +45,12 @@ A common audit question is "what's different between these two subaccounts?" —
 5. **Narrow each down to just the comparable columns:**
 
    ```bash
-   bo sort --fields=space_name,app_mta_id,app_name,app_env us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
+   bo sort --fields=space_name,app_mta_id,app_name,app_labels us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
    bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us10-pre-dest-full.csv --output=us10-pre-dest-sorted.csv
    bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us10-pre-html5-full.csv --output=us10-pre-html5-sorted.csv
    ```
 
-   `--by` isn't needed here: with `--fields` given and no `--by`, [`bo sort`](../README.md#sort) sorts by `--fields`' own fields, in that order — exactly the columns you just narrowed down to.
+   > `--by` isn't needed here: with `--fields` given and no `--by`, [`bo sort`](../README.md#sort) sorts by `--fields`' own fields, in that order — exactly the columns you just narrowed down to.
 
 6. **Select the second subaccount and repeat steps 3–5:**
 
@@ -58,11 +60,11 @@ A common audit question is "what's different between these two subaccounts?" —
    #     02 [x] us20/us20-pre (e5f6g7h8-...)
    #   Default org scope set to 1 org(s) for this login session.
 
-   bo apps --include-env --output=us20-pre-apps-full.csv
-   bo destinations --output=us20-pre-dest-full.csv
+   bo apps --include-env --include-labels --output=us20-pre-apps-full.csv
+   bo destinations --no-key-option=create --output=us20-pre-dest-full.csv
    bo html5-apps --no-runtime-option=create --no-key-option=create --output=us20-pre-html5-full.csv
    # (optional edits, same as step 4)
-   bo sort --fields=space_name,app_mta_id,app_name,app_env us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
+   bo sort --fields=space_name,app_mta_id,app_name,app_labels us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
    bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us20-pre-dest-full.csv --output=us20-pre-dest-sorted.csv
    bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us20-pre-html5-full.csv --output=us20-pre-html5-sorted.csv
    ```
@@ -71,14 +73,14 @@ A common audit question is "what's different between these two subaccounts?" —
 
 ## Apps
 
-`--include-env` adds the `app_env` column (each app's own user-provided environment variables, JSON-encoded) and requires at least Space Developer access to each app's space — this is sensitive output, see the README's note on `--include-env` before sharing this file.
+`--include-env` adds the `app_env` column (each app's own user-provided environment variables, JSON-encoded) and requires at least Space Developer access to each app's space — this is sensitive output, see the README's note on `--include-env` before sharing this file. `--include-labels` adds the `app_labels` column (each app's CF metadata labels, JSON-encoded) — unlike `--include-env`, this needs no extra API call and isn't sensitive output. The `--fields` list in step 5 above keeps `app_labels` but drops `app_env` from the final sorted/compared file — add `app_env` back to that list too if you also want environment variables in the comparison.
 
 Sample `...-apps-sorted.csv`:
 
 ```csv
-space_name,app_mta_id,app_name,app_env
-dev,myapp,myapp-srv,"{""PROFILE"":""dev""}"
-prod,myapp,myapp-srv,"{""PROFILE"":""prod""}"
+space_name,app_mta_id,app_name,app_labels
+dev,myapp,myapp-srv,"{""team"":""payments""}"
+prod,myapp,myapp-srv,"{""team"":""payments""}"
 prod,myapp,myapp-ui,"{}"
 ```
 

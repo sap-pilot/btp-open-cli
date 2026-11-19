@@ -14,6 +14,10 @@
   diff a.csv b.csv   # anything left/right-only is missing from the other org
   ```
 
+- **`apps --include-labels` — include each app's CF metadata labels**
+
+  Adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's CF metadata labels — same representation as `--include-env`'s `app_env`, but unlike it, needs no extra API call, since labels are already part of the same `/v3/apps` listing this command always fetches. Not sensitive output.
+
 - **New `html5-apps` command — list HTML5 Application Repository app metadata**
 
   Lists applications from every accessible `html5-apps-repo`/`app-host` service instance across regions/orgs/spaces, following the same discovery flow as the SAP CLI plugin's `cf html5-list`. `--from-destinations` discovers applications via subaccount-/instance-level destinations carrying `app_host_id`+`sap.cloud.service` instead — the actual metadata call always authenticates with a real CF `app-runtime` service key, never the destination's own credentials. `--no-key-option`/`--no-runtime-option` (`s/skip`, `c/create`, `t/transient`, `a/abort`) control what happens when an `app-runtime` service key or service instance is missing — including creating one automatically, and, with `transient`, cleaning it up again afterward; omitting either flag asks interactively instead (`s/c/t/a`, defaulting to `skip`), unless `-y` is given, which defaults straight to `skip` with no prompt. `--debug` prints each raw `applications/metadata` response.

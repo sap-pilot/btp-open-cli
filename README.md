@@ -1670,6 +1670,10 @@ bo apps --output apps.json
 # Also fetch each app's own user-provided environment variables (app_env) —
 # feed the result straight into `bo update-apps-env` to replay it elsewhere
 bo apps --include-env --format json -o apps-env.json
+
+# Also include each app's CF metadata labels (app_labels) — no extra API
+# call, since labels are already part of the apps listing itself
+bo apps --include-labels --format json
 ```
 
 `--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
@@ -1696,11 +1700,13 @@ regions:
                 process_disk_in_mb: 1024
 ```
 
-CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb,app_env`
+CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb,app_total_memory_mb,app_env,app_labels`
 
 The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
 
 `--include-env` adds an `app_env` field (object in JSON/TOON, a JSON-encoded string in the `app_env` CSV column) with each app's own user-provided environment variables — the ones `cf set-env`/`bo update-apps-env` manage, not `VCAP_SERVICES` or any other derived/system environment. It costs one extra API call per app and requires at least Space Developer access to each app's space; a per-app failure is reported as a warning on stderr rather than aborting the command, and that app is simply left without `app_env`. Secret/password/key-named variables are included in full, never masked or skipped — they're exactly what `bo update-apps-env` needs to recreate on a target app. The only variable always excluded is `DEPLOY_ATTRIBUTES`, injected by deploy tooling rather than set by a user and not meaningful to replay onto another org/space. This is sensitive output — see "Handling commands that output secrets" in the skill doc, and treat it the same as `service-credentials`' output below.
+
+`--include-labels` adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's CF metadata labels (`cf.App.Metadata.Labels`). Unlike `--include-env`, this needs no extra API call — labels are already part of the same `/v3/apps` listing this command always fetches — so it's free and not sensitive output.
 
 ### `update-apps-env`
 
