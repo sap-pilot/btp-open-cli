@@ -13,7 +13,8 @@ type AppAnnotations struct {
 }
 
 type AppMetadata struct {
-	Annotations AppAnnotations `json:"annotations"`
+	Annotations AppAnnotations    `json:"annotations"`
+	Labels      map[string]string `json:"labels"`
 }
 
 type appRelationships struct {
@@ -84,6 +85,20 @@ func (c *Client) ListAppsBySpaces(ctx context.Context, spaceGUIDs []string) ([]A
 		}
 	}
 	return all, nil
+}
+
+// GetApp fetches one app directly by GUID (GET /v3/apps/:guid) rather than
+// relying on the possibly-stale copy embedded in a bulk ListAppsBySpaces
+// response — on at least some CF platforms, a label/annotation set moments
+// earlier (e.g. via 'cf set-label') isn't yet reflected in a filtered list
+// query's results, even though a direct per-app read already sees it.
+func (c *Client) GetApp(ctx context.Context, appGUID string) (App, error) {
+	url := fmt.Sprintf("%s/v3/apps/%s", c.BaseURL(), appGUID)
+	var app App
+	if err := c.get(ctx, url, &app); err != nil {
+		return App{}, err
+	}
+	return app, nil
 }
 
 // ── app environment ────────────────────────────────────────────────────────────

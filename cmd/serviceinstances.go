@@ -123,7 +123,10 @@ Output formats (--format):
   json  JSON document
   csv   Flat CSV rows, one per service instance (credentials as a JSON column with --full)
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies. Pass --format explicitly to override the extension.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -137,6 +140,11 @@ If --regions is omitted the regions from the last login are used.`,
 		fullFlag, _ := cmd.Flags().GetBool("full")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 
 		if spaceFlag != "" {
 			if spacesFlag != "" {
@@ -545,5 +553,5 @@ func init() {
 	serviceInstancesCmd.Flags().String("service-instances", "", "Only include service instances whose name matches any of these comma-separated patterns (glob, e.g. '*-hdi,*-db', or substring); default is every service instance in scope")
 	serviceInstancesCmd.Flags().Bool("full", false, "Also fetch and include each user-provided instance's credentials (live secrets); managed instances have none of their own")
 	serviceInstancesCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
-	serviceInstancesCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	serviceInstancesCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 }

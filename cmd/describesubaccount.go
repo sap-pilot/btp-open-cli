@@ -133,7 +133,10 @@ target org, --format json/toon returns a list of per-org results instead of
 a single object, and --subaccount cannot be used (it only makes sense for a
 single, explicitly targeted org).
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .toon selects toon — otherwise the default toon
+applies. Pass --format explicitly to override the extension.
 
 CIS central-viewer service key credentials are auto-discovered from CF and cached
 in ~/.bo/credentials.json for subsequent runs.
@@ -146,6 +149,11 @@ If --regions is omitted the regions from the last login are used.`,
 		subaccountFlag, _ := cmd.Flags().GetString("subaccount")
 		regionsFlag, _ := cmd.Flags().GetString("regions")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
 		noPrompt, _ := cmd.Flags().GetBool("no-prompt")
 
 		creds, err := store.Load()
@@ -616,7 +624,7 @@ func init() {
 	describeSubaccountCmd.Flags().String("orgs", "", "Path to CSV of orgs to describe (columns: region,org_id,org_name)")
 	describeSubaccountCmd.Flags().String("subaccount", "", "BTP subaccount GUID to use in the CIS API query (defaults to the CF org GUID; only valid with a single target org)")
 	describeSubaccountCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	describeSubaccountCmd.Flags().String("format", "toon", "Output format: toon (default) or json")
+	describeSubaccountCmd.Flags().String("format", "toon", "Output format: toon (default) or json; auto-detected from --output's extension (.json or .toon) when --format is not explicitly given")
 	describeSubaccountCmd.Flags().Bool("no-prompt", false, "Skip interactive prompts — orgs with no XSUAA service instance or key are silently skipped")
 	describeSubaccountCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
 }

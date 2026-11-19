@@ -299,6 +299,113 @@ func TestApps_WithoutIncludeEnv_NoEnvField(t *testing.T) {
 	}
 }
 
+// singleAppJSON returns a CF v3 GET /v3/apps/:guid response for one app
+// with the given metadata.labels — used to mock --include-labels'
+// dedicated per-app fetch (cf.Client.GetApp), which deliberately does not
+// reuse whatever metadata.labels the bulk /v3/apps listing itself carries.
+func singleAppJSON(appGUID, appName string, labels map[string]string) string {
+	return mustJSONStr(map[string]interface{}{
+		"guid":       appGUID,
+		"name":       appName,
+		"state":      "STARTED",
+		"created_at": "2024-01-01T00:00:00Z",
+		"updated_at": "2024-01-01T00:00:00Z",
+		"metadata": map[string]interface{}{
+			"annotations": map[string]string{"mta_id": ""},
+			"labels":      labels,
+		},
+	})
+}
+
+func TestApps_IncludeLabels(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/apps/app1":     singleAppJSON("app1", "my-app", map[string]string{"team": "payments", "tier": "1"}),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-labels", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps --include-labels failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"app_labels"`) || !strings.Contains(stdout, `"team": "payments"`) {
+		t.Errorf("expected app_labels with team=payments in output, got: %q", stdout)
+	}
+}
+
+func TestApps_WithoutIncludeLabels_NoLabelsField(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, _, err := runCmd(t, "apps", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps failed: %v", err)
+	}
+	if strings.Contains(stdout, "app_labels") {
+		t.Errorf("expected no app_labels field without --include-labels, got: %q", stdout)
+	}
+}
+
+func TestApps_IncludeLabels_CSV(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"),
+		"/v3/apps/app1":     singleAppJSON("app1", "my-app", map[string]string{"team": "payments"}),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-labels", "--format", "csv")
+	if err != nil {
+		t.Fatalf("apps --include-labels --format csv failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "app_labels") {
+		t.Errorf("expected app_labels column in CSV header, got: %q", stdout)
+	}
+	if !strings.Contains(stdout, `"{""team"":""payments""}"`) {
+		t.Errorf("expected JSON-encoded labels in CSV cell, got: %q", stdout)
+	}
+}
+
+// TestApps_IncludeLabels_RefetchesPerApp confirms --include-labels fetches
+// each app's labels directly (GET /v3/apps/:guid) rather than trusting
+// whatever metadata.labels happens to be embedded in the bulk /v3/apps
+// listing — reproducing the reported bug where a label set moments earlier
+// (e.g. via 'cf set-label') wasn't reflected in that listing yet. The list
+// response here deliberately carries a stale/different labels map from the
+// per-app one, and only the per-app map must win.
+func TestApps_IncludeLabels_RefetchesPerApp(t *testing.T) {
+	srv := fakeCFServer(t, map[string]string{
+		"/v3/organizations": singleOrgPage("org1", "my-org"),
+		"/v3/spaces":        spacesPageJSON("sp1", "dev", "org1"),
+		"/v3/apps":          appsPageJSON("app1", "my-app", "sp1"), // no labels at all in the list response
+		"/v3/apps/app1":     singleAppJSON("app1", "my-app", map[string]string{"commit_id": "cd912038"}),
+		"/v3/processes":     processesPageJSON("app1"),
+	})
+	setupTestEnv(t, srv.URL)
+	setDefaultOrgScope(t, srv.URL, "org1", "my-org")
+
+	stdout, stderr, err := runCmd(t, "apps", "--include-labels", "--format", "json")
+	if err != nil {
+		t.Fatalf("apps --include-labels failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, `"commit_id": "cd912038"`) {
+		t.Errorf("expected commit_id label fetched from the per-app endpoint, got: %q", stdout)
+	}
+}
+
 func TestApps_OrgFilter(t *testing.T) {
 	srv := fakeCFServer(t, map[string]string{
 		"/v3/organizations": mustJSONStr(map[string]interface{}{

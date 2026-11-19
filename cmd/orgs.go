@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -63,6 +64,44 @@ func buildOrgsOutDoc(selected []orgChoice) orgsOutDoc {
 	return doc
 }
 
+// reportOrgsAborted writes out whatever default org scope creds already had
+// — unchanged — in format, for when the interactive picker was aborted
+// (Esc/q/Ctrl-C) rather than confirmed: the user sees the scope that's still
+// actually in effect instead of an error and a wall of usage text, and
+// nothing is saved.
+func reportOrgsAborted(creds *store.Credentials, format string) error {
+	prev := make([]orgChoice, len(creds.DefaultOrgScope))
+	for i, ref := range creds.DefaultOrgScope {
+		prev[i] = orgChoice{Region: ref.Region, ID: ref.ID, Name: ref.Name, APIURL: ref.APIURL}
+	}
+
+	out, closeOut, err := resolveOutputWriter("")
+	if err != nil {
+		return err
+	}
+	defer closeOut()
+
+	doc := buildOrgsOutDoc(prev)
+	switch strings.ToLower(format) {
+	case "json":
+		err = writeOrgsJSON(out, doc)
+	case "csv":
+		err = writeOrgsCSV(out, doc)
+	default: // "toon"
+		err = writeOrgsToon(out, doc)
+	}
+	if err != nil {
+		return err
+	}
+
+	if len(prev) == 0 {
+		fmt.Fprint(os.Stderr, "\nSelection aborted — no default org scope was selected; still unset.\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "\nSelection aborted — default org scope unchanged at %d org(s) for this login session.\n", len(prev))
+	}
+	return nil
+}
+
 // ── command ───────────────────────────────────────────────────────────────────
 
 var orgsCmd = &cobra.Command{
@@ -81,6 +120,10 @@ type an org's number to jump to and toggle it directly, 'a' to select every
 org, 'c' to clear the selection, and enter to confirm — or just confirm the
 highlighted org if nothing was checked. Pass --all to select every matching
 org (after --include/--exclude filtering) without prompting.
+
+Esc, 'q', or Ctrl-C aborts the picker instead of confirming: whatever default
+org scope was already in effect (unchanged) is reported the same way a
+confirmed selection would be, rather than an error.
 
 Use --include/--exclude to narrow which orgs appear in the picker (or get
 auto-selected with --all): each accepts a comma-separated list of keywords,
@@ -110,6 +153,11 @@ formats could represent:
         command's --orgs/--excludeOrgs file (column order is not significant
         when read back — only the column names are)
 
+If --format is not explicitly given, it is auto-detected from --output's
+extension: .json selects json, .csv selects csv, .toon selects toon —
+otherwise the default toon applies. Pass --format explicitly to override
+the extension.
+
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		regionsFlag, _ := cmd.Flags().GetString("regions")
@@ -121,6 +169,11 @@ If --regions is omitted the regions from the last login are used.`,
 
 		if outputFile == "" && cmd.Flags().Changed("format") {
 			return fmt.Errorf("--format can only be used together with --output")
+		}
+		if outputFile != "" && !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
 		}
 
 		creds, err := store.Load()
@@ -196,7 +249,12 @@ If --regions is omitted the regions from the last login are used.`,
 			// `bo login`/`bo logoff`, not by this command itself.
 			selected, err = selectOrgsInteractive(ctx, candidates, orgScopeIDSet(creds.DefaultOrgScope))
 			if err != nil {
-				return err
+				if !errors.Is(err, errOrgPickerAborted) {
+					return err
+				}
+				// Aborted (Esc/q/Ctrl-C): report whatever default org scope
+				// was already in effect — unchanged — instead of an error.
+				return reportOrgsAborted(creds, format)
 			}
 		}
 
@@ -278,7 +336,7 @@ func init() {
 	orgsCmd.GroupID = "common"
 	rootCmd.AddCommand(orgsCmd)
 	orgsCmd.Flags().String("regions", "", "Comma-separated CF regions (e.g. us10,eu10); uses stored regions if omitted")
-	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv — only valid together with --output")
+	orgsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv — only valid together with --output; auto-detected from --output's extension (.json, .csv, .toon) when not explicitly given")
 	orgsCmd.Flags().String("include", "", "Only show/select orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().String("exclude", "", "Exclude orgs whose org_name contains any of these comma-separated, case-insensitive keywords")
 	orgsCmd.Flags().Bool("all", false, "Select every matching org without prompting for interactive selection")

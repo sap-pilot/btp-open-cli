@@ -132,12 +132,40 @@ they're logged in.
 
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
   `org-users`, `org-space-users`, `users`, `apps`, `roles`, `role-collections`,
-  `space-destinations`, `subaccount-destinations`, `describe-subaccount`,
-  `count-lines`, `service-credentials` (this one outputs raw secrets — see
-  "Handling commands that output secrets" below before using it),
-  `service-instances`, `service-keys` (both are read-only by default, but
-  `--full` fetches and prints live credentials on each — see "Handling
-  commands that output secrets" below before using `--full`).
+  `describe-subaccount`, `html5-apps` (read-only as long as you don't
+  choose `create`/`transient` — an html5-apps-repo/app-runtime instance or
+  service key found missing prompts interactively (`s`/skip, `c`/create,
+  `t`/transient, or `a`/abort, defaulting to skip on a blank line) unless
+  `--no-key-option`/`--no-runtime-option` was explicitly given, or `-y` is
+  passed to default straight to skip without prompting — in an agent
+  shell, always pass `-y` (or an explicit `--no-key-option=s`/
+  `--no-runtime-option=s`) to avoid hanging on that prompt, same as any
+  other `[y/N]`-style prompt (see "Running non-interactively" above);
+  `c`/create and `t`/transient are write actions — they create a service
+  key and/or service instance, `t`/transient deleting them again
+  afterward — so treat passing either like the guardrails below),
+  `count-lines`, `service-credentials`
+  (this one outputs raw secrets — see "Handling commands that output
+  secrets" below before using it), `service-instances`, `service-keys`
+  (both are read-only by default, but `--full` fetches and prints live
+  credentials on each — see "Handling commands that output secrets" below
+  before using `--full`), `space-destinations`, `subaccount-destinations`,
+  and `destinations` (all three always include every destination property —
+  including live secrets such as Password/ClientSecret — unredacted by
+  default, with no `--full` flag to opt out of it; see "Handling commands
+  that output secrets" below, and narrow with `--fields` to just the
+  columns you need, e.g. `Name,URL`, when you don't need the credentials.
+  All three are also read-only as long as you don't choose `create`/
+  `transient`: a destination service instance found with no service key
+  prompts interactively (`s`/skip, `c`/create, `t`/transient, or `a`/abort,
+  defaulting to skip on a blank line) unless `--no-key-option` was
+  explicitly given, or `-y` is passed to default straight to skip without
+  prompting — in an agent shell, always pass `-y` (or an explicit
+  `--no-key-option=s`) to avoid hanging on that prompt, same as any other
+  `[y/N]`-style prompt (see "Running non-interactively" above); `c`/create
+  and `t`/transient are write actions — they create a service key,
+  `t`/transient deleting it again afterward — so treat passing either like
+  the guardrails below).
 - **Write** (change BTP state — see guardrails below): `create-users`,
   `delete-users`, `create-org-space-users`, `delete-org-space-users`,
   `create-subaccount-destinations`, `update-subaccount-destinations`,
@@ -155,13 +183,29 @@ they're logged in.
   `update-apps-env` (creates/updates apps' user-provided environment
   variables from a `bo apps --include-env` export — see guardrail #15
   below).
+- **`sort`** is not a BTP command at all — it never talks to BTP/CF, it just
+  sorts/narrows a CSV or JSON file already on disk (e.g. one a `bo` command
+  wrote with `--output`), in place or to a new file. Safe to run freely; see
+  "Compare two orgs/subaccounts to find differences" below for its main use
+  here. A dotted field name in `--fields`/`--by` (e.g. `app_labels.commit_id`)
+  reaches into a nested field — e.g. one JSON-object-valued column like
+  `app_labels` (from `bo apps --include-labels`) — instead of the whole
+  object/JSON string, falling back to that field's whole value if it isn't
+  actually a JSON object.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
   `org-space-users`), `--output`/`-o <file>`, and `--include <kw1,kw2,...>` /
   `--exclude <kw1,kw2,...>` — comma-separated, case-insensitive, OR-matched
   substrings (the destination commands also accept a glob per keyword, e.g.
-  `API*PP`).
+  `API*PP`). `apps`, `users`, `role-collections`, `roles`, `html5-apps`,
+  `destinations`, `subaccount-destinations`, `space-destinations`,
+  `service-keys`, `org-users`, `org-space-users`, `org-spaces`, and `spaces`
+  additionally share `--fields <col1,col2,...>` (narrow/reorder output
+  columns) and `--sort-by <col1,col2:desc,...>` (sort rows by one or more of
+  them) — their `--help` lists these under a "Common Flags:" section. See
+  "Compare two orgs/subaccounts to find differences" below for the main
+  reason to reach for them together.
 - **Global `--color auto|always|never` flag (default `auto`).** In `auto`
   mode, `toon`/`csv` output on `spaces`, `apps`, `service-instances`,
   `service-keys`, `role-collections`, `users`, `org-users`, and
@@ -422,15 +466,18 @@ ones in full, unmasked, since that's exactly what `update-apps-env` needs
 to recreate them on a target app (the only variable it ever excludes is
 `DEPLOY_ATTRIBUTES`, deploy-tooling noise rather than a real secret) —
 `create-service-keys` creates service keys and fetches their credentials,
-and `service-instances --full` /
-`service-keys --full` fetch and include each matched (user-provided
-instance's or key's) existing credentials — passwords, client secrets,
-certificates, the lot — printing them as plain JSON/TOON/CSV.
-`service-credentials`, `apps --include-env`, and `service-instances`/
-`service-keys` even with `--full`, are read-only (nothing in BTP changes),
-while `create-service-keys` is a write command that also happens to output
-secrets; the same `service-credentials.json` shape is also what `create-ups`
-later reads as input, and `apps --include-env`'s output is what
+`service-instances --full` / `service-keys --full` fetch and include each
+matched (user-provided instance's or key's) existing credentials, and
+`space-destinations`/`subaccount-destinations`/`destinations` always
+include every destination property unredacted by default — there's no
+`--full` flag on these three, so there's nothing to opt out of — passwords,
+client secrets, certificates, the lot — printing them as plain JSON/TOON/CSV.
+`service-credentials`, `apps --include-env`, `service-instances`/
+`service-keys` even with `--full`, and `space-destinations`/
+`subaccount-destinations`/`destinations`, are all read-only (nothing in BTP
+changes), while `create-service-keys` is a write command that also happens
+to output secrets; the same `service-credentials.json` shape is also what
+`create-ups` later reads as input, and `apps --include-env`'s output is what
 `update-apps-env` (see guardrail #15 above) later reads as input. Treat all
 of this as sensitive:
 
@@ -446,8 +493,10 @@ of this as sensitive:
   silent about it.
 - Narrow with `--services`/`--spaces`/`--apps` (on `service-credentials`),
   `--spaces`/`--service-instances` (on `create-service-keys` and
-  `service-instances`), or `--spaces`/`--service-instances`/`--service-keys`
-  (on `service-keys`) to the minimum needed, and only pass `--full` on
+  `service-instances`), `--spaces`/`--service-instances`/`--service-keys`
+  (on `service-keys`), or `--fields` (on `space-destinations`/
+  `subaccount-destinations`/`destinations`, e.g. `--fields Name,URL` to skip
+  every credential column) to the minimum needed, and only pass `--full` on
   `service-instances`/`service-keys` (or `--include-env` on `apps`) when you
   actually need the credentials — omit it for a plain metadata inventory.
 
@@ -462,12 +511,44 @@ bo orgs --include prod --format csv -o prod-orgs.csv
 # User Access Review export across those orgs
 bo users --orgs prod-orgs.csv --format uar.csv -o uar-export.csv
 
-# Destinations matching a keyword or glob, across the same scope
-bo subaccount-destinations --orgs prod-orgs.csv --include "API*PP" --format csv
+# Destinations matching a keyword or glob, across the same scope — --fields
+# keeps this to non-sensitive columns (see "Handling commands that output
+# secrets" above; omit --fields only when you actually need the credentials)
+bo subaccount-destinations --orgs prod-orgs.csv --include "API*PP" --format csv --fields Name,URL
 
 # Extract hana credentials for *-srv apps in the prod space, to a file —
 # see "Handling service-credentials output" above before running this
 bo service-credentials --orgs prod-orgs.csv --spaces prod --apps "*-srv" --services hana -o hana-creds.json
+```
+
+### Compare two orgs/subaccounts to find differences (read-only, safe to run freely)
+
+Export the same `--fields`/`--sort-by` selection from each org/subaccount, then
+`diff` the two files — any line only on one side is missing from the other.
+Works for `html5-apps`, `apps`, `destinations` (or
+`subaccount-destinations`/`space-destinations`), `users`, `role-collections`,
+and `roles` — any command with `--fields`/`--sort-by` (see "Common flags"
+above). `bo sort` is for re-sorting/narrowing a file you already have (e.g.
+one that wasn't exported with a matching `--sort-by`) — prefer exporting both
+sides with the same `--fields`/`--sort-by` to begin with when you can.
+
+```bash
+# Which HTML5 apps exist in org A but not org B, or vice versa?
+bo html5-apps --org <org-A> --fields organization_name,space_name,application_name --sort-by application_name --format csv -o a.csv
+bo html5-apps --org <org-B> --fields organization_name,space_name,application_name --sort-by application_name --format csv -o b.csv
+diff a.csv b.csv   # lines starting with "<" are only in A, ">" only in B
+
+# Same idea for destinations — --fields also keeps credentials out, see
+# "Handling commands that output secrets" above
+bo destinations --org <org-A> --fields org_name,space_name,instance_name --sort-by Name --format csv -o a.csv
+bo destinations --org <org-B> --fields org_name,space_name,instance_name --sort-by Name --format csv -o b.csv
+
+# Comparing by one specific CF metadata label (not the whole app_labels
+# object): export with --include-labels, then narrow with `bo sort`'s
+# dotted-field support (app_labels, not apps itself, has --fields/--by)
+bo apps --org <org-A> --include-labels --format csv -o a-full.csv
+bo sort --fields=space_name,app_name,app_labels.commit_id a-full.csv -o a.csv
+diff a.csv b.csv
 ```
 
 ### Bulk-create users (guarded)
@@ -495,8 +576,8 @@ bo delete-org-space-users targets.csv --include sap.default -y             # aft
 ### Sync destinations across orgs (highest caution — no confirm step exists)
 
 ```bash
-bo subaccount-destinations --orgs target-orgs.csv --format json   # current state
-# show dests.json's contents to the user before proceeding
+bo subaccount-destinations --orgs target-orgs.csv --format json -o dests.json  # current state (now contains live secrets — see "Handling commands that output secrets" above; don't paste its contents into the conversation)
+# show the user where dests.json landed so they can review it themselves before proceeding
 bo update-subaccount-destinations --orgs target-orgs.csv --destinations dests.json --no-prompt
 ```
 

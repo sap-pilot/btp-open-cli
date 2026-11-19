@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -375,5 +376,84 @@ func TestOrgs_ReselectPreChecksPreviousScope(t *testing.T) {
 	_, err := selectOrgsInteractive(context.Background(), choices, preselected)
 	if err == nil || !strings.Contains(err.Error(), "terminal") {
 		t.Errorf("expected the usual non-terminal error, got: %v", err)
+	}
+}
+
+// captureStdout redirects the real os.Stdout for the duration of fn, so a
+// function (like reportOrgsAborted) that writes to it directly — not via
+// cmd.OutOrStdout() — can be tested without a full runCmd/cobra round trip.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal("creating stdout pipe:", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = orig }()
+
+	fn()
+
+	w.Close()
+	var buf strings.Builder
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatal("reading stdout pipe:", err)
+	}
+	return buf.String()
+}
+
+// TestReportOrgsAborted_WithPreviousScope verifies that aborting the picker
+// reports the existing default org scope (unchanged) rather than an error.
+func TestReportOrgsAborted_WithPreviousScope(t *testing.T) {
+	creds := &store.Credentials{
+		DefaultOrgScope: []store.OrgScopeRef{
+			{Region: "us10", ID: "g1", Name: "my-org", APIURL: "https://api.us10.example.com"},
+		},
+	}
+
+	var err error
+	out := captureStdout(t, func() {
+		err = reportOrgsAborted(creds, "json")
+	})
+	if err != nil {
+		t.Fatalf("reportOrgsAborted failed: %v", err)
+	}
+	if !strings.Contains(out, "my-org") || !strings.Contains(out, "g1") {
+		t.Errorf("expected previous scope's org in output, got: %q", out)
+	}
+	// Nothing should have been mutated on the creds passed in, and nothing
+	// should be persisted to disk.
+	if len(creds.DefaultOrgScope) != 1 {
+		t.Errorf("expected creds.DefaultOrgScope to be left untouched, got: %+v", creds.DefaultOrgScope)
+	}
+}
+
+// TestReportOrgsAborted_NoPreviousScope verifies the "still unset" message
+// when the picker is aborted with no default org scope selected yet.
+func TestReportOrgsAborted_NoPreviousScope(t *testing.T) {
+	creds := &store.Credentials{}
+
+	var err error
+	var stderrOut string
+	out := captureStdout(t, func() {
+		origStderr := os.Stderr
+		r, w, pipeErr := os.Pipe()
+		if pipeErr != nil {
+			t.Fatal("creating stderr pipe:", pipeErr)
+		}
+		os.Stderr = w
+		err = reportOrgsAborted(creds, "toon")
+		w.Close()
+		os.Stderr = origStderr
+		var buf strings.Builder
+		io.Copy(&buf, r) //nolint:errcheck
+		stderrOut = buf.String()
+	})
+	if err != nil {
+		t.Fatalf("reportOrgsAborted failed: %v", err)
+	}
+	_ = out
+	if !strings.Contains(stderrOut, "still unset") {
+		t.Errorf("expected 'still unset' message on stderr, got: %q", stderrOut)
 	}
 }

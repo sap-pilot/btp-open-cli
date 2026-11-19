@@ -104,6 +104,7 @@ mv bo ~/.local/bin/   # optional
 | [`delete-org-space-users`](#delete-org-space-users) | Remove users from every space and org across all accessible CF orgs |
 | [`apps`](#apps) | List Cloud Foundry applications across all accessible organizations and spaces |
 | [`update-apps-env`](#update-apps-env) | Create/update apps' user-provided environment variables from a `bo apps --include-env` export |
+| [`html5-apps`](#html5-apps) | List HTML5 application metadata from HTML5 Application Repository service instances |
 | [`service-credentials`](#service-credentials) | Extract VCAP_SERVICES credentials from matching apps across orgs as a flat JSON array |
 | [`create-ups`](#create-ups) | Create or update user-provided services from a service-credentials.json file, broadcast across orgs |
 | [`service-instances`](#service-instances) | List service instances across orgs and spaces, optionally including user-provided credentials |
@@ -140,10 +141,11 @@ mv bo ~/.local/bin/   # optional
 | [`create-subaccount-destinations`](#create-subaccount-destinations) | Create subaccount-level destinations via the destination service |
 | [`update-subaccount-destinations`](#update-subaccount-destinations) | Update subaccount-level destinations via the destination service |
 | [`delete-subaccount-destinations`](#delete-subaccount-destinations) | Delete subaccount-level destinations via the destination service |
-| [`space-destinations`](#space-destinations) | List instance-level destinations across all destination service instances in a CF space |
+| [`space-destinations`](#space-destinations) | List instance-level destinations for a CF space, or every accessible space if `--space` is omitted |
 | [`create-space-destinations`](#create-space-destinations) | Create instance-level destinations in all destination service instances of a CF space |
 | [`update-space-destinations`](#update-space-destinations) | Update instance-level destinations in all destination service instances of a CF space |
 | [`delete-space-destinations`](#delete-space-destinations) | Delete named instance-level destinations from all destination service instances of a CF space |
+| [`destinations`](#destinations) | List both subaccount-level and instance-level destinations for the target orgs |
 
 ### Subaccount Automation
 
@@ -159,6 +161,7 @@ mv bo ~/.local/bin/   # optional
 | [`completion`](#completion) | Generate shell autocompletion script (bash, zsh, fish, PowerShell) |
 | [`count-lines`](#count-lines) | Count total lines of source code files within a folder |
 | [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
+| [`sort`](#sort) | Sort the rows of CSV/JSON file(s) on disk, in place or to a new file |
 
 ### `login`
 
@@ -216,8 +219,15 @@ without `--org` or `--orgs`.
 Each org is numbered (`01`, `02`, ... — widening to 3 digits past 99 orgs).
 Controls: up/down to move the highlight, space to toggle the highlighted org,
 type an org's number to jump to and toggle it directly, `a` to select every
-org, `c` to clear the selection, and enter to confirm — or just confirm the
-highlighted org if nothing was checked.
+org, `c` to clear the selection, enter to confirm — or just confirm the
+highlighted org if nothing was checked — and Esc, `q`, or Ctrl-C to abort.
+Aborting doesn't change anything: whatever default org scope was already in
+effect is reported the same way a confirmed selection would be (same
+`--format`), rather than an error. When the list is longer than fits on
+screen, it scrolls to fit the terminal's actual height instead of leaving
+duplicate rows behind — PageUp/PageDown (besides up/down past either edge of
+what's visible) scroll a full screen at a time, and a status line reports
+which entries are currently shown.
 
 **The selection applies only to the current login session.** It's saved to
 `~/.bo/credentials.json`, but running `bo login` or `bo logoff` clears it — you'll
@@ -236,7 +246,10 @@ straight to that file, with no prompting and no waiting for input — `--all`
 is ignored in this mode, and the default org scope is left untouched.
 `--format` is only valid together with `--output`, since without a file the
 command's output is the interactive picker itself, not a listing one of
-these formats could represent.
+these formats could represent. If `--format` is not explicitly given, it is
+auto-detected from `--output`'s extension: `.json` selects `json`, `.csv`
+selects `csv`, `.toon` selects `toon` — otherwise the default `toon` applies.
+Pass `--format` explicitly to override the extension.
 
 ```bash
 # Interactively pick the default org scope for this session
@@ -255,7 +268,8 @@ bo orgs --regions us10,us20,eu10
 
 # Non-interactive: dump every accessible org straight to a file, skipping
 # the picker — shell '>' doesn't work here since the interactive picker
-# also writes to stdout
+# also writes to stdout. --format is auto-detected from the .csv extension
+# here, so it could also be omitted
 bo orgs --output my-orgs.csv --format csv
 
 # Narrow the dumped list to prod orgs and save as a reusable --orgs CSV
@@ -297,6 +311,13 @@ bo org-spaces --include prod,staging
 
 # Exclude spaces where org_name or space_name contains any of these keywords
 bo org-spaces --exclude sandbox,test
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo org-spaces --fields org_name,space_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo org-spaces --sort-by org_name,space_name
 ```
 
 TOON output format:
@@ -313,7 +334,11 @@ regions:
             space_name: prod
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space; `region`, `org_id`, and `org_name` are repeated for every space in the same org. Orgs with no spaces are omitted from the CSV output.
+CSV columns: `region,org_id,org_name,space_id,space_name` — one row per space; `region`, `org_id`, and `org_name` are repeated for every space in the same org. Orgs with no spaces are omitted from the CSV output. `json`/`toon` normally nest `regions`/`orgs`/`spaces` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `space_name` within each org.
 
 ### `spaces`
 
@@ -338,8 +363,17 @@ bo spaces --orgs target-orgs.csv
 bo spaces --include prod,staging
 bo spaces --exclude sandbox,test
 
-# Write output to a file instead of stdout
-bo spaces --format csv -o spaces.csv
+# Write output to a file instead of stdout; --format is auto-detected from
+# -o's extension (.json, .csv, .toon) when not explicitly given — this
+# writes CSV without needing --format csv
+bo spaces -o spaces.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo spaces --fields org_name,space_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo spaces --sort-by org_name,space_name
 ```
 
 TOON output format (same shape as `org-spaces`):
@@ -356,7 +390,11 @@ regions:
             space_name: prod
 ```
 
-CSV columns: `region,org_id,org_name,space_id,space_name`.
+CSV columns: `region,org_id,org_name,space_id,space_name`. `json`/`toon` normally nest `regions`/`orgs`/`spaces` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `space_name` within each org.
 
 ### `org-users`
 
@@ -392,9 +430,23 @@ bo org-users --orgs target-orgs.csv
 # Specific regions
 bo org-users --regions us10,us20,eu10
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon) when not explicitly given
 bo org-users --output org-users.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo org-users --fields cfuser_name,cfuser_roles
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo org-users --sort-by cfuser_name
 ```
+
+`csv` is always a flat list, one row per user, with columns: `region,org_id,org_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles`. `json`/`toon` normally nest `regions`/`orgs`/`cfusers` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep users in their natural (API) order.
 
 ### `org-space-users`
 
@@ -436,9 +488,25 @@ bo org-space-users --orgs target-orgs.csv
 # Specific regions
 bo org-space-users --regions us10,us20,eu10
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon — uar.csv is never auto-detected, pass
+# --format uar.csv explicitly) when not explicitly given
 bo org-space-users --output org-space-users.csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too; ignored for uar.csv)
+bo org-space-users --fields space_name,cfuser_name,cfuser_roles
+
+# Sort by one or more columns, in priority order (":desc" for descending;
+# ignored for uar.csv)
+bo org-space-users --sort-by space_name,cfuser_name
 ```
+
+`csv` is always a flat list, one row per user, with columns: `region,org_id,org_name,space_id,space_name,cfuser_id,cfuser_name,cfuser_origin,cfuser_roles` (`space_id`/`space_name` are empty for org-level users). `json`/`toon` normally nest `regions`/`orgs`/`spaces` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column. Ignored for `uar.csv`, whose columns are fixed.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep users in their natural (API) order. Ignored for `uar.csv`.
 
 ### `create-org-space-users`
 
@@ -551,7 +619,13 @@ For each organization the command searches all spaces for any `xsuaa` service in
 
 Only the access token is cached in `~/.bo/credentials.json` — service key credentials (clientId, clientSecret) are fetched on demand and never stored locally.
 
-The `--format uar.csv` option produces a User Access Review export: one row per role collection membership, so a user assigned to N role collections produces N rows with the other fields duplicated across them. Role collections with no members still get one row, with `N/A` in Role Collection Members and Origin. Rows are sorted by Role Collection name. This format fetches each org's full role collection inventory (for descriptions) in addition to its users, and ignores `--fields`/`--excludeFields` since its columns are fixed.
+The `--format uar.csv` option produces a User Access Review export: one row per role collection membership, so a user assigned to N role collections produces N rows with the other fields duplicated across them. Role collections with no members still get one row, with `N/A` in Role Collection Members and Origin. Rows are sorted by Role Collection name. This format fetches each org's full role collection inventory (for descriptions) in addition to its users, and ignores `--fields`/`--sort-by` since its columns are fixed.
+
+`csv` is always a flat list, one row per user, with columns: `region,org_id,org_name,user_id,user_externalId,user_origin,user_name,email,lastLogonTime,groups`. `json`/`toon` normally nest `regions`/`orgs`/`users` instead, but switch to that same flat `{"rows": [...]}` view whenever `--fields` or `--sort-by` is given.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order, each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep users in their natural (API) order.
 
 If neither `--org` nor `--orgs` is given, the default org scope selected via
 [`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
@@ -593,16 +667,18 @@ bo users --include sap.ids,sap.custom
 # Exclude users where any user field contains any of these keywords
 bo users --exclude sap.default,uaa
 
-# Include only specific fields in output
+# Limit output to just these columns, in this order, for any --format
 bo users --fields user_id,user_name,email,user_origin
 
-# Exclude specific fields from output
-bo users --excludeFields lastLogonTime,groups
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo users --sort-by user_name
 
 # Combine filtering and field selection
-bo users --include "sap.ids" --excludeFields groups --regions us10,us20
+bo users --include "sap.ids" --fields user_name,email --regions us10,us20
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon — uar.csv is never auto-detected, pass
+# --format uar.csv explicitly) when not explicitly given
 bo users --output users.csv
 ```
 
@@ -780,9 +856,29 @@ bo roles --format json
 # Write output to a file, ready to feed into create-roles/update-roles/delete-roles
 # (--format json is implied here by the .json extension — see below)
 bo roles --output roles.json
+
+# csv is always a flat list, one row per role
+bo roles --format csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too — not suitable for
+# feeding back into create-roles/update-roles/delete-roles)
+bo roles --fields role_name,appName,description
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo roles --sort-by appName,role_name
+
+# Only include roles where roleTemplateAppId, roleTemplateName, role_name,
+# appName, or description contain any of these comma-separated keywords
+bo roles --include "Custom_Role"
+bo roles --exclude sap.default
 ```
 
-`--format` defaults to `toon`, but is auto-detected as `json` whenever `--output`/`-o` ends in `.json` and `--format` isn't explicitly given — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.csv` selects `csv`, `.toon` selects `toon` — pass `--format` explicitly to override.
+
+`csv` columns: `region,org_id,org_name,roleTemplateAppId,roleTemplateName,role_name,appName,description,isReadOnly,attributeList` (the role's attribute list, JSON-encoded, empty when it has none). `json`/`toon` normally nest `regions`/`orgs`/`roles` instead (the shape the other `bo *-roles` commands read back in) — use `--fields <column,...>` (case-insensitive, comma-separated, any of those columns, in the order given) or `--sort-by <column,...>` (each optionally suffixed with `:desc`) to switch them to that same flat `{"rows": [...]}` view instead; omit both to keep the default nested order (sorted by `roleTemplateAppId` then `roleTemplateName`).
+
+Use `--include`/`--exclude` to narrow results further: each accepts a comma-separated list of keywords, and a role matches if `roleTemplateAppId`, `roleTemplateName`, `role_name`, `appName`, or `description` contains any of them (case-insensitive).
 
 Output format (TOON):
 ```
@@ -931,9 +1027,29 @@ bo role-collections --format json
 
 # Write output to a file instead of stdout (--format json is implied by the .json extension)
 bo role-collections --output role-collections.json
+
+# csv is always a flat list, one row per role reference
+bo role-collections --format csv
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo role-collections --fields rolecollection_name,role_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo role-collections --sort-by rolecollection_name,role_name
+
+# Only include rows where rolecollection_name, rolecollection_description,
+# role_template_app_id, role_template_name, role_name, or role_description
+# contain any of these comma-separated keywords
+bo role-collections --include "BTP Admin"
+bo role-collections --exclude temp
 ```
 
-`--format` defaults to `toon`, but is auto-detected as `json` whenever `--output`/`-o` ends in `.json` and `--format` isn't explicitly given — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.json` selects `json`, `.csv` selects `csv`, `.toon` selects `toon` — pass `--format` explicitly to override.
+
+`csv` columns: `region,org_id,org_name,rolecollection_name,rolecollection_description,rolecollection_isReadOnly,role_template_app_id,role_template_name,role_name,role_description` (a role collection with no role references still gets one row, with the `role_*` columns empty). `json`/`toon` normally nest `regions`/`orgs`/`roleCollections`/`roleReferences` instead — use `--fields <column,...>` (case-insensitive, comma-separated, any of those columns, in the order given) or `--sort-by <column,...>` (each optionally suffixed with `:desc`) to switch them to that same flat `{"rows": [...]}` view instead; omit both to keep the default nested order (role collections sorted by name).
+
+Use `--include`/`--exclude` to narrow results further: each accepts a comma-separated list of keywords, and a row (one role reference, or the role collection itself if it has none) matches if `rolecollection_name`, `rolecollection_description`, `role_template_app_id`, `role_template_name`, `role_name`, or `role_description` contains any of them (case-insensitive). A role collection is dropped entirely once it has no matching row left.
 
 Output format (TOON):
 ```
@@ -1062,7 +1178,8 @@ bo describe-subaccount --org my-org-name --regions us10,us20,eu10
 # Describe every org in the default scope selected via `bo orgs`
 bo describe-subaccount
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# the .json extension here, so --format json could be omitted
 bo describe-subaccount --org my-org-name --output subaccount.json --format json
 ```
 
@@ -1116,23 +1233,22 @@ rolecollections:
 
 ### `space-destinations`
 
-List all instance-level destinations across every destination service instance found in a given CF space.
+List all instance-level destinations across every destination service instance found in a given CF space — or, with `--space` omitted, across **every accessible space**.
 
-The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). If a destination service instance has no service key, a warning is printed with `cf create-service-key` instructions and an interactive prompt lets you create one and press Enter to retry, type 's' to skip that instance, or Ctrl-C to abort.
+The first available service key of each destination service instance is used to obtain an access token. Service key credentials (clientId, clientSecret) are fetched on demand from CF and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused on subsequent calls (refreshed automatically when within 60 seconds of expiry). A destination service instance found with no service key is governed by `--no-key-option` (see below).
 
 ```bash
-# List destinations — default output: Name, URL, sap-client (TOON)
+# List destinations for one space — default output: every property (TOON)
 bo space-destinations --space <space-guid>
 
-# JSON output (Name, URL, sap-client)
+# Omit --space to scan every accessible space across every org instead
+bo space-destinations
+
+# JSON output
 bo space-destinations --space <space-guid> --format json
 
-# CSV output (space_name, destination_service_name, destination_name, destination_url, destination_sap_client)
+# CSV output
 bo space-destinations --space <space-guid> --format csv
-
-# All destination properties as a flat object (TOON or JSON)
-bo space-destinations --space <space-guid> --full
-bo space-destinations --space <space-guid> --full --format json
 
 # Only include destinations where any property contains any of these
 # comma-separated keywords (substring, case-insensitive)
@@ -1145,37 +1261,61 @@ bo space-destinations --space <space-guid> --include "API*PP"
 # Exclude destinations where any property contains any of these keywords
 bo space-destinations --space <space-guid> --exclude sandbox,test
 
-# Combine: full properties + include
-bo space-destinations --space <space-guid> --full --include "API*PP"
-
 # Scope region search
 bo space-destinations --space <space-guid> --regions us10,us20,eu10
+
+# Write output to a file instead of stdout; --format is auto-detected from
+# the extension (.json, .csv, .toon) when not explicitly given
+bo space-destinations -o all-space-destinations.csv
+
+# Limit output to just these columns, in this order, for any --format
+bo space-destinations --fields space_name,Name,URL
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo space-destinations --sort-by space_name,Name
+
+# Apply one choice to every destination service instance found with no
+# service key, instead of being asked interactively each time (default)
+bo space-destinations --no-key-option skip       # warn and move on
+bo space-destinations --no-key-option create     # auto-create 'bo-dest-key', keep it
+bo space-destinations --no-key-option transient  # auto-create 'bo-dest-key', use it, delete it
+bo space-destinations --no-key-option abort      # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option —
+# defaults straight to skip instead
+bo space-destinations -y
 ```
 
-Default TOON output (without `--full`):
+Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+Default TOON output — `org_id`/`org_name` identify the space's org, and each destination carries its own `destination_service_id`/`destination_service_name` since destinations are flattened directly under their space rather than grouped by instance:
 ```
-space_id: <space-guid>
-space_name: dev
-destination_service_instances:
-  - destination_service_id: <instance-guid>
-    destination_service_name: my-dest-service
+org_id: <org-guid>
+org_name: my-org
+spaces:
+  - space_id: <space-guid>
+    space_name: dev
     destinations:
       - Name: API_S4_HTTP_PP
         URL: http://qr1:443
         sap-client: "100"
-      - Name: API_MDG_HTTP_PP
-        URL: http://qrg:443
-        sap-client: "100"
+        Authentication: NoAuthentication
+        Type: HTTP
+        destination_service_id: <instance-guid>
+        destination_service_name: my-dest-service
 ```
 
-CSV output (`--format csv`, without `--full`) — columns: `space_name,destination_service_name,destination_name,destination_url,destination_sap_client`:
-```
-space_name,destination_service_name,destination_name,destination_url,destination_sap_client
-dev,my-dest-service,API_S4_HTTP_PP,http://qr1:443,100
-dev,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,100
-```
+With `--space` omitted and more than one org turns up a result, `--format json` returns a plain JSON array of these per-org objects instead of a single one, and `--format toon` wraps them as `{orgs: [...]}` — same convention as [`subaccount-destinations`](#subaccount-destinations). Orgs/spaces with no matching destinations are left out of this all-spaces result entirely; with `--space` given, that one target space is always included in the result, even when it has no destinations.
 
-With `--full`, each destination is a flat object containing **all** properties returned by the destination API exactly as-is — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
+`--format csv` gives a flat CSV, one row per destination: `org_id`, `org_name`, `space_id`, and `space_name` lead, followed by every property key that appears anywhere in the result set (sorted alphabetically, already including `destination_service_id`/`destination_service_name`), so the column set reflects whatever destinations were actually returned.
+
+Use `--fields <column,...>` (comma-separated, in the order given — `org_id`, `org_name`, `space_id`, `space_name`, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns instead — switches `json`/`toon` to that same flat `{"rows": [...]}` view too (map keys in that JSON/TOON view marshal in their own alphabetical order regardless of `--fields`' order; only CSV's column order follows it exactly).
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `Name` within each space.
+
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to a destination service instance found with no service key: `skip` warns and moves on; `create` automatically creates a `bo-dest-key` service key on the instance and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens. **Omitting this flag asks interactively instead of defaulting to a fixed choice:** each time such an instance is found, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` instead — `-y` has no effect when `--no-key-option` is explicitly given.
+
+⚠️ **Omitting `--space` scans every accessible space across every org** — on a large foundation this can be slow, and will interactively prompt (once per instance, see above, unless `--no-key-option`/`-y` is given) for every destination service instance with no service key, unless you narrow scope with `--regions` or target a specific space with `--space`.
 
 ### `create-space-destinations`
 
@@ -1234,13 +1374,75 @@ bo delete-space-destinations --space <space-guid> --destinations ./destinations.
 
 Only the `Name` field is read from the JSON file; all other properties are ignored.
 
+### `destinations`
+
+List both subaccount-level and instance-level destinations for the target org(s) in one combined result — the view [`subaccount-destinations`](#subaccount-destinations) and [`space-destinations`](#space-destinations) each give separately.
+
+For each target org: subaccount-level destinations are fetched via any destination service instance found in the org, and instance-level destinations are fetched from every destination service instance in every space of the org (or just the spaces named by `--spaces`). Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used.
+
+```bash
+# Combined destinations for the default org scope — TOON output
+bo destinations
+
+# A specific org, JSON or CSV output
+bo destinations --org <org-guid-or-name> --format json
+bo destinations --org <org-guid-or-name> --format csv
+
+# Narrow instance-level destinations to specific spaces (doesn't affect
+# subaccount-level destinations, which aren't tied to any space)
+bo destinations --org <org-guid-or-name> --spaces dev,qa
+
+# Only include destinations where any property contains any of these
+# comma-separated keywords (substring, or glob if a keyword has * ? [)
+bo destinations --org <org-guid-or-name> --include MDG
+bo destinations --org <org-guid-or-name> --exclude sandbox,test
+
+# Limit output to just these columns, in this order, for any --format
+bo destinations --org <org-guid-or-name> --fields space_name,instance_name,Name,URL
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo destinations --org <org-guid-or-name> --sort-by space_name,Name
+
+# Write output to a file instead of stdout; --format is auto-detected from
+# -o's extension (.json, .csv, .toon) when not explicitly given
+bo destinations --org <org-guid-or-name> --output dests.csv
+
+# Apply one choice to every destination service instance found with no
+# service key, instead of being asked interactively each time (default)
+bo destinations --org <org-guid-or-name> --no-key-option skip       # warn and move on
+bo destinations --org <org-guid-or-name> --no-key-option create     # auto-create 'bo-dest-key', keep it
+bo destinations --org <org-guid-or-name> --no-key-option transient  # auto-create 'bo-dest-key', use it, delete it
+bo destinations --org <org-guid-or-name> --no-key-option abort      # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option —
+# defaults straight to skip instead
+bo destinations --org <org-guid-or-name> -y
+```
+
+The result is a flat list, one row per destination: `org_id`, `org_name`, `space_id`, `space_name`, `instance_id`, and `instance_name` lead (`space_id`/`space_name`/`instance_id`/`instance_name` are empty for a subaccount-level destination, since it isn't tied to any one space or instance), followed — for `--format csv` — by every property key that appears anywhere in the result set, sorted alphabetically. `json`/`toon` output the same flat `{"rows": [...]}` list, each row an object carrying only its own properties plus the leading columns.
+
+CSV example (one subaccount-level row, one instance-level row):
+```
+org_id,org_name,space_id,space_name,instance_id,instance_name,Name,URL,...
+<org-guid>,my-org,,,,,API_S4_HTTP_PP,http://qr1:443,...
+<org-guid>,my-org,<space-guid>,dev,<instance-guid>,my-dest-service,API_MDG_HTTP_PP,http://qrg:443,...
+```
+
+Use `--fields <column,...>` (comma-separated, in the order given — any of the leading columns above, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: sorted by `org_name`, then `space_name` (subaccount-level rows sort first, having an empty `space_name`), then `Name`.
+
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to a destination service instance found with no service key: `skip` warns and moves on; `create` automatically creates a `bo-dest-key` service key on the instance and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens. **Omitting this flag asks interactively instead of defaulting to a fixed choice:** each time such an instance is found, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` instead — `-y` has no effect when `--no-key-option` is explicitly given. `--no-prompt` is the separate, unrelated case of an org having no destination service instance at all: with it, that fails immediately instead of prompting to create one.
+
 ### `subaccount-destinations`
 
 List all subaccount-level destinations using any destination service instance found in the target org.
 
 Unlike `space-destinations` (which queries instance-level destinations scoped to one CF space), `subaccount-destinations` calls `GET /destination-configuration/v1/subaccountDestinations` — destinations that are defined at the BTP subaccount/org level and available to all spaces within it. Any destination service instance found in any space of the target org is used to connect; only one instance is needed.
 
-Service key credentials (clientId, clientSecret) are fetched from CF on demand and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused until it expires or `bo logoff` is run. If no destination service instance or service key is found, a prompt prints CF CLI instructions to create them; use `--no-prompt` to skip.
+Service key credentials (clientId, clientSecret) are fetched from CF on demand and never stored locally — only the access token (plus tokenURL and URI) is cached in `~/.bo/credentials.json` and reused until it expires or `bo logoff` is run. If no destination service instance at all is found in the org, a prompt offers to create one and retry; use `--no-prompt` to fail immediately instead. A found instance with no service key is instead governed by `--no-key-option` (see below) — an independent setting from `--no-prompt`.
 
 If neither `--org` nor `--orgs` is given, the default org scope selected via
 [`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
@@ -1248,7 +1450,7 @@ first or pass `--org`/`--orgs` directly. With more than one target org,
 `--format json`/`toon` returns a list of per-org results instead of a single object.
 
 ```bash
-# List subaccount destinations (default: Name, URL, sap-client) — TOON output
+# List subaccount destinations (every property) — TOON output
 bo subaccount-destinations --org <org-guid-or-name>
 
 # Every org in the default scope selected via `bo orgs`
@@ -1257,12 +1459,8 @@ bo subaccount-destinations
 # JSON output
 bo subaccount-destinations --org <org-guid-or-name> --format json
 
-# CSV output (org_name, destination_name, destination_url, destination_sap_client)
+# CSV output
 bo subaccount-destinations --org <org-guid-or-name> --format csv
-
-# All destination properties as a flat object (TOON or JSON)
-bo subaccount-destinations --org <org-guid-or-name> --full
-bo subaccount-destinations --org <org-guid-or-name> --full --format json
 
 # Only include destinations where any property contains any of these
 # comma-separated keywords (substring, case-insensitive)
@@ -1283,11 +1481,31 @@ bo subaccount-destinations --org <org-guid-or-name> --regions us10,us20,eu10
 # Include specific orgs (CSV: region,org_id,org_name)
 bo subaccount-destinations --orgs target-orgs.csv
 
-# Write output to a file instead of stdout
+# Write output to a file instead of stdout; --format is auto-detected from
+# -o's extension (.json, .csv, .toon) when not explicitly given
 bo subaccount-destinations --org <org-guid-or-name> --output dests.json --format json
+
+# Limit output to just these columns, in this order, for any --format
+bo subaccount-destinations --org <org-guid-or-name> --fields Name,URL
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo subaccount-destinations --org <org-guid-or-name> --sort-by Name:desc
+
+# Apply one choice to every destination service instance found with no
+# service key, instead of being asked interactively each time (default)
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option skip       # warn and move on
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option create     # auto-create 'bo-dest-key', keep it
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option transient  # auto-create 'bo-dest-key', use it, delete it
+bo subaccount-destinations --org <org-guid-or-name> --no-key-option abort      # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option —
+# defaults straight to skip instead
+bo subaccount-destinations --org <org-guid-or-name> -y
 ```
 
-Default TOON output (without `--full`):
+Every destination property is included exactly as the destination service API responds — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. **This is sensitive output** — prefer `--output` to a file over printing to a shared terminal, and remember it still gets written in full to `~/.bo/log/bo_YYYY-MM-DD.log` like every other command's output.
+
+Default TOON output:
 ```
 org_id: <org-guid>
 org_name: my-org
@@ -1295,19 +1513,17 @@ destinations:
   - Name: API_S4_HTTP_PP
     URL: http://qr1:443
     sap-client: "100"
-  - Name: API_MDG_HTTP_PP
-    URL: http://qrg:443
-    sap-client: "100"
+    Authentication: NoAuthentication
+    Type: HTTP
 ```
 
-CSV output (`--format csv`, without `--full`) — columns: `org_name,destination_name,destination_url,destination_sap_client`:
-```
-org_name,destination_name,destination_url,destination_sap_client
-my-org,API_S4_HTTP_PP,http://qr1:443,100
-my-org,API_MDG_HTTP_PP,http://qrg:443,100
-```
+`--format csv` gives a flat CSV, one row per destination: `org_id` and `org_name` lead, followed by every property key that appears anywhere in the result set (sorted alphabetically), so the column set reflects whatever destinations were actually returned.
 
-With `--full`, each destination is a flat object containing **all** properties returned by the destination service API exactly as-is — nothing is redacted, including sensitive fields such as `Password`, `ClientSecret`, and `ProxyPassword`. CSV is not supported with `--full`.
+Use `--fields <column,...>` (comma-separated, in the order given — `org_id`, `org_name`, or any destination property name exactly as the API casing has it, e.g. `Name` not `name`) to limit output to just those columns instead — switches `json`/`toon` to that same flat `{"rows": [...]}` view too (map keys in that JSON/TOON view marshal in their own alphabetical order regardless of `--fields`' order; only CSV's column order follows it exactly).
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns (any name accepted, matched the same way), each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `Name` within each org.
+
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to a destination service instance found with no service key: `skip` warns and moves on; `create` automatically creates a `bo-dest-key` service key on the instance and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens. **Omitting this flag asks interactively instead of defaulting to a fixed choice:** each time such an instance is found, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` instead — `-y` has no effect when `--no-key-option` is explicitly given, and has no effect on `--no-prompt` either (a separate setting for the unrelated "no destination service instance at all in the org" case).
 
 ### `create-subaccount-destinations`
 
@@ -1454,9 +1670,13 @@ bo apps --output apps.json
 # Also fetch each app's own user-provided environment variables (app_env) —
 # feed the result straight into `bo update-apps-env` to replay it elsewhere
 bo apps --include-env --format json -o apps-env.json
+
+# Also fetch each app's current CF metadata labels (app_labels), fetched
+# directly per app rather than reused from the apps listing itself
+bo apps --include-labels --format json
 ```
 
-`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json` — pass `--format` explicitly to override.
+`--format` defaults to `toon`, but is auto-detected from `--output`/`-o`'s extension when `--format` isn't explicitly given: `.csv` selects `csv`, `.json` selects `json`, `.toon` selects `toon` — pass `--format` explicitly to override.
 
 Output format (TOON):
 ```
@@ -1480,11 +1700,13 @@ regions:
                 process_disk_in_mb: 1024
 ```
 
-CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb,app_env`
+CSV columns: `region_id,org_id,org_name,space_id,space_name,app_mta_id,app_id,app_name,app_state,app_created_at,app_updated_at,process_instances,process_memory_in_mb,process_disk_in_mb,app_total_memory_mb,app_env,app_labels`
 
 The `--include`/`--exclude` flags match case-insensitively against: `mta_id`, `app_id`, `app_name`, `app_state`, `app_created_at`, `app_updated_at`, and `process_memory_in_mb`.
 
 `--include-env` adds an `app_env` field (object in JSON/TOON, a JSON-encoded string in the `app_env` CSV column) with each app's own user-provided environment variables — the ones `cf set-env`/`bo update-apps-env` manage, not `VCAP_SERVICES` or any other derived/system environment. It costs one extra API call per app and requires at least Space Developer access to each app's space; a per-app failure is reported as a warning on stderr rather than aborting the command, and that app is simply left without `app_env`. Secret/password/key-named variables are included in full, never masked or skipped — they're exactly what `bo update-apps-env` needs to recreate on a target app. The only variable always excluded is `DEPLOY_ATTRIBUTES`, injected by deploy tooling rather than set by a user and not meaningful to replay onto another org/space. This is sensitive output — see "Handling commands that output secrets" in the skill doc, and treat it the same as `service-credentials`' output below.
+
+`--include-labels` adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's current CF metadata labels (`cf.App.Metadata.Labels`), fetched via one extra API call per app (`GET /v3/apps/:guid`) rather than reused from the apps listing itself — a label set moments earlier (e.g. via `cf set-label`) isn't always reflected yet in that listing on every CF platform, even though a direct per-app read already sees it. A per-app fetch failure is reported as a warning on stderr rather than aborting the command, and that app is simply left without `app_labels`. This is not sensitive output, unlike `--include-env`.
 
 ### `update-apps-env`
 
@@ -1507,6 +1729,93 @@ As with `update-roles`/`update-role-collections`, the **source org/space recorde
 Without `-y`, a preview table (region, org, space, app, env) is shown and `[y/N]` confirmation is required before anything is changed. Any environment variable whose name (case-insensitive) ends in `KEY`, `SECRET`, `PASSWORD`, or `PASSWD` has its value masked as `********` in that preview — never shown in plain text — though the real value is always what's actually sent to the CF API.
 
 Updating an app's environment variables does not by itself make a running instance pick up the new values — restart or restage it afterwards (see [`restart-apps`](#restart-apps)/[`restage-apps`](#restage-apps)).
+
+### `html5-apps`
+
+List the applications stored in every accessible HTML5 Application Repository Service (`html5-apps-repo`) app-host service instance, across one or more regions and organizations.
+
+This follows the same discovery flow as the [SAP/cf-html5-apps-repo-cli-plugin](https://github.com/SAP/cf-html5-apps-repo-cli-plugin) CF CLI plugin's `cf html5-list`: for each space, every `html5-apps-repo`/`app-host` plan service instance is found — its CF service-instance GUID is itself the `app_host_id` the API expects, so app-host and app-runtime instances are never bound to each other, only correlated at request time — and an OAuth2 client_credentials token is obtained from any one `html5-apps-repo`/`app-runtime` plan instance's service key in that same space (creating one interactively if none exists). `GET {app-runtime uri}/applications/metadata` is then called once per app-host instance, with that instance's GUID passed in the `x-app-host-id` header, to list its applications. The result is a flat list, one row per application.
+
+If neither `--org` nor `--orgs` is given, the default org scope selected via [`bo orgs`](#orgs) is used. Use `--spaces` to further narrow to specific space names or GUIDs.
+
+```bash
+# List applications across the default org scope (TOON output)
+bo html5-apps
+
+# JSON / CSV output
+bo html5-apps --format json
+bo html5-apps --format csv
+
+# Scope to specific regions/orgs/spaces
+bo html5-apps --regions us10,eu10
+bo html5-apps --org <org-guid-or-name>
+bo html5-apps --orgs target-orgs.csv
+bo html5-apps --spaces dev,qa
+
+# Only include rows where any listed field contains any of these keywords
+bo html5-apps --include myapp
+
+# Write output to a file (--format auto-detected from the extension)
+bo html5-apps --output html5-apps.csv
+
+# Limit output to just these columns, in this order, for any --format
+bo html5-apps --fields application_name,application_version,space_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo html5-apps --sort-by space_name:desc,application_name
+
+# See the raw applications/metadata response for each app host, before parsing
+bo html5-apps --debug
+
+# Apply one choice to every html5-apps-repo/app-runtime instance found with
+# no service key, instead of being asked interactively each time (default)
+bo html5-apps --no-key-option skip         # warn and move on
+bo html5-apps --no-key-option create       # auto-create 'bo-html5-key', keep it
+bo html5-apps --no-key-option transient    # auto-create 'bo-html5-key', use it, delete it
+bo html5-apps --no-key-option abort        # stop the command on the first one
+
+# Apply one choice to every space with no html5-apps-repo/app-runtime
+# service instance at all, instead of being asked interactively (default)
+bo html5-apps --no-runtime-option skip         # warn and skip that space's app-hosts
+bo html5-apps --no-runtime-option create       # auto-create instance 'bo-html5-app-runtime' + a key, keep both
+bo html5-apps --no-runtime-option transient    # auto-create both, use them, delete both
+bo html5-apps --no-runtime-option abort        # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option/
+# --no-runtime-option — defaults both straight to skip instead
+bo html5-apps -y
+
+# Discover app_host_id from destinations instead of enumerating app-host
+# instances directly: scans subaccount- and instance-level destinations in
+# the targeted orgs/spaces for ones carrying both an "app_host_id" and a
+# "sap.cloud.service" property, then queries each via a real
+# html5-apps-repo/app-runtime service key (same as the plugin's own
+# -d/--destination flag — never the destination's own credentials)
+bo html5-apps --from-destinations --org <org-guid-or-name>
+
+# Skip interactive destination-resolution prompts under --from-destinations
+bo html5-apps --from-destinations --org <org-guid-or-name> --no-prompt
+```
+
+Columns (every field the `applications/metadata` API itself returns, confirmed via `--debug` against a live service, plus `region`): `region,application_id,application_name,application_version,application_type,sap_cloud_service,ui_technology,public,is_default,changed_on,created_on,organization_id,organization_name,space_id,space_name,subaccount_id,zone_id,subdomain,global_account_id,instance_name,app_host_id,deploy_id,content_provider,destination_instance_name,destination_instance_id,destination_name`.
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns above) to limit output to just those columns, in the order given — applies to every `--format` the same way, not just CSV. Omit it to get every column.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, in priority order (ties on the first are broken by the next, and so on); suffix a column with `:desc` for descending (`:asc` is the default). Omit it to keep the default order: `region,organization_name,space_name,instance_name,application_name` (all ascending).
+
+The `--include`/`--exclude` flags match case-insensitively against: `organization_name`, `space_name`, `instance_name`, `destination_instance_name`, `destination_name`, `application_name`, and `application_version` — regardless of what `--fields` selects for the output itself.
+
+`--debug` prints each `applications/metadata` request's raw JSON response body to stderr before it's parsed — useful to check for any field the API starts returning beyond the ones listed above.
+
+With `--from-destinations`, `instance_name` and `app_host_id` still come straight from the `applications/metadata` API response itself, same as without it — the destination's own `app_host_id` property is only used to select which app host to query; the actual metadata call always authenticates with a real `html5-apps-repo`/`app-runtime` service key, found in the same space for an instance-level destination or in any space in the org for a subaccount-level one, never with the destination's own `clientId`/`clientSecret`/`uri`. This also means a destination pointing at a design-time-only (`-dt`) `html5-apps-repo` host is no longer a problem, since the destination's own `uri` is never called. When `--spaces` narrows scope, subaccount-level destinations are skipped entirely — they aren't tied to any one space, so scanning them would otherwise pull in app hosts outside the spaces asked for — and only those spaces' instance-level destinations are queried. `--excludeOrgs` is ignored (destination discovery is per-org, not per-filtered-org-list) — use `--org`/`--orgs` to scope it instead.
+
+`--from-destinations` also populates three destination-identifying columns, empty otherwise: `destination_name` is always the matching destination's own `Name`; `destination_instance_name`/`destination_instance_id` additionally identify the destination service instance it was found in when the destination is instance-level — a subaccount-level destination leaves both empty, since there's no single instance to attribute it to.
+
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to an html5-apps-repo/app-runtime instance that exists but has no service key, once per such instance hit during the run: `skip` warns and moves on; `create` automatically creates a `bo-html5-key` service key on the instance (the same thing `cf create-service-key <instance> bo-html5-key` does) and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens.
+
+`--no-runtime-option <s/skip|c/create|t/transient|a/abort>` governs the separate case of a space with no html5-apps-repo/app-runtime service instance at all: `skip` warns and skips that space's app-host(s); `create` provisions a new app-runtime service instance (named `bo-html5-app-runtime`) plus a service key on it, keeping both; `transient` does the same but deletes both again once they're no longer needed for this run; `abort` stops the whole command the first time it happens.
+
+**Omitting either flag asks interactively instead of defaulting to a fixed choice:** each time an instance with no key (`--no-key-option`) or a space with no app-runtime instance at all (`--no-runtime-option`) is hit, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` for whichever of the two flags wasn't explicitly given — `-y` has no effect on a flag that *was* explicitly passed, explicit always wins. Both flags govern the html5-apps-repo/app-runtime service-key/instance decision in both discovery paths; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (reading destinations themselves, not the app-runtime key/instance used to query them — there, only skip-or-prompt is supported, and `-y` has no effect on it).
 
 ### `service-credentials`
 
@@ -1611,11 +1920,12 @@ bo service-instances
 # Narrow to specific orgs, a specific space, and instance names
 bo service-instances --orgs target-orgs.csv --spaces prod --service-instances "*-hdi,*-db"
 
-# Include user-provided instances' credentials, writing to a file instead of stdout
+# Include user-provided instances' credentials, writing to a file instead of stdout;
+# --format is auto-detected from the .json extension here, so --format json could be omitted
 bo service-instances --full -o instances.json --format json
 ```
 
-Output formats (`--format`):
+Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv`, `.toon`) when `--format` isn't explicitly given:
 
 | Format | Description |
 |---|---|
@@ -1653,19 +1963,38 @@ bo service-keys
 # Narrow to specific orgs, a specific space, and key names
 bo service-keys --orgs target-orgs.csv --spaces prod --service-keys "btp*"
 
-# Include credentials, writing to a file instead of stdout
+# Include credentials, writing to a file instead of stdout;
+# --format is auto-detected from the .json extension here, so --format json could be omitted
 bo service-keys --full -o keys.json --format json
+
+# Limit output to just these columns, in this order, for any --format
+# (switches json/toon to the flat {rows:[...]} view too)
+bo service-keys --fields org_name,space_name,instance_name,key_name
+
+# Sort by one or more columns, in priority order (":desc" for descending)
+bo service-keys --sort-by key_name
+
+# Only include keys where region, org_name, space_name, instance_name,
+# label, plan, or key_name contain any of these comma-separated keywords
+bo service-keys --include prod
+bo service-keys --exclude sandbox,test
 ```
 
-Output formats (`--format`):
+Output formats (`--format`), auto-detected from `-o`'s extension (`.json`, `.csv`, `.toon`) when `--format` isn't explicitly given:
 
 | Format | Description |
 |---|---|
 | `toon` (default) | Token-Oriented Object Notation — compact, human-readable |
 | `json` | JSON document, same nesting as the TOON output |
-| `csv` | Flat rows, one per service key — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,label,plan,key_guid,key_name,created_at,updated_at,last_operation_type,last_operation_state` (plus a trailing `credentials` JSON column when `--full` is given) |
+| `csv` | Flat rows, one per service key — `region,org_id,org_name,space_id,space_name,instance_guid,instance_name,label,plan,key_guid,key_name,created_at,updated_at,last_operation_type,last_operation_state,credentials` (the last column, the key's credentials JSON-encoded, is always present but only populated when `--full` is given) |
 
 Without `--full`, only service key metadata is included — `key_guid`, `key_name`, `created_at`, `updated_at`, `last_operation_type`, `last_operation_state`. (The CF API doesn't expose a "created by" user on this resource, so that field isn't included.) With `--full`, each key's credentials are also fetched and included:
+
+Use `--fields <column,...>` (case-insensitive, comma-separated, any of the columns in the CSV row above) to limit output to just those columns, in the order given — switches `json`/`toon` to that same flat `{"rows": [...]}` view too. Omit it to get every column, in the normal nested structure shown below.
+
+Use `--sort-by <column,...>` to sort rows by one or more of those same columns, each optionally suffixed with `:desc` for descending (`:asc` is the default) — also switches `json`/`toon` to the flat view. Omit it to keep the default order: sorted by `region`, `org_name`, `space_name`, `instance_name`, then `key_name`.
+
+Use `--include`/`--exclude` to narrow results further: each accepts a comma-separated list of keywords, and a key matches if `region`, `org_name`, `space_name`, `instance_name`, `label`, `plan`, or `key_name` contains any of them (case-insensitive). Filtering happens before `--full` fetches credentials, so excluded keys never trigger that extra API call.
 
 ```
 orgs[1]:
@@ -2027,6 +2356,45 @@ bo clear-logs
 bo clear-logs -y
 ```
 
+### `sort`
+
+Sorts the rows of one or more CSV or JSON files already on disk — e.g. a file a previous `bo` command wrote with `--output` — rather than talking to BTP/CF at all. Each `file_pattern` argument is a shell-style glob (`*`, `?`, `[...]`) or a literal path, expanded independently and combined (duplicates removed); a pattern matching nothing is only a warning, as long as at least one file is matched overall. The file extension (`.csv` or `.json`) selects how each matched file is read and written; anything else is an error.
+
+A CSV file's header row supplies its column names. A JSON file must decode to either a flat array of objects (`[{...}, {...}, ...]`) or a single-key object wrapping one (e.g. `{"rows": [...]}`, the shape several `bo` commands themselves write) — that wrapping key, if any, is kept on write. A bare JSON array of plain values (not objects) is sorted directly; `--by`/`--fields` don't apply to it.
+
+```bash
+# Sort a CSV in place by every column (no --by given), confirming first
+bo sort users.csv
+
+# Sort several files matched by glob, skipping the overwrite confirmation
+bo sort "exports/*.csv" -y
+
+# Sort by one or more fields, in priority order ("desc" for descending)
+bo sort orgs.json --by region,org_name:desc
+
+# Keep only these fields, dropping every other leaf field — also sorts by
+# them (org_id, then org_name), since no --by was given
+bo sort orgs.json --fields org_id,org_name
+
+# Write the sorted result to a different file instead of overwriting the input
+# (only valid with exactly one matching file)
+bo sort orgs.csv -o orgs.sorted.csv
+
+# A dotted field name reaches into a nested field: app_labels is a
+# JSON-encoded object/string (e.g. from `bo apps --include-labels`) — this
+# keeps/sorts by just the commit_id inside it
+bo apps --include-labels --format csv -o apps.csv
+bo sort --fields=app_name,app_labels.commit_id apps.csv -o apps.sorted.csv
+```
+
+Use `--by`/`-b <field[:desc],...>` to sort by one or more fields, in priority order (ties on the first are broken by the next, and so on); suffix a field with `:desc` for descending (`:asc` is the default). Field names are matched exactly (case-sensitive) and aren't validated — a field absent from one file's data just compares as empty there, with no error, so one invocation can cover several files with different columns/fields. Omit `--by` to sort implicitly instead: by `--fields`' own fields, in the order given, if `--fields` was also given (narrowing down to specific columns and then sorting by exactly those is the common case) — otherwise by every available field, ascending, in that format's natural order: a CSV file's header order, or — since JSON object keys carry no reliable order once decoded — alphabetical for JSON (the same convention `bo` already uses elsewhere for dynamic, schema-less rows, e.g. [`destinations`](#destinations)). Each field's values are compared numerically when both sides parse as a number, otherwise as plain text.
+
+Use `--fields`/`-f <field,...>` to keep only those leaf fields in the output, dropping every other leaf field. For CSV, every column is a leaf field, so this is a plain column selector. For JSON, a "leaf" field is one that only ever holds a plain value (string/number/bool/null) across the rows read — a nested object or array is never a leaf field and is always kept regardless of `--fields`, since `--fields` only ever selects among leaf fields. A CSV column `--fields` names that a row doesn't actually have renders as an empty cell; for JSON, naming a field that doesn't exist (or isn't a leaf) in a given row simply has no effect on that row. Omit `--fields` to keep every field. `--fields`' given order is only honored by CSV output (its header is exactly the fields given, in that order) — a JSON object's keys always come out alphabetical, since `encoding/json` doesn't preserve (or accept) any other key order for a map; this is unrelated to `--by`, which sorts rows (not fields) and is unaffected by `--fields` either way.
+
+**A field name containing a dot** (e.g. `app_labels.commit_id`, matching the `app_labels` field [`bo apps --include-labels`](#apps) writes) **reaches into a nested field**, for both `--fields` and `--by`: the named parent (`app_labels`) is read, and if its value is a JSON object — either already one, or a string holding one, exactly how a CSV cell or a JSON-encoded field would carry it — the remaining segment (`commit_id`) is looked up as a key within it; several dots chain this one segment at a time. The moment some segment's value isn't a JSON object (or a JSON-object-holding string), resolution stops there and that segment's own whole value is used as-is instead — so `app_labels.commit_id` against a plain, non-JSON `app_labels` value just means `app_labels` itself, the same as if no dot had been given. For `--fields`, a dotted entry adds its own new field under that exact literal name alongside whatever the plain rule above already decided — it never replaces or drops the named parent field (e.g. `app_labels` itself still comes through whole, per the "non-leaf fields are always kept" rule above, for JSON/TOON output).
+
+Without `--output`/`-o`, every matched file is sorted and overwritten in place: unless `-y` is given, a confirmation listing every file about to be overwritten is required first. `--output` instead writes the sorted result to a different file, and only accepts exactly one matched input file (so it's unambiguous which file the output came from).
+
 ### `update`
 
 Update the `bo` binary in place from a GitHub release.
@@ -2107,6 +2475,8 @@ Run `bo completion <shell> --help` for shell-specific installation instructions.
 | `-v`, `--verbose` | Enable debug/verbose output |
 | `--color` | Color console output: `auto` (default), `always`, or `never` — see [Colorized toon/csv output](#colorized-tooncsv-output) |
 | `-h`, `--help` | Show help |
+
+`apps`, `users`, `role-collections`, `roles`, `subaccount-destinations`, `space-destinations`, `service-keys`, `org-users`, `org-space-users`, `org-spaces`, `spaces`, `html5-apps`, and `orgs` all share the same `--include`/`--exclude`/`--fields`/`--sort-by` flags (`orgs` only has `--include`/`--exclude`), added uniformly across them. Their `--help` output breaks the usual two sections into three: the command's own flags under `Flags:`, those shared flags pulled into their own `Common Flags:` section just above `Global Flags:`, and `--help` itself grouped into `Global Flags:` alongside `--color`/`--verbose` rather than sitting in `Flags:`. Every other command keeps cobra's normal two-section `Flags:`/`Global Flags:` layout.
 
 ### Colorized toon/csv output
 

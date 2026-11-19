@@ -88,10 +88,74 @@ type skMatchedKey struct {
 	Credentials        map[string]interface{}
 }
 
+// skMatchesIncludeExclude applies --include/--exclude keyword filtering
+// (comma-separated, case-insensitive, matched if any keyword is a substring
+// of any field) against a matched key's region, org_name, space_name,
+// instance_name, label, plan, and key_name.
+func skMatchesIncludeExclude(k skMatchedKey, includePattern, excludePattern string) bool {
+	fields := []string{k.Region, k.OrgName, k.SpaceName, k.InstanceName, k.Label, k.Plan, k.KeyName}
+	if includePattern != "" && !skipMatches(includePattern, fields...) {
+		return false
+	}
+	if excludePattern != "" && skipMatches(excludePattern, fields...) {
+		return false
+	}
+	return true
+}
+
 type skRegionResult struct {
 	Region string
 	Keys   []skMatchedKey
 	Err    error
+}
+
+// skFlatRow is the flat, one-row-per-service-key view of the matched set —
+// the same shape as the CSV output. Used directly for CSV, and for
+// JSON/TOON too when --fields or --sort-by is given (otherwise JSON/TOON
+// keep the nested region/org/space/service_instance structure). Credentials
+// is JSON-encoded (empty without --full), the same way apps.go encodes
+// app_env for its CSV.
+type skFlatRow struct {
+	Region             string `json:"region"              toon:"region"`
+	OrgID              string `json:"org_id"              toon:"org_id"`
+	OrgName            string `json:"org_name"            toon:"org_name"`
+	SpaceID            string `json:"space_id"            toon:"space_id"`
+	SpaceName          string `json:"space_name"          toon:"space_name"`
+	InstanceGUID       string `json:"instance_guid"       toon:"instance_guid"`
+	InstanceName       string `json:"instance_name"       toon:"instance_name"`
+	Label              string `json:"label"               toon:"label"`
+	Plan               string `json:"plan"                toon:"plan"`
+	KeyGUID            string `json:"key_guid"            toon:"key_guid"`
+	KeyName            string `json:"key_name"            toon:"key_name"`
+	CreatedAt          string `json:"created_at"          toon:"created_at"`
+	UpdatedAt          string `json:"updated_at"          toon:"updated_at"`
+	LastOperationType  string `json:"last_operation_type" toon:"last_operation_type"`
+	LastOperationState string `json:"last_operation_state" toon:"last_operation_state"`
+	Credentials        string `json:"credentials"         toon:"credentials"`
+}
+
+// flattenServiceKeysRows converts matched into one flat row per service key.
+func flattenServiceKeysRows(matched []skMatchedKey) ([]skFlatRow, error) {
+	rows := make([]skFlatRow, 0, len(matched))
+	for _, k := range matched {
+		var credJSON string
+		if k.Credentials != nil {
+			b, err := json.Marshal(k.Credentials)
+			if err != nil {
+				return nil, fmt.Errorf("encoding credentials for %s/%s/%s/%s: %w",
+					k.OrgName, k.SpaceName, k.InstanceName, k.KeyName, err)
+			}
+			credJSON = string(b)
+		}
+		rows = append(rows, skFlatRow{
+			Region: k.Region, OrgID: k.OrgID, OrgName: k.OrgName, SpaceID: k.SpaceID, SpaceName: k.SpaceName,
+			InstanceGUID: k.InstanceGUID, InstanceName: k.InstanceName, Label: k.Label, Plan: k.Plan,
+			KeyGUID: k.KeyGUID, KeyName: k.KeyName, CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt,
+			LastOperationType: k.LastOperationType, LastOperationState: k.LastOperationState,
+			Credentials: credJSON,
+		})
+	}
+	return rows, nil
 }
 
 // ── command ───────────────────────────────────────────────────────────────────
@@ -123,9 +187,34 @@ shared terminal.
 Output formats (--format):
   toon  Token-Oriented Object Notation — compact, human-readable (default)
   json  JSON document
-  csv   Flat CSV rows, one per service key (credentials as a JSON column with --full)
+  csv   Flat CSV rows, one per service key; columns: region, org_id,
+        org_name, space_id, space_name, instance_guid, instance_name,
+        label, plan, key_guid, key_name, created_at, updated_at,
+        last_operation_type, last_operation_state, credentials (the key's
+        credentials, JSON-encoded — always present as a column, but only
+        populated with --full)
 
-Use --output/-o to write the result to a file instead of stdout.
+Use --fields <column,...> (case-insensitive, comma-separated, any of the
+columns above) to limit output to just those columns, in the order given —
+switches json/toon to that same flat {"rows": [...]} view too. Omit it to
+get every column, in the normal nested json/toon structure.
+
+Use --sort-by <column,...> to sort rows by one or more of those same
+columns, each optionally suffixed with ":desc" for descending (":asc" is
+the default) — also switches json/toon to the flat view. Omit it to keep
+the default order: sorted by region, org_name, space_name, instance_name,
+then key_name.
+
+Use --include/--exclude to narrow results further: each accepts a
+comma-separated list of keywords, and a key matches if region, org_name,
+space_name, instance_name, label, plan, or key_name contains any of them
+(case-insensitive). Filtering happens before --full fetches credentials, so
+excluded keys never trigger that extra API call.
+
+Use --output/-o to write the result to a file instead of stdout. If --format
+is not explicitly given, it is auto-detected from --output's extension:
+.json selects json, .csv selects csv, .toon selects toon — otherwise the
+default toon applies. Pass --format explicitly to override the extension.
 
 If --regions is omitted the regions from the last login are used.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -140,6 +229,23 @@ If --regions is omitted the regions from the last login are used.`,
 		fullFlag, _ := cmd.Flags().GetBool("full")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
+		if !cmd.Flags().Changed("format") {
+			if auto := autoFormatFromOutputExt(outputFile, map[string]string{"json": ".json", "csv": ".csv", "toon": ".toon"}); auto != "" {
+				format = auto
+			}
+		}
+		fieldsFlag, _ := cmd.Flags().GetString("fields")
+		fieldIDs, err := parseFieldsFlag[skFlatRow](fieldsFlag, "--fields")
+		if err != nil {
+			return err
+		}
+		sortByFlag, _ := cmd.Flags().GetString("sort-by")
+		sortKeys, err := parseSortByFlag[skFlatRow](sortByFlag, "--sort-by")
+		if err != nil {
+			return err
+		}
+		includePattern, _ := cmd.Flags().GetString("include")
+		excludePattern, _ := cmd.Flags().GetString("exclude")
 
 		if spaceFlag != "" {
 			if spacesFlag != "" {
@@ -365,7 +471,11 @@ If --regions is omitted the regions from the last login are used.`,
 				fmt.Fprintf(os.Stderr, "warning: region %q: %v\n", r.Region, r.Err)
 				continue
 			}
-			allMatched = append(allMatched, r.Keys...)
+			for _, k := range r.Keys {
+				if skMatchesIncludeExclude(k, includePattern, excludePattern) {
+					allMatched = append(allMatched, k)
+				}
+			}
 		}
 
 		// Phase 2: with --full, fetch each matched key's credentials, bounded
@@ -417,13 +527,32 @@ If --regions is omitted the regions from the last login are used.`,
 		colorMode, _ := cmd.Flags().GetString("color")
 		color := consoleColorEnabled(outputFile, colorMode)
 
-		switch strings.ToLower(format) {
+		fmtLower := strings.ToLower(format)
+		if fmtLower == "csv" || len(fieldIDs) > 0 || len(sortKeys) > 0 {
+			flatRows, flatErr := flattenServiceKeysRows(allMatched)
+			if flatErr != nil {
+				return flatErr
+			}
+			if len(sortKeys) > 0 {
+				sortRowsBy(flatRows, sortKeys)
+			}
+			switch fmtLower {
+			case "json":
+				return writeServiceKeysJSON(out, flatDocValue(flatRows, fieldIDs))
+			case "csv":
+				csvW := newRainbowCSVWriter(out, color)
+				defer csvW.Flush()
+				return writeFlatCSV(csvW, flatRows, fieldIDs)
+			default:
+				return writeServiceKeysToon(out, flatDocValue(flatRows, fieldIDs), color)
+			}
+		}
+
+		switch fmtLower {
 		case "json":
-			return writeServiceKeysJSON(out, allMatched)
-		case "csv":
-			return writeServiceKeysCSV(out, allMatched, fullFlag, color)
+			return writeServiceKeysJSON(out, buildServiceKeysDoc(allMatched))
 		default:
-			return writeServiceKeysToon(out, allMatched, color)
+			return writeServiceKeysToon(out, buildServiceKeysDoc(allMatched), color)
 		}
 	},
 }
@@ -497,9 +626,13 @@ func buildServiceKeysDoc(matched []skMatchedKey) skOutDoc {
 	return doc
 }
 
-func writeServiceKeysToon(w io.Writer, matched []skMatchedKey, color bool) error {
-	doc := buildServiceKeysDoc(matched)
-	out, err := toonenc.Marshal(doc, toonenc.WithIndent(2))
+// writeServiceKeysToon and writeServiceKeysJSON take val as either
+// buildServiceKeysDoc's result (the default nested region/org/space/
+// service_instance structure) or flatDocValue's result (used instead when
+// --fields or --sort-by is given) — both are just Go values that
+// toonenc/json reflect over.
+func writeServiceKeysToon(w io.Writer, val interface{}, color bool) error {
+	out, err := toonenc.Marshal(val, toonenc.WithIndent(2))
 	if err != nil {
 		return fmt.Errorf("encoding TOON: %w", err)
 	}
@@ -511,56 +644,12 @@ func writeServiceKeysToon(w io.Writer, matched []skMatchedKey, color bool) error
 	return err
 }
 
-func writeServiceKeysJSON(w io.Writer, matched []skMatchedKey) error {
-	doc := buildServiceKeysDoc(matched)
-	out, err := json.MarshalIndent(doc, "", "  ")
+func writeServiceKeysJSON(w io.Writer, val interface{}) error {
+	out, err := json.MarshalIndent(val, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
 	fmt.Fprintln(w, string(out))
-	return nil
-}
-
-func writeServiceKeysCSV(w io.Writer, matched []skMatchedKey, full bool, color bool) error {
-	csvW := newRainbowCSVWriter(w, color)
-	defer csvW.Flush()
-
-	header := []string{
-		"region", "org_id", "org_name", "space_id", "space_name",
-		"instance_guid", "instance_name", "label", "plan",
-		"key_guid", "key_name", "created_at", "updated_at",
-		"last_operation_type", "last_operation_state",
-	}
-	if full {
-		header = append(header, "credentials")
-	}
-	if err := csvW.Write(header); err != nil {
-		return err
-	}
-
-	for _, k := range matched {
-		row := []string{
-			k.Region, k.OrgID, k.OrgName, k.SpaceID, k.SpaceName,
-			k.InstanceGUID, k.InstanceName, k.Label, k.Plan,
-			k.KeyGUID, k.KeyName, k.CreatedAt, k.UpdatedAt,
-			k.LastOperationType, k.LastOperationState,
-		}
-		if full {
-			credJSON := ""
-			if k.Credentials != nil {
-				b, err := json.Marshal(k.Credentials)
-				if err != nil {
-					return fmt.Errorf("encoding credentials for %s/%s/%s/%s: %w",
-						k.OrgName, k.SpaceName, k.InstanceName, k.KeyName, err)
-				}
-				credJSON = string(b)
-			}
-			row = append(row, credJSON)
-		}
-		if err := csvW.Write(row); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -577,5 +666,9 @@ func init() {
 	serviceKeysCmd.Flags().String("service-keys", "", "Only include service keys whose name matches any of these comma-separated patterns (glob, e.g. 'btp*,temp*', or substring); default is every service key in scope")
 	serviceKeysCmd.Flags().Bool("full", false, "Also fetch and include each service key's credentials (live secrets)")
 	serviceKeysCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout")
-	serviceKeysCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv")
+	serviceKeysCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
+	serviceKeysCmd.Flags().String("fields", "", "Comma-separated column IDs to limit output to, in the order given (same columns as csv; switches json/toon to the flat {rows:[...]} view too). Default: every column, in the normal nested json/toon structure")
+	serviceKeysCmd.Flags().String("sort-by", "", "Comma-separated column IDs to sort by, each optionally suffixed with \":desc\" (default \":asc\"); switches json/toon to the flat {rows:[...]} view too")
+	serviceKeysCmd.Flags().String("include", "", "Only include keys where region, org_name, space_name, instance_name, label, plan, or key_name contain any of these comma-separated, case-insensitive keywords")
+	serviceKeysCmd.Flags().String("exclude", "", "Exclude keys where region, org_name, space_name, instance_name, label, plan, or key_name contain any of these comma-separated, case-insensitive keywords")
 }

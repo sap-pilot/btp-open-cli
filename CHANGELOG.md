@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.21.0 — 2026-11-18
+
+### Added
+
+- **Column selection, sorting, and a new `sort` utility — diff two orgs' exports to find what's missing**
+
+  `--fields`/`--sort-by` (pick/reorder output columns; sort by one or more of them) and `--include`/`--exclude` (keyword/glob filtering) are now available on every list-style command: `apps`, `users`, `role-collections`, `roles`, `html5-apps`, `destinations`, `subaccount-destinations`, `space-destinations`, `service-keys`, `org-users`, `org-space-users`, `org-spaces`, and `spaces` (`orgs` has `--include`/`--exclude` only). Paired with the new `bo sort` command (sorts and/or narrows an existing CSV/JSON file on disk, in place or to a new file), the same column selection/order can be applied to exports from two different orgs or subaccounts, making them directly comparable with a plain `diff` — e.g. export `html5-apps` from org A and org B with the same `--fields`/`--sort-by`, then diff the two files to see exactly which apps exist in one but not the other. The same approach works for `apps`, `destinations`, `users`, `role-collections`, and `roles`.
+
+  ```bash
+  bo html5-apps --org <org-A> --fields organization_name,space_name,application_name --sort-by application_name -o a.csv
+  bo html5-apps --org <org-B> --fields organization_name,space_name,application_name --sort-by application_name -o b.csv
+  diff a.csv b.csv   # anything left/right-only is missing from the other org
+  ```
+
+- **`bo sort` — dotted field names reach into a nested field**
+
+  A field name containing a dot in `--fields`/`--by` (e.g. `app_labels.commit_id`) reaches into a nested field instead of the whole thing: the named parent is read, and if its value is a JSON object — either already one, or a string holding one, exactly how a CSV cell or a JSON-encoded field carries it — the remaining segment is looked up as a key within it (several dots chain one segment at a time). The moment some segment's value isn't a JSON object, resolution stops there and that segment's own whole value is used as-is instead, so a dotted name against a plain, non-JSON value just falls back to the parent's own whole value. For `--fields`, a dotted entry adds its own new field under that exact literal name without dropping the named parent field. Lets `bo sort --fields=app_name,app_labels.commit_id` narrow/sort by one specific label out of `bo apps --include-labels`' `app_labels` object, for example.
+
+- **`apps --include-labels` — include each app's CF metadata labels**
+
+  Adds an `app_labels` field (object in JSON/TOON, a JSON-encoded string in the `app_labels` CSV column) with each app's current CF metadata labels — same representation as `--include-env`'s `app_env`. Fetched via one extra API call per app (`GET /v3/apps/:guid`) rather than reused from the apps listing itself, since a label set moments earlier (e.g. via `cf set-label`) isn't always reflected yet in that listing on every CF platform. Not sensitive output, unlike `app_env`.
+
+- **New `html5-apps` command — list HTML5 Application Repository app metadata**
+
+  Lists applications from every accessible `html5-apps-repo`/`app-host` service instance across regions/orgs/spaces, following the same discovery flow as the SAP CLI plugin's `cf html5-list`. `--from-destinations` discovers applications via subaccount-/instance-level destinations carrying `app_host_id`+`sap.cloud.service` instead — the actual metadata call always authenticates with a real CF `app-runtime` service key, never the destination's own credentials. `--no-key-option`/`--no-runtime-option` (`s/skip`, `c/create`, `t/transient`, `a/abort`) control what happens when an `app-runtime` service key or service instance is missing — including creating one automatically, and, with `transient`, cleaning it up again afterward; omitting either flag asks interactively instead (`s/c/t/a`, defaulting to `skip`), unless `-y` is given, which defaults straight to `skip` with no prompt. `--debug` prints each raw `applications/metadata` response.
+
+- **New `destinations` command — combined subaccount- and instance-level destinations**
+
+  Lists both subaccount-level and instance-level destinations for target org(s) in one flat result (`space_id`/`space_name`/`instance_id`/`instance_name` left empty for a subaccount-level row).
+
+- **`space-destinations` — `--space` now optional and scans every space; gains `--output`**
+
+  Omitting `--space` scans every accessible space across every org in scope instead of requiring exactly one; output is grouped `org -> spaces -> destinations`. `--output`/`-o` was added, with `--format` auto-detected from its extension.
+
+- **`destinations`/`subaccount-destinations`/`space-destinations` — `--no-key-option` for a destination service instance with no service key**
+
+  Same `s/skip`, `c/create`, `t/transient`, `a/abort` shape as `html5-apps`' own `--no-key-option` (above), for a destination service instance found with no service key: `create`/`transient` auto-create a `bo-dest-key` service key via the CF API instead of only ever offering manual `cf create-service-key` instructions. Omitting the flag asks interactively each time instead of defaulting to a fixed choice, unless `-y` is given, which defaults straight to `skip`.
+
+- **`--format` auto-detected from `--output`'s extension, on every command that has both**
+
+  Previously only `apps`/`html5-apps` inferred `.json`/`.csv`/`.toon` from the `--output` filename when `--format` wasn't explicitly given — now every command with both flags does.
+
+- **`orgs` picker scrolls instead of overflowing the screen; Esc aborts**
+
+  A list longer than the terminal no longer leaves duplicate rows behind — it now scrolls (PageUp/PageDown too), sized to the real terminal height. A lone Esc keypress now aborts the selection, same as Ctrl-C, leaving any previously saved org scope untouched.
+
+- **`--help` — new "Common Flags" section**
+
+  `apps`, `users`, `role-collections`, `roles`, `subaccount-destinations`, `space-destinations`, `service-keys`, `org-users`, `org-space-users`, `org-spaces`, `spaces`, `html5-apps`, and `orgs` now show `--include`/`--exclude`/`--fields`/`--sort-by` under their own "Common Flags:" section, placed above "Global Flags:" (which now also lists `--help`, alongside `--color`/`--verbose`).
+
+### Changed
+
+- **`subaccount-destinations`/`space-destinations`/`destinations` — `--full` removed; every property is unredacted by default**
+
+  These three commands now always fetch and output every destination property exactly as the API returns it — including sensitive fields like `Password`, `ClientSecret`, and `ProxyPassword` — with no `--full` flag to opt in or out. Use `--fields` to narrow output to just the columns you need when you don't want credentials included in the result. See `skills/btp-open-cli/SKILL.md` for updated guidance on handling this sensitive output.
+
 ## v0.20.0 — 2026-10-28
 
 ### Added

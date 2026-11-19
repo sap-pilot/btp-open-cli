@@ -74,12 +74,13 @@ type OrgScopeRef struct {
 // when no --regions flag is provided. Old tokens for other endpoints are kept
 // so the user can switch between region groups without re-logging in.
 type Credentials struct {
-	ActiveAPIURLs     []string                                 `json:"active_api_urls"`
-	Tokens            map[string]RegionToken                   `json:"tokens"`
-	OrgXsuaa          map[string]XsuaaData                     `json:"org_xsuaa,omitempty"`           // orgGUID → xsuaa data
-	CISViewer         *CISViewerData                           `json:"cis_viewer,omitempty"`          // CIS central-viewer service key
-	SpaceDestServices map[string]map[string]*DestInstanceCache `json:"space_dest_services,omitempty"` // spaceGUID → instanceGUID → cache
-	DefaultOrgScope   []OrgScopeRef                            `json:"default_org_scope,omitempty"`   // set via `bo orgs`; cleared on login/logoff
+	ActiveAPIURLs      []string                                 `json:"active_api_urls"`
+	Tokens             map[string]RegionToken                   `json:"tokens"`
+	OrgXsuaa           map[string]XsuaaData                     `json:"org_xsuaa,omitempty"`            // orgGUID → xsuaa data
+	CISViewer          *CISViewerData                           `json:"cis_viewer,omitempty"`           // CIS central-viewer service key
+	SpaceDestServices  map[string]map[string]*DestInstanceCache `json:"space_dest_services,omitempty"`  // spaceGUID → instanceGUID → cache
+	SpaceHTML5Services map[string]map[string]*DestInstanceCache `json:"space_html5_services,omitempty"` // spaceGUID → instanceGUID → cache (html5-apps-repo/app-runtime)
+	DefaultOrgScope    []OrgScopeRef                            `json:"default_org_scope,omitempty"`    // set via `bo orgs`; cleared on login/logoff
 }
 
 // RegionToAPIURL converts a region shorthand (e.g. "us10") to the standard
@@ -159,6 +160,7 @@ func ClearTokens() error {
 	creds.Tokens = make(map[string]RegionToken)
 	creds.OrgXsuaa = nil
 	creds.SpaceDestServices = nil
+	creds.SpaceHTML5Services = nil
 	creds.DefaultOrgScope = nil
 	return Save(creds)
 }
