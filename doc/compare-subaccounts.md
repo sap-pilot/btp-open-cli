@@ -98,7 +98,7 @@ prod,my-dest-svc,S4_BACKEND,https://s4.example.com,HTTP,OAuth2SAMLBearerAssertio
 
 ## HTML5 apps
 
-`--no-runtime-option=create --no-key-option=create` automatically create a temporary `html5-apps-repo`/`app-runtime` service instance and/or service key in any space that doesn't already have one, so no space gets silently skipped for lack of one — see the README's `html5-apps` section for the full set of options (`skip`/`create`/`create-delete`/`abort`) and what each does.
+`--no-runtime-option=create --no-key-option=create` automatically create a temporary `html5-apps-repo`/`app-runtime` service instance and/or service key in any space that doesn't already have one, so no space gets silently skipped for lack of one — see the README's `html5-apps` section for the full set of options (`skip`/`create`/`transient`/`abort`) and what each does. Passing both explicitly like this also avoids the interactive `s/c/t/a` prompt that `bo html5-apps` would otherwise show for a missing instance/key.
 
 **The count here can legitimately differ from the BTP cockpit's "HTML5 Applications" list.** The cockpit's list often includes duplicate-looking entries caused by a destination with an incorrectly-set `sap.cloud.service` property pointing at a host that isn't actually an HTML5 repo, or entries that are really SAP Build Process Automation ("SBPA") inbox workflow apps rather than genuine HTML5 apps. If the numbers don't match and you need the *actual* deployed-app list to compare against, check **SAP Build Work Zone → Content Manager → Content Explorer** instead of the cockpit's HTML5 Applications list.
 

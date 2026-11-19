@@ -132,13 +132,19 @@ they're logged in.
 
 - **Read-only** (safe to run freely): `orgs`, `org-spaces`, `spaces`,
   `org-users`, `org-space-users`, `users`, `apps`, `roles`, `role-collections`,
-  `describe-subaccount`, `html5-apps` (read-only by default — an
-  html5-apps-repo/app-runtime instance or service key missing is just
-  skipped with a warning; but `--no-key-option=c/cd` and
-  `--no-runtime-option=c/cd` create a service key and/or service instance,
-  and the `cd`/`create-delete` variants delete them again afterward — these
-  are write actions, not the default, so treat them like the guardrails
-  below), `count-lines`, `service-credentials`
+  `describe-subaccount`, `html5-apps` (read-only as long as you don't
+  choose `create`/`transient` — an html5-apps-repo/app-runtime instance or
+  service key found missing prompts interactively (`s`/skip, `c`/create,
+  `t`/transient, or `a`/abort, defaulting to skip on a blank line) unless
+  `--no-key-option`/`--no-runtime-option` was explicitly given, or `-y` is
+  passed to default straight to skip without prompting — in an agent
+  shell, always pass `-y` (or an explicit `--no-key-option=s`/
+  `--no-runtime-option=s`) to avoid hanging on that prompt, same as any
+  other `[y/N]`-style prompt (see "Running non-interactively" above);
+  `c`/create and `t`/transient are write actions — they create a service
+  key and/or service instance, `t`/transient deleting them again
+  afterward — so treat passing either like the guardrails below),
+  `count-lines`, `service-credentials`
   (this one outputs raw secrets — see "Handling commands that output
   secrets" below before using it), `service-instances`, `service-keys`
   (both are read-only by default, but `--full` fetches and prints live

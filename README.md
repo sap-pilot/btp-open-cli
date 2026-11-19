@@ -1723,18 +1723,22 @@ bo html5-apps --sort-by space_name:desc,application_name
 bo html5-apps --debug
 
 # Apply one choice to every html5-apps-repo/app-runtime instance found with
-# no service key (default: skip)
-bo html5-apps --no-key-option skip            # warn and move on (default)
-bo html5-apps --no-key-option create          # auto-create 'bo-html5-key', keep it
-bo html5-apps --no-key-option create-delete   # auto-create 'bo-html5-key', use it, delete it
-bo html5-apps --no-key-option abort           # stop the command on the first one
+# no service key, instead of being asked interactively each time (default)
+bo html5-apps --no-key-option skip         # warn and move on
+bo html5-apps --no-key-option create       # auto-create 'bo-html5-key', keep it
+bo html5-apps --no-key-option transient    # auto-create 'bo-html5-key', use it, delete it
+bo html5-apps --no-key-option abort        # stop the command on the first one
 
 # Apply one choice to every space with no html5-apps-repo/app-runtime
-# service instance at all (default: skip)
-bo html5-apps --no-runtime-option skip            # warn and skip that space's app-hosts (default)
-bo html5-apps --no-runtime-option create          # auto-create instance 'bo-html5-app-runtime' + a key, keep both
-bo html5-apps --no-runtime-option create-delete   # auto-create both, use them, delete both
-bo html5-apps --no-runtime-option abort           # stop the command on the first one
+# service instance at all, instead of being asked interactively (default)
+bo html5-apps --no-runtime-option skip         # warn and skip that space's app-hosts
+bo html5-apps --no-runtime-option create       # auto-create instance 'bo-html5-app-runtime' + a key, keep both
+bo html5-apps --no-runtime-option transient    # auto-create both, use them, delete both
+bo html5-apps --no-runtime-option abort        # stop the command on the first one
+
+# Skip the interactive prompt above without passing --no-key-option/
+# --no-runtime-option — defaults both straight to skip instead
+bo html5-apps -y
 
 # Discover app_host_id from destinations instead of enumerating app-host
 # instances directly: scans subaccount- and instance-level destinations in
@@ -1762,11 +1766,11 @@ With `--from-destinations`, `instance_name` and `app_host_id` still come straigh
 
 `--from-destinations` also populates three destination-identifying columns, empty otherwise: `destination_name` is always the matching destination's own `Name`; `destination_instance_name`/`destination_instance_id` additionally identify the destination service instance it was found in when the destination is instance-level — a subaccount-level destination leaves both empty, since there's no single instance to attribute it to.
 
-`--no-key-option <s/skip|c/create|cd/create-delete|a/abort>` governs what happens to an html5-apps-repo/app-runtime instance that exists but has no service key, once per such instance hit during the run: `skip` (the default — no need to pass it) warns and moves on; `create` automatically creates a `bo-html5-key` service key on the instance (the same thing `cf create-service-key <instance> bo-html5-key` does) and keeps it; `create-delete` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens.
+`--no-key-option <s/skip|c/create|t/transient|a/abort>` governs what happens to an html5-apps-repo/app-runtime instance that exists but has no service key, once per such instance hit during the run: `skip` warns and moves on; `create` automatically creates a `bo-html5-key` service key on the instance (the same thing `cf create-service-key <instance> bo-html5-key` does) and keeps it; `transient` does the same but deletes that key again once it's no longer needed for this run; `abort` stops the whole command the first time it happens.
 
-`--no-runtime-option <s/skip|c/create|cd/create-delete|a/abort>` governs the separate case of a space with no html5-apps-repo/app-runtime service instance at all: `skip` (the default) warns and skips that space's app-host(s), with a hint to re-run with `--no-runtime-option=c/cd` to create one automatically; `create` provisions a new app-runtime service instance (named `bo-html5-app-runtime`) plus a service key on it, keeping both; `create-delete` does the same but deletes both again once they're no longer needed for this run; `abort` stops the whole command the first time it happens.
+`--no-runtime-option <s/skip|c/create|t/transient|a/abort>` governs the separate case of a space with no html5-apps-repo/app-runtime service instance at all: `skip` warns and skips that space's app-host(s); `create` provisions a new app-runtime service instance (named `bo-html5-app-runtime`) plus a service key on it, keeping both; `transient` does the same but deletes both again once they're no longer needed for this run; `abort` stops the whole command the first time it happens.
 
-Both flags govern the html5-apps-repo/app-runtime service-key/instance decision in both discovery paths; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (reading destinations themselves, not the app-runtime key/instance used to query them — there, only skip-or-prompt is supported).
+**Omitting either flag asks interactively instead of defaulting to a fixed choice:** each time an instance with no key (`--no-key-option`) or a space with no app-runtime instance at all (`--no-runtime-option`) is hit, you're prompted `s/skip, c/create, t/transient, or a/abort?` — a blank answer (just Enter) means `skip`. Pass `-y` to skip this prompt and go straight to `skip` for whichever of the two flags wasn't explicitly given — `-y` has no effect on a flag that *was* explicitly passed, explicit always wins. Both flags govern the html5-apps-repo/app-runtime service-key/instance decision in both discovery paths; `--no-prompt` is the equivalent for the separate destination-resolution prompts encountered under `--from-destinations` (reading destinations themselves, not the app-runtime key/instance used to query them — there, only skip-or-prompt is supported, and `-y` has no effect on it).
 
 ### `service-credentials`
 
