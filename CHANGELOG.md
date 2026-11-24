@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.22.0 — 2026-11-19
+
+### Added
+
+- **`sort --fields hash(field)` — compare a sensitive field without exposing it**
+
+  Wrapping a `--fields` entry as `hash(field)` (e.g. `hash(password)`, or `hash(app_labels.commit_id)` — the inner name can be dotted too) includes that field's SHA-256 hex digest instead of its actual value, additive like a dotted entry (the real field only appears if also named plainly). Two exports' hashes match exactly when the underlying value is exactly the same and differ otherwise — everything a diff or `bo compare` report needs — without the real value ever being written anywhere. An empty/absent field hashes to an empty string rather than SHA-256('')'s own fixed hash. `--by` (explicit, or implied by `--fields`) also understands `hash(...)`, sorting by the hex digest itself.
+
+- **New `compare` command — side-by-side HTML diff report for two (or more paired) files**
+
+  `bo compare <file_A[,...]> <file_B[,...]> -o <report.html>` is a plain line-by-line text diff (same idea as `diff`/VS Code's compare view, and works identically whether the files are CSV, JSON, or anything else) rendered as a single, self-contained HTML page: a summary table (one row per pair, reporting identical/added/deleted/updated line counts and identical %) followed by a full side-by-side, color-coded diff view per pair (added green, deleted red, updated dark red, identical uncolored). `file_A`/`file_B` can each be a comma-separated list of several files (same length on both sides, paired up by position) to compare more than one pair of files in a single report. `--output`/`-o` is required.
+
+- **`sort --sort-nested-fields` — sort a field's own content, not just the rows**
+
+  Adds `--sort-nested-fields <field,...>` to `bo sort`: for each named top-level field, its own content — a `,`- or `;`-delimited list (whichever delimiter the value actually uses), or a JSON array/object (native, or JSON-encoded as a string, e.g. a CSV cell) — is sorted into a canonical order, recursing into any nested arrays/objects. Meant to run right before diffing two exports, so a tags list or label object that's merely in a different internal order on each side doesn't show up as a difference by itself. A field absent from a row, or whose content isn't a list/object, is left unchanged.
+
+- **`apps --spaces` — narrow to specific space names**
+
+  Adds `--spaces <name1,name2,...>` (comma-separated, exact, case-insensitive space names) to `bo apps`, same convention as the `--spaces` flag already on `service-instances`/`service-keys`/`create-service-keys`/etc. A given name matches every space with that name across every org in scope, not just the first one found — if two different orgs each have a space called `dev`, both are included. Omit it to search every accessible space, as before.
+
+- **`orgs --select <pattern>` — switch the default org scope non-interactively**
+
+  Selects every accessible org whose `org_name` or `org_id` matches `pattern` (a comma-separated, case-insensitive keyword list — same convention as `--include`/`--exclude`, but also checked against `org_id`), sets them as the session's default org scope, and echoes the selection — all without the interactive picker and with no TTY requirement at all, unlike `--all`. Meant for batch scripts that need to switch org scope unattended, including by exact org GUID. Applied after `--include`/`--exclude` filtering, takes precedence over `--all` when both are given, and errors out if nothing matches.
+
 ## v0.21.0 — 2026-11-18
 
 ### Added

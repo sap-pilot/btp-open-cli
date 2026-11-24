@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -212,13 +214,202 @@ func asJSONObject(v interface{}) (map[string]interface{}, bool) {
 	}
 }
 
+// sortHashFieldInner reports whether field is a "hash(...)" --fields entry
+// (e.g. "hash(password)", or "hash(app_labels.commit_id)" — the inner name
+// can be dotted too), returning the inner field name with ok=true if so.
+// "hash()" (empty inner) and anything not of the exact prefix/suffix shape
+// don't match (ok=false) and are left to be treated as an ordinary,
+// literal field name instead — consistent with --fields/--by's existing
+// "no validation" convention elsewhere in this file.
+func sortHashFieldInner(field string) (inner string, ok bool) {
+	const prefix, suffix = "hash(", ")"
+	if !strings.HasPrefix(field, prefix) || !strings.HasSuffix(field, suffix) {
+		return "", false
+	}
+	inner = strings.TrimSpace(field[len(prefix) : len(field)-len(suffix)])
+	if inner == "" {
+		return "", false
+	}
+	return inner, true
+}
+
+// sortHashValue renders v (see sortValueAsString) and returns its SHA-256
+// hex digest — a one-way, irreversible fingerprint, not the value itself.
+// Used by a "hash(...)" --fields entry so a sensitive field (a password,
+// client secret, etc.) can be included in a sorted/compared result without
+// ever exposing its actual value: two exports' hashes match exactly when
+// the underlying value is exactly the same, and differ otherwise, which is
+// everything a diff/comparison needs. An empty/absent value hashes to ""
+// (not SHA-256's own hash-of-empty-string), so a field that's genuinely
+// missing or empty doesn't render as if some value were present.
+func sortHashValue(v interface{}) string {
+	s := sortValueAsString(v)
+	if s == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// resolveSortFieldOrHash is resolveSortFieldValue, except a "hash(...)"
+// field (see sortHashFieldInner) resolves its inner field name instead and
+// returns that value's SHA-256 hex digest (see sortHashValue) rather than
+// the value itself. Used wherever a field's value is rendered or compared —
+// CSV cells, a JSON row's additive synthetic fields, and sortRowsByKeys —
+// so a --by (explicit, or the implicit default sort from --fields) naming
+// a "hash(...)" entry sorts by its hex digest, grouping rows with identical
+// underlying secrets together without ever comparing the real value.
+func resolveSortFieldOrHash(row map[string]interface{}, field string) interface{} {
+	if inner, ok := sortHashFieldInner(field); ok {
+		return sortHashValue(resolveSortFieldValue(row, inner))
+	}
+	return resolveSortFieldValue(row, field)
+}
+
+// parseWholeJSON decodes s as a single JSON value, using json.Number so a
+// number's exact textual form round-trips (e.g. "1.50" doesn't become
+// "1.5"), and rejects it (ok=false) unless the entire string — besides
+// trailing whitespace — was consumed: encoding/json's Decoder, unlike
+// json.Unmarshal, stops after one value and silently ignores whatever
+// follows, which would otherwise treat a non-JSON string that happens to
+// start with valid JSON syntax (e.g. "[1,2]extra") as if it were clean JSON.
+func parseWholeJSON(s string) (interface{}, bool) {
+	dec := json.NewDecoder(strings.NewReader(s))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return v, true
+}
+
+// normalizeNestedFieldValue returns val with any JSON array/object or plain
+// comma-separated list content it holds sorted into a canonical order —
+// used by --sort-nested-fields so two otherwise-equivalent exports that
+// only differ in some list/object's internal ordering don't show up as a
+// diff. It recurses into nested arrays/objects, so a list of objects (or an
+// object holding a list) is normalized throughout, not just at the top
+// level. A native JSON array/object (as decoded from a JSON input file) is
+// handled directly; a string is first tried as JSON — covering both a CSV
+// cell holding JSON-encoded content and a JSON field whose own value is a
+// JSON-encoded string — and, failing that, treated as a plain
+// comma-separated list (split, trimmed, sorted, rejoined with ","). A
+// scalar, or a string that's neither of the above (not valid JSON and not a
+// list), is returned unchanged — there's nothing to sort.
+func normalizeNestedFieldValue(val interface{}) interface{} {
+	switch v := val.(type) {
+	case []interface{}:
+		return sortJSONArrayValue(v)
+	case map[string]interface{}:
+		return sortJSONObjectValue(v)
+	case string:
+		return normalizeNestedFieldString(v)
+	default:
+		return val
+	}
+}
+
+// sortJSONArrayValue normalizes each element of arr (recursively, so
+// elements that are themselves objects/arrays are normalized throughout)
+// and then sorts the (now-normalized) elements into a canonical order,
+// using the same numeric-aware-else-text comparison as --by.
+func sortJSONArrayValue(arr []interface{}) []interface{} {
+	out := make([]interface{}, len(arr))
+	for i, el := range arr {
+		out[i] = normalizeNestedFieldValue(el)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return sortCompareValues(out[i], out[j]) < 0
+	})
+	return out
+}
+
+// sortJSONObjectValue normalizes every value in obj, recursively — an
+// object's own keys need no sorting here since encoding/json already
+// serializes map keys alphabetically whenever this is re-marshaled.
+func sortJSONObjectValue(obj map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(obj))
+	for k, v := range obj {
+		out[k] = normalizeNestedFieldValue(v)
+	}
+	return out
+}
+
+// splitNestedListItems splits a plain (non-JSON) field value into its list
+// items for --sort-nested-fields, trimming whitespace from each and
+// dropping empty ones, and reports the delimiter actually used so the
+// caller can rejoin with that same one. ',' is the delimiter whenever s
+// contains one, exactly like splitCSV elsewhere; ';' is only used as a
+// fallback when s contains no ',' at all but does contain ';' (e.g. a tags
+// field written as "a;b;c" to sidestep a CSV column's own comma). Anything
+// with neither delimiter is just one single item.
+func splitNestedListItems(s string) (items []string, delim string) {
+	delim = ","
+	if !strings.Contains(s, ",") && strings.Contains(s, ";") {
+		delim = ";"
+	}
+	for _, part := range strings.Split(s, delim) {
+		if v := strings.TrimSpace(part); v != "" {
+			items = append(items, v)
+		}
+	}
+	return items, delim
+}
+
+// normalizeNestedFieldString is normalizeNestedFieldValue's string case: a
+// string holding valid JSON (array/object) is parsed, normalized, and
+// re-encoded back to the same JSON string shape; anything else is treated
+// as a plain delimited list (see splitNestedListItems for the ','/';'
+// delimiter rule) and sorted/rejoined with that same delimiter. A JSON
+// scalar (number/bool/string/null), or an empty/blank string, is returned
+// unchanged.
+func normalizeNestedFieldString(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return s
+	}
+	if parsed, ok := parseWholeJSON(s); ok {
+		switch parsed.(type) {
+		case []interface{}, map[string]interface{}:
+			if out, err := json.Marshal(normalizeNestedFieldValue(parsed)); err == nil {
+				return string(out)
+			}
+		}
+		return s
+	}
+	parts, delim := splitNestedListItems(s)
+	sort.SliceStable(parts, func(i, j int) bool {
+		return sortCompareValues(parts[i], parts[j]) < 0
+	})
+	return strings.Join(parts, delim)
+}
+
+// applySortNestedFields normalizes (see normalizeNestedFieldValue) each
+// row's value for every plain, top-level field name in fields, mutating
+// rows in place. A field absent from a given row is left alone — the same
+// lenient, no-error semantics as --by/--fields.
+func applySortNestedFields(rows []map[string]interface{}, fields []string) {
+	if len(fields) == 0 {
+		return
+	}
+	for _, row := range rows {
+		for _, f := range fields {
+			if v, ok := row[f]; ok {
+				row[f] = normalizeNestedFieldValue(v)
+			}
+		}
+	}
+}
+
 // sortRowsByKeys sorts rows in place by keys, in priority order (ties on one
 // key are broken by the next), stably preserving the existing order for
 // anything keys doesn't distinguish.
 func sortRowsByKeys(rows []map[string]interface{}, keys []sortByKey) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, k := range keys {
-			c := sortCompareValues(resolveSortFieldValue(rows[i], k.Field), resolveSortFieldValue(rows[j], k.Field))
+			c := sortCompareValues(resolveSortFieldOrHash(rows[i], k.Field), resolveSortFieldOrHash(rows[j], k.Field))
 			if c == 0 {
 				continue
 			}
@@ -290,7 +481,9 @@ func readSortCSV(path string) (header []string, rows []map[string]interface{}, e
 
 // writeSortCSV writes header as the header row, then one row per rows,
 // reading each column by name (a column --fields names that a row doesn't
-// have renders as an empty cell).
+// have renders as an empty cell). A "hash(...)" column (see
+// sortHashFieldInner) renders its inner field's SHA-256 hex digest instead
+// of its actual value.
 func writeSortCSV(w io.Writer, header []string, rows []map[string]interface{}) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(header); err != nil {
@@ -299,7 +492,7 @@ func writeSortCSV(w io.Writer, header []string, rows []map[string]interface{}) e
 	for _, row := range rows {
 		cells := make([]string, len(header))
 		for i, h := range header {
-			cells[i] = sortValueAsString(resolveSortFieldValue(row, h))
+			cells[i] = sortValueAsString(resolveSortFieldOrHash(row, h))
 		}
 		if err := cw.Write(cells); err != nil {
 			return err
@@ -416,35 +609,37 @@ func isJSONLeafValue(v interface{}) bool {
 
 // filterJSONRow applies --fields to one row: a leaf field is kept only if
 // fields is empty or names it; a non-leaf field (nested object/array) is
-// always kept, since a plain (non-dotted) --fields entry only ever selects
-// among leaf fields. A dotted entry (e.g. "app_labels.commit_id") is purely
-// additive instead: it's resolved via resolveSortFieldValue and added as
-// its own new top-level key, literally named after the dotted entry, on top
-// of whatever the plain rule above already decided — it never removes the
-// named parent field (e.g. "app_labels" itself, still kept whole per that
-// rule) or anything else.
+// always kept, since a plain (non-dotted, non-"hash(...)") --fields entry
+// only ever selects among leaf fields. A dotted entry (e.g.
+// "app_labels.commit_id") or a "hash(...)" entry (e.g. "hash(password)" —
+// see sortHashFieldInner) is purely additive instead: it's resolved via
+// resolveSortFieldOrHash and added as its own new top-level key, literally
+// named after the entry itself, on top of whatever the plain rule above
+// already decided — it never removes the named parent/inner field (e.g.
+// "app_labels" or "password" itself, still kept whole per that rule, if
+// also named plainly) or anything else.
 func filterJSONRow(row map[string]interface{}, isLeaf map[string]bool, fields []string) map[string]interface{} {
 	if len(fields) == 0 {
 		return row
 	}
 	keep := make(map[string]bool, len(fields))
-	var dotted []string
+	var synthetic []string
 	for _, f := range fields {
-		if strings.Contains(f, ".") {
-			dotted = append(dotted, f)
+		if _, isHash := sortHashFieldInner(f); isHash || strings.Contains(f, ".") {
+			synthetic = append(synthetic, f)
 		} else {
 			keep[f] = true
 		}
 	}
-	out := make(map[string]interface{}, len(row)+len(dotted))
+	out := make(map[string]interface{}, len(row)+len(synthetic))
 	for k, v := range row {
 		if isLeaf[k] && !keep[k] {
 			continue
 		}
 		out[k] = v
 	}
-	for _, f := range dotted {
-		out[f] = resolveSortFieldValue(row, f)
+	for _, f := range synthetic {
+		out[f] = resolveSortFieldOrHash(row, f)
 	}
 	return out
 }
@@ -478,18 +673,20 @@ type sortedFile struct {
 	content []byte
 }
 
-// prepareSortedFile reads path (by its extension: .csv or .json), sorts its
-// rows by byKeys (or, if empty, every available field in that format's
-// natural order — see jsonLeafFields/readSortCSV), applies fields to narrow
-// the output (see filterJSONRow for JSON; a plain column selection for CSV),
-// and returns the resulting file content without writing it anywhere.
-func prepareSortedFile(path string, byKeys []sortByKey, fields []string) (*sortedFile, error) {
+// prepareSortedFile reads path (by its extension: .csv or .json), normalizes
+// nestedFields' content (see applySortNestedFields), sorts its rows by
+// byKeys (or, if empty, every available field in that format's natural
+// order — see jsonLeafFields/readSortCSV), applies fields to narrow the
+// output (see filterJSONRow for JSON; a plain column selection for CSV), and
+// returns the resulting file content without writing it anywhere.
+func prepareSortedFile(path string, byKeys []sortByKey, fields []string, nestedFields []string) (*sortedFile, error) {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".csv":
 		header, rows, err := readSortCSV(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
+		applySortNestedFields(rows, nestedFields)
 		keys := byKeys
 		if len(keys) == 0 {
 			keys = defaultSortKeys(fields, header)
@@ -526,6 +723,7 @@ func prepareSortedFile(path string, byKeys []sortByKey, fields []string) (*sorte
 			return &sortedFile{path: path, content: buf.Bytes()}, nil
 		}
 
+		applySortNestedFields(rows, nestedFields)
 		leafOrder, isLeaf := jsonLeafFields(rows)
 		keys := byKeys
 		if len(keys) == 0 {
@@ -645,6 +843,49 @@ a dotted entry adds its own new field under that exact literal name
 alongside whatever the plain rule above already decided — it never
 replaces or drops the named parent field.
 
+Wrap a --fields entry as "hash(field)" (e.g. "hash(password)", or
+"hash(app_labels.commit_id)" — the inner name can be dotted too) to include
+that field's SHA-256 hex digest instead of its actual value — a one-way
+fingerprint, not the value itself, with no way to recover the original from
+it. This lets a sensitive field (a password, client secret, etc.) still be
+included and compared across two exports — the hash matches exactly when
+the underlying value is exactly the same, and differs otherwise, which is
+everything a diff needs — without ever writing the real value anywhere.
+Exactly like a dotted entry, "hash(...)" is purely additive: it adds a new
+field literally named "hash(password)" (not "password") alongside whatever
+the plain rule above already decided, so the real "password" column/field
+only appears if you separately name it too. An empty/absent field hashes to
+an empty string rather than SHA-256('')'s own fixed hash, so a value that's
+genuinely missing doesn't render as if something were there. --by (given
+explicitly, or implied by --fields per the paragraph above) also
+understands "hash(...)": it sorts by the hex digest itself, which still
+never exposes the real value but does group rows sharing the same
+underlying secret next to each other.
+
+Use --sort-nested-fields <field,...> to also sort a field's own content into
+a canonical order — not the rows themselves (see --by for that), but what's
+inside the named field's value — so two otherwise-equivalent files that
+only differ in some list's or object's internal ordering (e.g. tags written
+in a different order, or a JSON object whose keys happened to be assembled
+in a different order upstream) don't show up as a diff. Each name is a
+plain, top-level field (no dotted paths). Its content is handled by shape:
+a JSON array is sorted element by element (recursing into any nested
+arrays/objects first); a JSON object has every one of its values recursed
+into the same way (its own keys need no sorting — re-encoding a JSON object
+already always emits its keys alphabetically); anything else is treated as
+a plain delimited list and sorted as such — ',' whenever the value contains
+one, otherwise ';' if that's what it uses instead (e.g. a tags field written
+"a;b;c" to sidestep a CSV column's own comma), rejoined with that same
+delimiter. This applies whether the
+field holds that content natively (a JSON input file's own array/object) or
+as a JSON-encoded string (e.g. a CSV cell, or a JSON field whose value is
+itself a JSON-encoded string, both exactly the "app_labels" shape 'bo apps
+--include-labels' writes) — either way the result is written back in the
+same shape it was found. A field absent from a given row, or whose content
+is a scalar or otherwise isn't a list/object at all, is left unchanged.
+List/array elements are compared the same numeric-aware-else-text way --by
+compares field values.
+
 Without --output/-o, every matched file is sorted and overwritten in place:
 unless -y is given, a confirmation listing every file about to be
 overwritten is required first. --output instead writes the sorted result to
@@ -660,6 +901,8 @@ unambiguous which file the output came from).`,
 		}
 		fieldsFlag, _ := cmd.Flags().GetString("fields")
 		fields := parseSortFields(fieldsFlag)
+		nestedFieldsFlag, _ := cmd.Flags().GetString("sort-nested-fields")
+		nestedFields := parseSortFields(nestedFieldsFlag)
 		outputFlag, _ := cmd.Flags().GetString("output")
 		skipConfirm, _ := cmd.Flags().GetBool("yes")
 
@@ -673,7 +916,7 @@ unambiguous which file the output came from).`,
 
 		results := make([]*sortedFile, 0, len(paths))
 		for _, p := range paths {
-			r, err := prepareSortedFile(p, byKeys, fields)
+			r, err := prepareSortedFile(p, byKeys, fields, nestedFields)
 			if err != nil {
 				return err
 			}
@@ -716,7 +959,8 @@ unambiguous which file the output came from).`,
 func init() {
 	rootCmd.AddCommand(sortCmd)
 	sortCmd.Flags().StringP("by", "b", "", "Comma-separated fields to sort by, in priority order, each optionally suffixed with \":desc\" (default \":asc\"); a dotted name (e.g. app_labels.commit_id) reaches into a nested field; omit to sort by --fields' own fields if given, else every available field, in order")
-	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); a dotted name (e.g. app_labels.commit_id) adds that nested field under its own literal name; omit to keep every field")
+	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); a dotted name (e.g. app_labels.commit_id) adds that nested field under its own literal name; wrap a name as hash(field) (e.g. hash(password)) to add its SHA-256 hex digest instead of its actual value, for comparing a sensitive field without exposing it; omit --fields to keep every field")
+	sortCmd.Flags().String("sort-nested-fields", "", "Comma-separated, plain (non-dotted) field names whose own content — a ','- or ';'-delimited list, or a JSON array/object, either native or JSON-encoded as a string (e.g. a CSV cell) — is itself sorted into a canonical order, recursing into any nested arrays/objects; a field absent from a row, or whose content isn't a list/object, is left unchanged")
 	sortCmd.Flags().StringP("output", "o", "", "Write the sorted result to this file instead of overwriting the input (only valid with exactly one matching file)")
 	sortCmd.Flags().BoolP("yes", "y", false, "Skip the overwrite confirmation prompt")
 }

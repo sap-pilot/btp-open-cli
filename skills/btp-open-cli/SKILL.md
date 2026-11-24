@@ -111,14 +111,23 @@ they're logged in.
 
 - `bo orgs` (the interactive org picker) requires a real terminal and fails
   fast otherwise. Never run it bare in an agent shell. Instead:
+  - `bo orgs --select <pattern>` actually switches the session's default org
+    scope (persisted like a confirmed picker selection) with zero prompting
+    and no TTY requirement at all — the right choice in an agent shell when
+    you need other org-aware commands to pick up a specific org afterward.
+    `pattern` is a comma-separated, case-insensitive keyword list matched
+    against both `org_name` and `org_id` (so an exact org GUID works too);
+    it errors out if nothing matches. It takes precedence over `--all` and
+    is echoed to stdout (same formats as the confirmed picker).
   - `bo orgs --output some.csv --format csv` (optionally with
     `--include`/`--exclude`) skips the picker entirely — no prompting, no
     default scope change — and dumps the full accessible org list straight to
     the file, for reuse as `--orgs some.csv` on other commands, or
   - skip `bo orgs` entirely and pass `--org <guid-or-name>` / `--orgs <csv>`
     directly to whichever command you're running.
-  - Note: `--format` is only accepted alongside `--output`, and `--all` has no
-    effect when `--output` is given (nothing is being selected in that mode).
+  - Note: `--format` is only accepted alongside `--output`, and both `--all`
+    and `--select` have no effect when `--output` is given (nothing is being
+    selected in that mode).
 - Commands with a `[y/N]` confirmation or a "press Enter to retry / type 's'
   to skip / Ctrl-C to abort" prompt read one line from stdin. On closed/EOF
   stdin they abort safely (no changes made) — but if the shell you're given
@@ -191,7 +200,27 @@ they're logged in.
   reaches into a nested field — e.g. one JSON-object-valued column like
   `app_labels` (from `bo apps --include-labels`) — instead of the whole
   object/JSON string, falling back to that field's whole value if it isn't
-  actually a JSON object.
+  actually a JSON object. `--sort-nested-fields <field,...>` sorts a named
+  field's own content (a `,`- or `;`-delimited list, or a JSON array/object, native or
+  JSON-encoded as a string) into canonical order — useful right before a
+  diff, so a tags list or label object that's merely in a different
+  internal order on each side doesn't show up as a difference by itself.
+  Wrapping a `--fields` entry as `hash(field)` (e.g. `hash(password)`)
+  swaps in that field's SHA-256 hex digest instead of its actual value —
+  additive, like a dotted entry, so the real field only appears if also
+  named plainly — for comparing a sensitive value (password, client
+  secret, etc.) across two exports (including in a `bo compare` report)
+  without ever writing it anywhere.
+- **`compare <file_A[,...]> <file_B[,...]> -o <report.html>`** is also not a
+  BTP command — a plain line-by-line text diff (same idea as `diff`/VS
+  Code's compare view, works identically on CSV/JSON/anything else) of two
+  files already on disk, rendered as one self-contained HTML report with a
+  summary table (identical/added/deleted/updated counts + identical %) plus
+  a full side-by-side, color-coded view. Safe to run freely; see "Compare
+  two orgs/subaccounts to find differences" below. `--output`/`-o` is
+  required. `file_A`/`file_B` can each be a comma-separated list of several
+  files (same length on both sides, paired up by position) to compare
+  several pairs in one report.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -206,6 +235,11 @@ they're logged in.
   them) — their `--help` lists these under a "Common Flags:" section. See
   "Compare two orgs/subaccounts to find differences" below for the main
   reason to reach for them together.
+- `apps` additionally supports `--spaces <name1,name2,...>` — comma-separated,
+  exact, case-insensitive space names, narrowing down to just those spaces
+  across every org in scope. A given name matches every space with that
+  name across every matched org, not just the first one found (e.g. a `dev`
+  space that exists in two different orgs both get included).
 - **Global `--color auto|always|never` flag (default `auto`).** In `auto`
   mode, `toon`/`csv` output on `spaces`, `apps`, `service-instances`,
   `service-keys`, `role-collections`, `users`, `org-users`, and
@@ -499,6 +533,11 @@ of this as sensitive:
   every credential column) to the minimum needed, and only pass `--full` on
   `service-instances`/`service-keys` (or `--include-env` on `apps`) when you
   actually need the credentials — omit it for a plain metadata inventory.
+- If a secret field still needs to be *compared* across two exports (not
+  just avoided), run `bo sort --fields ...,hash(Password)` (etc.) on each
+  file first: it swaps the real value for its SHA-256 hash, which still
+  matches/differs exactly like the original would in a diff or `bo compare`
+  report, without the real value ever being written anywhere.
 
 ## Example workflows
 
@@ -524,8 +563,9 @@ bo service-credentials --orgs prod-orgs.csv --spaces prod --apps "*-srv" --servi
 ### Compare two orgs/subaccounts to find differences (read-only, safe to run freely)
 
 Export the same `--fields`/`--sort-by` selection from each org/subaccount, then
-`diff` the two files — any line only on one side is missing from the other.
-Works for `html5-apps`, `apps`, `destinations` (or
+either `diff` the two files (any line only on one side is missing from the
+other) or run `bo compare` for a shareable, color-coded HTML report of the
+same thing. Works for `html5-apps`, `apps`, `destinations` (or
 `subaccount-destinations`/`space-destinations`), `users`, `role-collections`,
 and `roles` — any command with `--fields`/`--sort-by` (see "Common flags"
 above). `bo sort` is for re-sorting/narrowing a file you already have (e.g.
@@ -543,12 +583,22 @@ diff a.csv b.csv   # lines starting with "<" are only in A, ">" only in B
 bo destinations --org <org-A> --fields org_name,space_name,instance_name --sort-by Name --format csv -o a.csv
 bo destinations --org <org-B> --fields org_name,space_name,instance_name --sort-by Name --format csv -o b.csv
 
+# Need Password/ClientSecret in the comparison too, without exposing them?
+# Export --format json, then hash those fields via `bo sort` before diffing
+bo destinations --org <org-A> --format json -o a-full.json
+bo sort --fields=org_name,space_name,instance_name,Name,'hash(Password)','hash(ClientSecret)' a-full.json -o a.json
+diff a.json b.json   # matches exactly when both sides' secret is the same, never shows the value itself
+
 # Comparing by one specific CF metadata label (not the whole app_labels
 # object): export with --include-labels, then narrow with `bo sort`'s
 # dotted-field support (app_labels, not apps itself, has --fields/--by)
 bo apps --org <org-A> --include-labels --format csv -o a-full.csv
 bo sort --fields=space_name,app_name,app_labels.commit_id a-full.csv -o a.csv
 diff a.csv b.csv
+
+# Or, for a shareable HTML report instead of a terminal diff — same a.csv/
+# b.csv from any of the exports above
+bo compare a.csv b.csv -o diff.html
 ```
 
 ### Bulk-create users (guarded)
