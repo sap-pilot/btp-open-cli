@@ -4,6 +4,10 @@
 
 ### Added
 
+- **`sort --sort-nested-fields` — sort a field's own content, not just the rows**
+
+  Adds `--sort-nested-fields <field,...>` to `bo sort`: for each named top-level field, its own content — a `,`- or `;`-delimited list (whichever delimiter the value actually uses), or a JSON array/object (native, or JSON-encoded as a string, e.g. a CSV cell) — is sorted into a canonical order, recursing into any nested arrays/objects. Meant to run right before diffing two exports, so a tags list or label object that's merely in a different internal order on each side doesn't show up as a difference by itself. A field absent from a row, or whose content isn't a list/object, is left unchanged.
+
 - **`apps --spaces` — narrow to specific space names**
 
   Adds `--spaces <name1,name2,...>` (comma-separated, exact, case-insensitive space names) to `bo apps`, same convention as the `--spaces` flag already on `service-instances`/`service-keys`/`create-service-keys`/etc. A given name matches every space with that name across every org in scope, not just the first one found — if two different orgs each have a space called `dev`, both are included. Omit it to search every accessible space, as before.

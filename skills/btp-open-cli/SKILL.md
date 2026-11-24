@@ -200,7 +200,11 @@ they're logged in.
   reaches into a nested field — e.g. one JSON-object-valued column like
   `app_labels` (from `bo apps --include-labels`) — instead of the whole
   object/JSON string, falling back to that field's whole value if it isn't
-  actually a JSON object.
+  actually a JSON object. `--sort-nested-fields <field,...>` sorts a named
+  field's own content (a `,`- or `;`-delimited list, or a JSON array/object, native or
+  JSON-encoded as a string) into canonical order — useful right before a
+  diff, so a tags list or label object that's merely in a different
+  internal order on each side doesn't show up as a difference by itself.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
