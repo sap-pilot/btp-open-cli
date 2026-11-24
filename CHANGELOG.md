@@ -4,6 +4,10 @@
 
 ### Added
 
+- **`sort --fields hash(field)` — compare a sensitive field without exposing it**
+
+  Wrapping a `--fields` entry as `hash(field)` (e.g. `hash(password)`, or `hash(app_labels.commit_id)` — the inner name can be dotted too) includes that field's SHA-256 hex digest instead of its actual value, additive like a dotted entry (the real field only appears if also named plainly). Two exports' hashes match exactly when the underlying value is exactly the same and differ otherwise — everything a diff or `bo compare` report needs — without the real value ever being written anywhere. An empty/absent field hashes to an empty string rather than SHA-256('')'s own fixed hash. `--by` (explicit, or implied by `--fields`) also understands `hash(...)`, sorting by the hex digest itself.
+
 - **New `compare` command — side-by-side HTML diff report for two (or more paired) files**
 
   `bo compare <file_A[,...]> <file_B[,...]> -o <report.html>` is a plain line-by-line text diff (same idea as `diff`/VS Code's compare view, and works identically whether the files are CSV, JSON, or anything else) rendered as a single, self-contained HTML page: a summary table (one row per pair, reporting identical/added/deleted/updated line counts and identical %) followed by a full side-by-side, color-coded diff view per pair (added green, deleted red, updated dark red, identical uncolored). `file_A`/`file_B` can each be a comma-separated list of several files (same length on both sides, paired up by position) to compare more than one pair of files in a single report. `--output`/`-o` is required.

@@ -54,12 +54,12 @@ A common audit question is "what's different between these two subaccounts?" —
 5. **Narrow each down to just the comparable columns:**
 
    ```bash
-   bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
-   bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us10-pre-dest-full.json --output=us10-pre-dest-sorted.json
-   bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us10-pre-html5-full.csv --output=us10-pre-html5-sorted.csv
-   bo sort --fields appName,role_name,attributeList --sort-nested-fields=attributeList us10-pre-roles-full.csv --output us10-pre-roles-sorted.csv
-   bo sort --fields rolecollection_name,role_name us10-pre-role-collections-full.csv -o us10-pre-role-collections-sorted.csv
-   bo sort --fields user_name,email,user_origin,groups --sort-nested-fields=groups us10-pre-users-full.csv --output=us10-pre-users-sorted.csv
+   bo sort --fields="space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id" us10-pre-apps-full.csv --output=us10-pre-apps-sorted.csv
+   bo sort --fields="space_name,instance_name,Name,URL,Type,Authentication,User,hash(Password)" us10-pre-dest-full.json --output=us10-pre-dest-sorted.json
+   bo sort --fields="space_name,instance_name,sap_cloud_service,application_id,application_name,application_version" us10-pre-html5-full.csv --output=us10-pre-html5-sorted.csv
+   bo sort --fields="appName,role_name,attributeList" --sort-nested-fields="attributeList" us10-pre-roles-full.csv --output us10-pre-roles-sorted.csv
+   bo sort --fields="rolecollection_name,role_name" us10-pre-role-collections-full.csv -o us10-pre-role-collections-sorted.csv
+   bo sort --fields="user_name,email,user_origin,groups" --sort-nested-fields="groups" us10-pre-users-full.csv --output=us10-pre-users-sorted.csv
    ```
 
    > `app_labels.mta_id` is a standard label for BTP mta hash; comparing it will tell whether the deployed mta/app are the same. 
@@ -83,12 +83,12 @@ A common audit question is "what's different between these two subaccounts?" —
    bo role-collections --output=us20-pre-role-collections-full.csv
    bo users --output=us20-pre-users-full.csv
    # (optional edits, same as step 4)
-   bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
-   bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password us20-pre-dest-full.json --output=us20-pre-dest-sorted.json
-   bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version us20-pre-html5-full.csv --output=us20-pre-html5-sorted.csv
-   bo sort --fields appName,role_name,attributeList --sort-nested-fields=attributeList us20-pre-roles-full.csv --output=us20-pre-roles-sorted.csv
-   bo sort --fields rolecollection_name,role_name us20-pre-role-collections-full.csv --output=us20-pre-role-collections-sorted.csv
-   bo sort --fields user_name,email,user_origin,groups --sort-nested-fields=groups us20-pre-users-full.csv --output=us20-pre-users-sorted.csv
+   bo sort --fields="space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id" us20-pre-apps-full.csv --output=us20-pre-apps-sorted.csv
+   bo sort --fields="space_name,instance_name,Name,URL,Type,Authentication,User,hash(Password)" us20-pre-dest-full.json --output=us20-pre-dest-sorted.json
+   bo sort --fields="space_name,instance_name,sap_cloud_service,application_id,application_name,application_version" us20-pre-html5-full.csv --output=us20-pre-html5-sorted.csv
+   bo sort --fields="appName,role_name,attributeList" --sort-nested-fields="attributeList" us20-pre-roles-full.csv --output=us20-pre-roles-sorted.csv
+   bo sort --fields="rolecollection_name,role_name" us20-pre-role-collections-full.csv --output=us20-pre-role-collections-sorted.csv
+   bo sort --fields="user_name,email,user_origin,groups" --sort-nested-fields="groups" us20-pre-users-full.csv --output=us20-pre-users-sorted.csv
    ```
 
 7. **Compare each pair of sorted files** — in VS Code (open both, right-click one → *Select for Compare*, right-click the other → *Compare with Selected*) or SAP Business Application Studio (same VS Code-based diff). Anything shown is either missing from one side or genuinely different between them.
@@ -115,11 +115,13 @@ prod,myapp,myapp-ui,"{}"
 
 ### Destinations
 
-⚠️ **`bo destinations` always includes every destination property unredacted by default — including live secrets like `Password` and `ClientSecret`.** There's no `--full`/safe-mode flag to opt out of this (see the README). Treat every file in this section as a secret: don't commit it, don't paste its contents into a chat/ticket, and delete it once you're done comparing.
+⚠️ **`bo destinations` always includes every destination property unredacted by default — including live secrets like `Password` and `ClientSecret`.** There's no `--full`/safe-mode flag to opt out of this (see the README). Treat `...-dest-full.json` (the un-narrowed export from step 3) as a secret: don't commit it, don't paste its contents into a chat/ticket, and delete it once you're done comparing.
 
-`space_name`/`instance_name` are empty for a subaccount-level destination (only instance-level ones have a space/instance) — that's expected, not a gap. Destination property names (`Name`, `URL`, `Type`, `Authentication`, `User`, `Password`) are matched exactly as the destination service itself stores them, case-sensitive.
+Step 5 narrows `Password` down to `hash(Password)` instead of keeping it as-is — a SHA-256 digest, not the real password (see [`bo sort`](../README.md#sort)'s `hash(field)` support) — so the *sorted/compared* file never carries the real secret at all, only `...-dest-full.json` does. Two subaccounts' hashes match exactly when the underlying password is exactly the same, and differ otherwise, which is everything the comparison needs. Add `hash(ClientSecret)` the same way if a destination's `ClientSecret` also needs comparing.
 
-Sample `...-dest-sorted.json` (passwords below are fictional placeholders, not real secrets):
+`space_name`/`instance_name` are empty for a subaccount-level destination (only instance-level ones have a space/instance) — that's expected, not a gap. Destination property names (`Name`, `URL`, `Type`, `Authentication`, `User`, `Password`) are matched exactly as the destination service itself stores them, case-sensitive — `hash(Password)` resolves `Password` the same way before hashing it.
+
+Sample `...-dest-sorted.json`:
 
 ```json
 {
@@ -132,7 +134,7 @@ Sample `...-dest-sorted.json` (passwords below are fictional placeholders, not r
       "Type": "HTTP",
       "Authentication": "BasicAuthentication",
       "User": "api-user",
-      "Password": "N0tAReal-P@ss1"
+      "hash(Password)": "618cf65c18fa120e4b801816a121ef99c0b05b7bf57708ba6588acf0547d1d5a"
     },
     {
       "space_name": "prod",
@@ -142,7 +144,7 @@ Sample `...-dest-sorted.json` (passwords below are fictional placeholders, not r
       "Type": "HTTP",
       "Authentication": "OAuth2SAMLBearerAssertion",
       "User": "",
-      "Password": ""
+      "hash(Password)": ""
     }
   ]
 }
@@ -233,12 +235,12 @@ bo html5-apps --no-runtime-option=create --no-key-option=create --output=${REGIO
 bo roles --output=${REGION}-${ENV_PREFIX}-roles-full.csv
 bo role-collections --output=${REGION}-${ENV_PREFIX}-role-collections-full.csv
 bo users --output=${REGION}-${ENV_PREFIX}-users-full.csv
-bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id ${REGION}-${ENV_PREFIX}-apps-full.csv --output=${REGION}-${ENV_PREFIX}-apps-sorted.csv
-bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password ${REGION}-${ENV_PREFIX}-dest-full.json --output=${REGION}-${ENV_PREFIX}-dest-sorted.json
-bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version ${REGION}-${ENV_PREFIX}-html5-full.csv --output=${REGION}-${ENV_PREFIX}-html5-sorted.csv
-bo sort --fields=appName,role_name,attributeList --sort-nested-fields=attributeList ${REGION}-${ENV_PREFIX}-roles-full.csv --output=${REGION}-${ENV_PREFIX}-roles-sorted.csv
-bo sort --fields=rolecollection_name,role_name ${REGION}-${ENV_PREFIX}-role-collections-full.csv --output=${REGION}-${ENV_PREFIX}-role-collections-sorted.csv
-bo sort --fields=user_name,email,user_origin,groups --sort-nested-fields=groups ${REGION}-${ENV_PREFIX}-users-full.csv --output=${REGION}-${ENV_PREFIX}-users-sorted.csv
+bo sort --fields="space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id" ${REGION}-${ENV_PREFIX}-apps-full.csv --output=${REGION}-${ENV_PREFIX}-apps-sorted.csv
+bo sort --fields="space_name,instance_name,Name,URL,Type,Authentication,User,hash(Password)" ${REGION}-${ENV_PREFIX}-dest-full.json --output=${REGION}-${ENV_PREFIX}-dest-sorted.json
+bo sort --fields="space_name,instance_name,sap_cloud_service,application_id,application_name,application_version" ${REGION}-${ENV_PREFIX}-html5-full.csv --output=${REGION}-${ENV_PREFIX}-html5-sorted.csv
+bo sort --fields="appName,role_name,attributeList" --sort-nested-fields="attributeList" ${REGION}-${ENV_PREFIX}-roles-full.csv --output=${REGION}-${ENV_PREFIX}-roles-sorted.csv
+bo sort --fields="rolecollection_name,role_name" ${REGION}-${ENV_PREFIX}-role-collections-full.csv --output=${REGION}-${ENV_PREFIX}-role-collections-sorted.csv
+bo sort --fields="user_name,email,user_origin,groups" --sort-nested-fields="groups" ${REGION}-${ENV_PREFIX}-users-full.csv --output=${REGION}-${ENV_PREFIX}-users-sorted.csv
 REGION="${REGION_2}"
 bo orgs --select "${ORG_2}"
 bo apps --include-env --include-labels --output=${REGION}-${ENV_PREFIX}-apps-full.csv
@@ -247,12 +249,12 @@ bo html5-apps --no-runtime-option=create --no-key-option=create --output=${REGIO
 bo roles --output=${REGION}-${ENV_PREFIX}-roles-full.csv
 bo role-collections --output=${REGION}-${ENV_PREFIX}-role-collections-full.csv
 bo users --output=${REGION}-${ENV_PREFIX}-users-full.csv
-bo sort --fields=space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id ${REGION}-${ENV_PREFIX}-apps-full.csv --output=${REGION}-${ENV_PREFIX}-apps-sorted.csv
-bo sort --fields=space_name,instance_name,Name,URL,Type,Authentication,User,Password ${REGION}-${ENV_PREFIX}-dest-full.json --output=${REGION}-${ENV_PREFIX}-dest-sorted.json
-bo sort --fields=space_name,instance_name,sap_cloud_service,application_id,application_name,application_version ${REGION}-${ENV_PREFIX}-html5-full.csv --output=${REGION}-${ENV_PREFIX}-html5-sorted.csv
-bo sort --fields=appName,role_name,attributeList --sort-nested-fields=attributeList ${REGION}-${ENV_PREFIX}-roles-full.csv --output=${REGION}-${ENV_PREFIX}-roles-sorted.csv
-bo sort --fields=rolecollection_name,role_name ${REGION}-${ENV_PREFIX}-role-collections-full.csv --output=${REGION}-${ENV_PREFIX}-role-collections-sorted.csv
-bo sort --fields=user_name,email,user_origin,groups --sort-nested-fields=groups ${REGION}-${ENV_PREFIX}-users-full.csv --output=${REGION}-${ENV_PREFIX}-users-sorted.csv
+bo sort --fields="space_name,app_mta_id,app_name,app_labels.mta_id,app_labels.mta_version,app_labels.commit_id" ${REGION}-${ENV_PREFIX}-apps-full.csv --output=${REGION}-${ENV_PREFIX}-apps-sorted.csv
+bo sort --fields="space_name,instance_name,Name,URL,Type,Authentication,User,hash(Password)" ${REGION}-${ENV_PREFIX}-dest-full.json --output=${REGION}-${ENV_PREFIX}-dest-sorted.json
+bo sort --fields="space_name,instance_name,sap_cloud_service,application_id,application_name,application_version" ${REGION}-${ENV_PREFIX}-html5-full.csv --output=${REGION}-${ENV_PREFIX}-html5-sorted.csv
+bo sort --fields="appName,role_name,attributeList" --sort-nested-fields="attributeList" ${REGION}-${ENV_PREFIX}-roles-full.csv --output=${REGION}-${ENV_PREFIX}-roles-sorted.csv
+bo sort --fields="rolecollection_name,role_name" ${REGION}-${ENV_PREFIX}-role-collections-full.csv --output=${REGION}-${ENV_PREFIX}-role-collections-sorted.csv
+bo sort --fields="user_name,email,user_origin,groups" --sort-nested-fields="groups" ${REGION}-${ENV_PREFIX}-users-full.csv --output=${REGION}-${ENV_PREFIX}-users-sorted.csv
 
 # One HTML report covering every artifact type, both subaccounts
 bo compare \

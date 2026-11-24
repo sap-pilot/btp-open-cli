@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -396,5 +398,192 @@ func TestSort_NestedFieldsAbsentFieldNoError(t *testing.T) {
 	_, stderr, err := runCmd(t, "sort", "--sort-nested-fields=nonexistent", in, "-o", out, "-y")
 	if err != nil {
 		t.Fatalf("sort should not error on an absent --sort-nested-fields field: %v\nstderr: %s", err, stderr)
+	}
+}
+
+// ── --fields hash(...) ───────────────────────────────────────────────────────
+
+func sha256Hex(t *testing.T, s string) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+func TestSortHashFieldInner(t *testing.T) {
+	cases := []struct {
+		field     string
+		wantInner string
+		wantOK    bool
+	}{
+		{"hash(password)", "password", true},
+		{"hash(app_labels.commit_id)", "app_labels.commit_id", true},
+		{"hash()", "", false},
+		{"hash(password", "", false},
+		{"hashpassword)", "", false},
+		{"password", "", false},
+		{"HASH(password)", "", false}, // case-sensitive, like every other field name here
+	}
+	for _, tc := range cases {
+		inner, ok := sortHashFieldInner(tc.field)
+		if ok != tc.wantOK || inner != tc.wantInner {
+			t.Errorf("sortHashFieldInner(%q) = (%q, %v), want (%q, %v)", tc.field, inner, ok, tc.wantInner, tc.wantOK)
+		}
+	}
+}
+
+func TestSortHashValue(t *testing.T) {
+	if got := sortHashValue("S3cr3t1"); got != sha256Hex(t, "S3cr3t1") {
+		t.Errorf("expected SHA-256 hex digest, got %q", got)
+	}
+	if got := sortHashValue(""); got != "" {
+		t.Errorf("expected empty string for an empty value, not SHA-256(''), got %q", got)
+	}
+	if got := sortHashValue(nil); got != "" {
+		t.Errorf("expected empty string for a nil (absent) value, got %q", got)
+	}
+}
+
+func TestResolveSortFieldOrHash(t *testing.T) {
+	row := map[string]interface{}{"password": "S3cr3t1", "name": "API_HUB"}
+	if got := resolveSortFieldOrHash(row, "hash(password)"); got != sha256Hex(t, "S3cr3t1") {
+		t.Errorf("expected hashed password, got %v", got)
+	}
+	if got := resolveSortFieldOrHash(row, "name"); got != "API_HUB" {
+		t.Errorf("expected a plain field to pass through unchanged, got %v", got)
+	}
+}
+
+// TestSort_HashFieldCSV_SameValueSameHash is the exact scenario this
+// feature exists for: two rows sharing the same secret value, compared
+// without ever writing that value to disk.
+func TestSort_HashFieldCSV_SameValueSameHash(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "destinations.csv")
+	csvBody := "name,user,password,client_secret\n" +
+		"API_HUB,api-user,S3cr3t1,\n" +
+		"S4_BACKEND,s4-user,S3cr3t1,cs-xyz\n"
+	if err := os.WriteFile(in, []byte(csvBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "destinations-sorted.csv")
+
+	_, stderr, err := runCmd(t, "sort", "--fields", "name,user,hash(password),hash(client_secret)", in, "--output", out, "-y")
+	if err != nil {
+		t.Fatalf("sort failed: %v\nstderr: %s", err, stderr)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+
+	if strings.Contains(got, "S3cr3t1") || strings.Contains(got, "cs-xyz") {
+		t.Fatalf("expected the real secret values never to appear in output, got: %q", got)
+	}
+	if !strings.Contains(got, "name,user,hash(password),hash(client_secret)") {
+		t.Errorf("expected hash(...) columns literally named as given, got: %q", got)
+	}
+	pwHash := sha256Hex(t, "S3cr3t1")
+	if strings.Count(got, pwHash) != 2 {
+		t.Errorf("expected the same password hash on both rows (%s), got: %q", pwHash, got)
+	}
+	// client_secret differs: empty on one row (hashes to ""), set on the other.
+	csHash := sha256Hex(t, "cs-xyz")
+	if !strings.Contains(got, csHash) {
+		t.Errorf("expected the client_secret hash for the row that has one, got: %q", got)
+	}
+	if !strings.Contains(got, "API_HUB,api-user,"+pwHash+",\n") {
+		t.Errorf("expected an empty hash for the empty client_secret, got: %q", got)
+	}
+}
+
+// TestSort_HashFieldJSON_AdditiveNotDestructive verifies hash(...) behaves
+// like a dotted entry: additive, and the real field is dropped from output
+// unless also named plainly.
+func TestSort_HashFieldJSON_AdditiveNotDestructive(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "destinations.json")
+	jsonBody := `{"rows":[{"name":"API_HUB","password":"S3cr3t1"}]}`
+	if err := os.WriteFile(in, []byte(jsonBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "sorted.json")
+
+	_, stderr, err := runCmd(t, "sort", "--fields", "name,hash(password)", in, "-o", out, "-y")
+	if err != nil {
+		t.Fatalf("sort failed: %v\nstderr: %s", err, stderr)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(body)
+	if strings.Contains(got, "S3cr3t1") {
+		t.Fatalf("expected the real password value never to appear in output, got: %q", got)
+	}
+	if !strings.Contains(got, `"hash(password)": "`+sha256Hex(t, "S3cr3t1")+`"`) {
+		t.Errorf("expected the hashed password field, got: %q", got)
+	}
+	if strings.Contains(got, `"password"`) {
+		t.Errorf("expected the raw password field to be dropped (not named plainly in --fields), got: %q", got)
+	}
+}
+
+// TestSort_HashFieldImplicitByGroupsIdenticalValues verifies that omitting
+// --by (so the implicit sort is --fields' own order, including a
+// hash(...) entry) actually sorts by the hash — not silently a no-op,
+// since the hash column doesn't exist on the raw row until synthesized.
+func TestSort_HashFieldImplicitByGroupsIdenticalValues(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "rows.csv")
+	csvBody := "name,password\n" +
+		"C_row,zzz\n" +
+		"A_row,aaa\n" +
+		"B_row,aaa\n"
+	if err := os.WriteFile(in, []byte(csvBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "sorted.csv")
+
+	// No --by: the implicit sort is --fields' own order, i.e. by
+	// hash(password) first.
+	_, stderr, err := runCmd(t, "sort", "--fields", "name,hash(password)", in, "-o", out, "-y")
+	if err != nil {
+		t.Fatalf("sort failed: %v\nstderr: %s", err, stderr)
+	}
+	body, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("expected a header + 3 rows, got: %v", lines)
+	}
+	// aaa's hash groups A_row/B_row together (tied, so stable/name order
+	// within the tie keeps A_row before B_row); zzz's hash sorts
+	// differently and must not be interleaved between them.
+	nameOf := func(line string) string { return strings.SplitN(line, ",", 2)[0] }
+	aIdx, bIdx, cIdx := -1, -1, -1
+	for i, l := range lines[1:] {
+		switch nameOf(l) {
+		case "A_row":
+			aIdx = i
+		case "B_row":
+			bIdx = i
+		case "C_row":
+			cIdx = i
+		}
+	}
+	if aIdx == -1 || bIdx == -1 || cIdx == -1 {
+		t.Fatalf("expected all three rows present, got: %v", lines)
+	}
+	// C_row (a different hash) must land strictly outside the [aIdx, bIdx]
+	// span — i.e. not interleaved between the two identical-hash rows.
+	lo, hi := aIdx, bIdx
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	if cIdx > lo && cIdx < hi {
+		t.Errorf("expected C_row (different hash) not interleaved between A_row/B_row (same hash), got order: %v", lines[1:])
 	}
 }

@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -212,6 +214,58 @@ func asJSONObject(v interface{}) (map[string]interface{}, bool) {
 	}
 }
 
+// sortHashFieldInner reports whether field is a "hash(...)" --fields entry
+// (e.g. "hash(password)", or "hash(app_labels.commit_id)" — the inner name
+// can be dotted too), returning the inner field name with ok=true if so.
+// "hash()" (empty inner) and anything not of the exact prefix/suffix shape
+// don't match (ok=false) and are left to be treated as an ordinary,
+// literal field name instead — consistent with --fields/--by's existing
+// "no validation" convention elsewhere in this file.
+func sortHashFieldInner(field string) (inner string, ok bool) {
+	const prefix, suffix = "hash(", ")"
+	if !strings.HasPrefix(field, prefix) || !strings.HasSuffix(field, suffix) {
+		return "", false
+	}
+	inner = strings.TrimSpace(field[len(prefix) : len(field)-len(suffix)])
+	if inner == "" {
+		return "", false
+	}
+	return inner, true
+}
+
+// sortHashValue renders v (see sortValueAsString) and returns its SHA-256
+// hex digest — a one-way, irreversible fingerprint, not the value itself.
+// Used by a "hash(...)" --fields entry so a sensitive field (a password,
+// client secret, etc.) can be included in a sorted/compared result without
+// ever exposing its actual value: two exports' hashes match exactly when
+// the underlying value is exactly the same, and differ otherwise, which is
+// everything a diff/comparison needs. An empty/absent value hashes to ""
+// (not SHA-256's own hash-of-empty-string), so a field that's genuinely
+// missing or empty doesn't render as if some value were present.
+func sortHashValue(v interface{}) string {
+	s := sortValueAsString(v)
+	if s == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// resolveSortFieldOrHash is resolveSortFieldValue, except a "hash(...)"
+// field (see sortHashFieldInner) resolves its inner field name instead and
+// returns that value's SHA-256 hex digest (see sortHashValue) rather than
+// the value itself. Used wherever a field's value is rendered or compared —
+// CSV cells, a JSON row's additive synthetic fields, and sortRowsByKeys —
+// so a --by (explicit, or the implicit default sort from --fields) naming
+// a "hash(...)" entry sorts by its hex digest, grouping rows with identical
+// underlying secrets together without ever comparing the real value.
+func resolveSortFieldOrHash(row map[string]interface{}, field string) interface{} {
+	if inner, ok := sortHashFieldInner(field); ok {
+		return sortHashValue(resolveSortFieldValue(row, inner))
+	}
+	return resolveSortFieldValue(row, field)
+}
+
 // parseWholeJSON decodes s as a single JSON value, using json.Number so a
 // number's exact textual form round-trips (e.g. "1.50" doesn't become
 // "1.5"), and rejects it (ok=false) unless the entire string — besides
@@ -355,7 +409,7 @@ func applySortNestedFields(rows []map[string]interface{}, fields []string) {
 func sortRowsByKeys(rows []map[string]interface{}, keys []sortByKey) {
 	sort.SliceStable(rows, func(i, j int) bool {
 		for _, k := range keys {
-			c := sortCompareValues(resolveSortFieldValue(rows[i], k.Field), resolveSortFieldValue(rows[j], k.Field))
+			c := sortCompareValues(resolveSortFieldOrHash(rows[i], k.Field), resolveSortFieldOrHash(rows[j], k.Field))
 			if c == 0 {
 				continue
 			}
@@ -427,7 +481,9 @@ func readSortCSV(path string) (header []string, rows []map[string]interface{}, e
 
 // writeSortCSV writes header as the header row, then one row per rows,
 // reading each column by name (a column --fields names that a row doesn't
-// have renders as an empty cell).
+// have renders as an empty cell). A "hash(...)" column (see
+// sortHashFieldInner) renders its inner field's SHA-256 hex digest instead
+// of its actual value.
 func writeSortCSV(w io.Writer, header []string, rows []map[string]interface{}) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(header); err != nil {
@@ -436,7 +492,7 @@ func writeSortCSV(w io.Writer, header []string, rows []map[string]interface{}) e
 	for _, row := range rows {
 		cells := make([]string, len(header))
 		for i, h := range header {
-			cells[i] = sortValueAsString(resolveSortFieldValue(row, h))
+			cells[i] = sortValueAsString(resolveSortFieldOrHash(row, h))
 		}
 		if err := cw.Write(cells); err != nil {
 			return err
@@ -553,35 +609,37 @@ func isJSONLeafValue(v interface{}) bool {
 
 // filterJSONRow applies --fields to one row: a leaf field is kept only if
 // fields is empty or names it; a non-leaf field (nested object/array) is
-// always kept, since a plain (non-dotted) --fields entry only ever selects
-// among leaf fields. A dotted entry (e.g. "app_labels.commit_id") is purely
-// additive instead: it's resolved via resolveSortFieldValue and added as
-// its own new top-level key, literally named after the dotted entry, on top
-// of whatever the plain rule above already decided — it never removes the
-// named parent field (e.g. "app_labels" itself, still kept whole per that
-// rule) or anything else.
+// always kept, since a plain (non-dotted, non-"hash(...)") --fields entry
+// only ever selects among leaf fields. A dotted entry (e.g.
+// "app_labels.commit_id") or a "hash(...)" entry (e.g. "hash(password)" —
+// see sortHashFieldInner) is purely additive instead: it's resolved via
+// resolveSortFieldOrHash and added as its own new top-level key, literally
+// named after the entry itself, on top of whatever the plain rule above
+// already decided — it never removes the named parent/inner field (e.g.
+// "app_labels" or "password" itself, still kept whole per that rule, if
+// also named plainly) or anything else.
 func filterJSONRow(row map[string]interface{}, isLeaf map[string]bool, fields []string) map[string]interface{} {
 	if len(fields) == 0 {
 		return row
 	}
 	keep := make(map[string]bool, len(fields))
-	var dotted []string
+	var synthetic []string
 	for _, f := range fields {
-		if strings.Contains(f, ".") {
-			dotted = append(dotted, f)
+		if _, isHash := sortHashFieldInner(f); isHash || strings.Contains(f, ".") {
+			synthetic = append(synthetic, f)
 		} else {
 			keep[f] = true
 		}
 	}
-	out := make(map[string]interface{}, len(row)+len(dotted))
+	out := make(map[string]interface{}, len(row)+len(synthetic))
 	for k, v := range row {
 		if isLeaf[k] && !keep[k] {
 			continue
 		}
 		out[k] = v
 	}
-	for _, f := range dotted {
-		out[f] = resolveSortFieldValue(row, f)
+	for _, f := range synthetic {
+		out[f] = resolveSortFieldOrHash(row, f)
 	}
 	return out
 }
@@ -785,6 +843,25 @@ a dotted entry adds its own new field under that exact literal name
 alongside whatever the plain rule above already decided — it never
 replaces or drops the named parent field.
 
+Wrap a --fields entry as "hash(field)" (e.g. "hash(password)", or
+"hash(app_labels.commit_id)" — the inner name can be dotted too) to include
+that field's SHA-256 hex digest instead of its actual value — a one-way
+fingerprint, not the value itself, with no way to recover the original from
+it. This lets a sensitive field (a password, client secret, etc.) still be
+included and compared across two exports — the hash matches exactly when
+the underlying value is exactly the same, and differs otherwise, which is
+everything a diff needs — without ever writing the real value anywhere.
+Exactly like a dotted entry, "hash(...)" is purely additive: it adds a new
+field literally named "hash(password)" (not "password") alongside whatever
+the plain rule above already decided, so the real "password" column/field
+only appears if you separately name it too. An empty/absent field hashes to
+an empty string rather than SHA-256('')'s own fixed hash, so a value that's
+genuinely missing doesn't render as if something were there. --by (given
+explicitly, or implied by --fields per the paragraph above) also
+understands "hash(...)": it sorts by the hex digest itself, which still
+never exposes the real value but does group rows sharing the same
+underlying secret next to each other.
+
 Use --sort-nested-fields <field,...> to also sort a field's own content into
 a canonical order — not the rows themselves (see --by for that), but what's
 inside the named field's value — so two otherwise-equivalent files that
@@ -882,7 +959,7 @@ unambiguous which file the output came from).`,
 func init() {
 	rootCmd.AddCommand(sortCmd)
 	sortCmd.Flags().StringP("by", "b", "", "Comma-separated fields to sort by, in priority order, each optionally suffixed with \":desc\" (default \":asc\"); a dotted name (e.g. app_labels.commit_id) reaches into a nested field; omit to sort by --fields' own fields if given, else every available field, in order")
-	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); a dotted name (e.g. app_labels.commit_id) adds that nested field under its own literal name; omit to keep every field")
+	sortCmd.Flags().StringP("fields", "f", "", "Comma-separated leaf field names to keep in the output, dropping every other leaf field (nested/non-leaf JSON fields are always kept); a dotted name (e.g. app_labels.commit_id) adds that nested field under its own literal name; wrap a name as hash(field) (e.g. hash(password)) to add its SHA-256 hex digest instead of its actual value, for comparing a sensitive field without exposing it; omit --fields to keep every field")
 	sortCmd.Flags().String("sort-nested-fields", "", "Comma-separated, plain (non-dotted) field names whose own content — a ','- or ';'-delimited list, or a JSON array/object, either native or JSON-encoded as a string (e.g. a CSV cell) — is itself sorted into a canonical order, recursing into any nested arrays/objects; a field absent from a row, or whose content isn't a list/object, is left unchanged")
 	sortCmd.Flags().StringP("output", "o", "", "Write the sorted result to this file instead of overwriting the input (only valid with exactly one matching file)")
 	sortCmd.Flags().BoolP("yes", "y", false, "Skip the overwrite confirmation prompt")

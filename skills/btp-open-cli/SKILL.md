@@ -205,6 +205,12 @@ they're logged in.
   JSON-encoded as a string) into canonical order — useful right before a
   diff, so a tags list or label object that's merely in a different
   internal order on each side doesn't show up as a difference by itself.
+  Wrapping a `--fields` entry as `hash(field)` (e.g. `hash(password)`)
+  swaps in that field's SHA-256 hex digest instead of its actual value —
+  additive, like a dotted entry, so the real field only appears if also
+  named plainly — for comparing a sensitive value (password, client
+  secret, etc.) across two exports (including in a `bo compare` report)
+  without ever writing it anywhere.
 - **`compare <file_A[,...]> <file_B[,...]> -o <report.html>`** is also not a
   BTP command — a plain line-by-line text diff (same idea as `diff`/VS
   Code's compare view, works identically on CSV/JSON/anything else) of two
@@ -527,6 +533,11 @@ of this as sensitive:
   every credential column) to the minimum needed, and only pass `--full` on
   `service-instances`/`service-keys` (or `--include-env` on `apps`) when you
   actually need the credentials — omit it for a plain metadata inventory.
+- If a secret field still needs to be *compared* across two exports (not
+  just avoided), run `bo sort --fields ...,hash(Password)` (etc.) on each
+  file first: it swaps the real value for its SHA-256 hash, which still
+  matches/differs exactly like the original would in a diff or `bo compare`
+  report, without the real value ever being written anywhere.
 
 ## Example workflows
 
@@ -571,6 +582,12 @@ diff a.csv b.csv   # lines starting with "<" are only in A, ">" only in B
 # "Handling commands that output secrets" above
 bo destinations --org <org-A> --fields org_name,space_name,instance_name --sort-by Name --format csv -o a.csv
 bo destinations --org <org-B> --fields org_name,space_name,instance_name --sort-by Name --format csv -o b.csv
+
+# Need Password/ClientSecret in the comparison too, without exposing them?
+# Export --format json, then hash those fields via `bo sort` before diffing
+bo destinations --org <org-A> --format json -o a-full.json
+bo sort --fields=org_name,space_name,instance_name,Name,'hash(Password)','hash(ClientSecret)' a-full.json -o a.json
+diff a.json b.json   # matches exactly when both sides' secret is the same, never shows the value itself
 
 # Comparing by one specific CF metadata label (not the whole app_labels
 # object): export with --include-labels, then narrow with `bo sort`'s
