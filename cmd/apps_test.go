@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"btp-open-cli/internal/store"
 )
 
 // appsPageJSON returns a CF v3 /v3/apps response with one app.
@@ -403,6 +405,155 @@ func TestApps_IncludeLabels_RefetchesPerApp(t *testing.T) {
 	}
 	if !strings.Contains(stdout, `"commit_id": "cd912038"`) {
 		t.Errorf("expected commit_id label fetched from the per-app endpoint, got: %q", stdout)
+	}
+}
+
+// multiSpaceAppsFixture builds a 2-org, 3-space, 3-app fixture where "dev"
+// exists as a same-named space in both org-one and org-two, and "prod"
+// exists only in org-one — for exercising --spaces across multiple orgs.
+func multiSpaceAppsFixture() map[string]string {
+	return map[string]string{
+		"/v3/organizations": mustJSONStr(map[string]interface{}{
+			"pagination": map[string]interface{}{"total_pages": 1},
+			"resources": []map[string]string{
+				{"guid": "org1", "name": "org-one"},
+				{"guid": "org2", "name": "org-two"},
+			},
+		}),
+		"/v3/spaces": mustJSONStr(map[string]interface{}{
+			"pagination": map[string]interface{}{"total_pages": 1},
+			"resources": []map[string]interface{}{
+				{"guid": "sp1", "name": "dev", "relationships": map[string]interface{}{
+					"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}},
+				}},
+				{"guid": "sp2", "name": "dev", "relationships": map[string]interface{}{
+					"organization": map[string]interface{}{"data": map[string]string{"guid": "org2"}},
+				}},
+				{"guid": "sp3", "name": "prod", "relationships": map[string]interface{}{
+					"organization": map[string]interface{}{"data": map[string]string{"guid": "org1"}},
+				}},
+			},
+		}),
+		"/v3/apps": mustJSONStr(map[string]interface{}{
+			"pagination": map[string]interface{}{"total_pages": 1},
+			"resources": []map[string]interface{}{
+				appResource("app1", "app-in-org1-dev", "sp1"),
+				appResource("app2", "app-in-org2-dev", "sp2"),
+				appResource("app3", "app-in-org1-prod", "sp3"),
+			},
+		}),
+		"/v3/processes": mustJSONStr(map[string]interface{}{
+			"pagination": map[string]interface{}{"total_pages": 1},
+			"resources":  []map[string]interface{}{},
+		}),
+	}
+}
+
+// appResource builds one /v3/apps resource entry, factored out of
+// appsPageJSON so multi-app fixtures can assemble several in one response.
+func appResource(appGUID, appName, spaceGUID string) map[string]interface{} {
+	return map[string]interface{}{
+		"guid":       appGUID,
+		"name":       appName,
+		"state":      "STARTED",
+		"created_at": "2024-01-01T00:00:00Z",
+		"updated_at": "2024-01-01T00:00:00Z",
+		"metadata":   map[string]interface{}{"annotations": map[string]string{"mta_id": ""}},
+		"relationships": map[string]interface{}{
+			"space": map[string]interface{}{
+				"data": map[string]string{"guid": spaceGUID},
+			},
+		},
+	}
+}
+
+func setMultiOrgDefaultScope(t *testing.T, apiURL string, orgs ...[2]string) {
+	t.Helper()
+	creds, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range orgs {
+		creds.DefaultOrgScope = append(creds.DefaultOrgScope, store.OrgScopeRef{
+			Region: store.APIURLToRegion(apiURL), ID: o[0], Name: o[1], APIURL: apiURL,
+		})
+	}
+	if err := store.Save(creds); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestApps_SpacesFilterMatchesAcrossOrgs verifies --spaces includes every
+// space with that exact name across every org in scope, not just the first
+// one found — org-one and org-two each have their own "dev" space.
+func TestApps_SpacesFilterMatchesAcrossOrgs(t *testing.T) {
+	srv := fakeCFServer(t, multiSpaceAppsFixture())
+	setupTestEnv(t, srv.URL)
+	setMultiOrgDefaultScope(t, srv.URL, [2]string{"org1", "org-one"}, [2]string{"org2", "org-two"})
+
+	stdout, _, err := runCmd(t, "apps", "--spaces", "dev")
+	if err != nil {
+		t.Fatalf("apps --spaces failed: %v", err)
+	}
+	if !strings.Contains(stdout, "app-in-org1-dev") || !strings.Contains(stdout, "app-in-org2-dev") {
+		t.Errorf("expected both orgs' dev-space apps in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "app-in-org1-prod") {
+		t.Errorf("prod-space app should have been excluded by --spaces, got: %q", stdout)
+	}
+}
+
+// TestApps_SpacesFilterCaseInsensitive verifies --spaces matches space names
+// case-insensitively.
+func TestApps_SpacesFilterCaseInsensitive(t *testing.T) {
+	srv := fakeCFServer(t, multiSpaceAppsFixture())
+	setupTestEnv(t, srv.URL)
+	setMultiOrgDefaultScope(t, srv.URL, [2]string{"org1", "org-one"}, [2]string{"org2", "org-two"})
+
+	stdout, _, err := runCmd(t, "apps", "--spaces", "PROD")
+	if err != nil {
+		t.Fatalf("apps --spaces failed: %v", err)
+	}
+	if !strings.Contains(stdout, "app-in-org1-prod") {
+		t.Errorf("expected prod-space app in output, got: %q", stdout)
+	}
+	if strings.Contains(stdout, "dev") {
+		t.Errorf("dev-space apps should have been excluded by --spaces, got: %q", stdout)
+	}
+}
+
+// TestApps_SpacesFilterNoMatch verifies --spaces naming no existing space
+// yields an empty result rather than an error (consistent with the other
+// filters on this command).
+func TestApps_SpacesFilterNoMatch(t *testing.T) {
+	srv := fakeCFServer(t, multiSpaceAppsFixture())
+	setupTestEnv(t, srv.URL)
+	setMultiOrgDefaultScope(t, srv.URL, [2]string{"org1", "org-one"}, [2]string{"org2", "org-two"})
+
+	stdout, _, err := runCmd(t, "apps", "--spaces", "nonexistent")
+	if err != nil {
+		t.Fatalf("apps --spaces with no match should not error: %v", err)
+	}
+	if strings.Contains(stdout, "app-in-org") {
+		t.Errorf("expected no apps in output, got: %q", stdout)
+	}
+}
+
+// TestApps_SpacesFilterCSVKeywords verifies --spaces accepts a
+// comma-separated list of exact space names.
+func TestApps_SpacesFilterCSVKeywords(t *testing.T) {
+	srv := fakeCFServer(t, multiSpaceAppsFixture())
+	setupTestEnv(t, srv.URL)
+	setMultiOrgDefaultScope(t, srv.URL, [2]string{"org1", "org-one"}, [2]string{"org2", "org-two"})
+
+	stdout, _, err := runCmd(t, "apps", "--spaces", "dev,prod")
+	if err != nil {
+		t.Fatalf("apps --spaces failed: %v", err)
+	}
+	for _, want := range []string{"app-in-org1-dev", "app-in-org2-dev", "app-in-org1-prod"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("expected %q in output, got: %q", want, stdout)
+		}
 	}
 }
 

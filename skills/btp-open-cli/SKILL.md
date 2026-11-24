@@ -215,6 +215,11 @@ they're logged in.
   them) — their `--help` lists these under a "Common Flags:" section. See
   "Compare two orgs/subaccounts to find differences" below for the main
   reason to reach for them together.
+- `apps` additionally supports `--spaces <name1,name2,...>` — comma-separated,
+  exact, case-insensitive space names, narrowing down to just those spaces
+  across every org in scope. A given name matches every space with that
+  name across every matched org, not just the first one found (e.g. a `dev`
+  space that exists in two different orgs both get included).
 - **Global `--color auto|always|never` flag (default `auto`).** In `auto`
   mode, `toon`/`csv` output on `spaces`, `apps`, `service-instances`,
   `service-keys`, `role-collections`, `users`, `org-users`, and

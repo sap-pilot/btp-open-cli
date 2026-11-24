@@ -1645,6 +1645,12 @@ If neither `--org` nor `--orgs` is given, the default org scope selected via
 [`bo orgs`](#orgs) is used; if no default scope has been set either, run `bo orgs`
 first or pass `--org`/`--orgs` directly.
 
+Use `--spaces` to narrow down to specific space names: a comma-separated
+list of exact (case-insensitive) space names; omit it to search every
+accessible space in each target org. A given name matches every space with
+that name across every org in scope — if two different orgs each have a
+space called `dev`, both are included, not just the first one found.
+
 ```bash
 # List all apps in the default scope from `bo orgs` (TOON output)
 bo apps
@@ -1666,6 +1672,9 @@ bo apps --orgs target-orgs.csv
 
 # Exclude orgs such as production environments (CSV: region,org_id,org_name)
 bo apps --excludeOrgs prod-orgs.csv
+
+# Only apps in spaces named "dev", across every org in scope
+bo apps --spaces dev
 
 # Only include apps where any listed field contains any of these
 # comma-separated, case-insensitive keywords

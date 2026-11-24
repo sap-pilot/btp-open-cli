@@ -4,6 +4,10 @@
 
 ### Added
 
+- **`apps --spaces` — narrow to specific space names**
+
+  Adds `--spaces <name1,name2,...>` (comma-separated, exact, case-insensitive space names) to `bo apps`, same convention as the `--spaces` flag already on `service-instances`/`service-keys`/`create-service-keys`/etc. A given name matches every space with that name across every org in scope, not just the first one found — if two different orgs each have a space called `dev`, both are included. Omit it to search every accessible space, as before.
+
 - **`orgs --select <pattern>` — switch the default org scope non-interactively**
 
   Selects every accessible org whose `org_name` or `org_id` matches `pattern` (a comma-separated, case-insensitive keyword list — same convention as `--include`/`--exclude`, but also checked against `org_id`), sets them as the session's default org scope, and echoes the selection — all without the interactive picker and with no TTY requirement at all, unlike `--all`. Meant for batch scripts that need to switch org scope unattended, including by exact org GUID. Applied after `--include`/`--exclude` filtering, takes precedence over `--all` when both are given, and errors out if nothing matches.

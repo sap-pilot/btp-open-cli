@@ -183,6 +183,12 @@ If neither --org nor --orgs is given, the default org scope selected via
 'bo orgs' is used. If no default scope has been set either, run 'bo orgs' to
 pick one interactively, or pass --org/--orgs directly.
 
+Use --spaces to narrow down to specific space names: a comma-separated list
+of exact (case-insensitive) space names; omit it to search every accessible
+space in each target org. A given name matches every space with that name
+across every org in scope, not just the first one found — if two different
+orgs each have a space called "dev", both are included.
+
 Use --include/--exclude to narrow results further: each accepts a
 comma-separated list of keywords, and an app matches if mta_id, app_id,
 app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb
@@ -241,6 +247,7 @@ If --regions is omitted the regions from the last login are used.`,
 		orgsFile, _ := cmd.Flags().GetString("orgs")
 		excludeOrgsFile, _ := cmd.Flags().GetString("excludeOrgs")
 		orgGUID, _ := cmd.Flags().GetString("org")
+		spacesFlag, _ := cmd.Flags().GetString("spaces")
 		outputFile, _ := cmd.Flags().GetString("output")
 		format, _ := cmd.Flags().GetString("format")
 		if !cmd.Flags().Changed("format") {
@@ -363,6 +370,17 @@ If --regions is omitted the regions from the last login are used.`,
 					return
 				}
 				slog.Debug("spaces fetched", "region", regionName, "count", len(spaces))
+
+				if spacesFlag != "" {
+					var filteredSpaces []cf.Space
+					for _, s := range spaces {
+						if scMatchesSpaceName(spacesFlag, s.Name) {
+							filteredSpaces = append(filteredSpaces, s)
+						}
+					}
+					spaces = filteredSpaces
+					slog.Debug("spaces filtered by --spaces", "region", regionName, "count", len(spaces))
+				}
 
 				if len(spaces) == 0 {
 					results[idx] = appsRegionResult{Region: regionName, Client: client, Orgs: filteredOrgs}
@@ -680,6 +698,7 @@ func init() {
 	appsCmd.Flags().String("org", "", "Org GUID to target; only apps from this org will be fetched")
 	appsCmd.Flags().String("orgs", "", "Path to CSV of orgs to include (columns: region,org_id,org_name)")
 	appsCmd.Flags().String("excludeOrgs", "", "Path to CSV of orgs to exclude (columns: region,org_id,org_name)")
+	appsCmd.Flags().String("spaces", "", "Only include these comma-separated, exact (case-insensitive) space names, across every org in scope; default is every accessible space in scope")
 	appsCmd.Flags().StringP("output", "o", "", "Write output to this file instead of stdout (use this, not shell '>', since the interactive org picker also writes to stdout)")
 	appsCmd.Flags().String("format", "toon", "Output format: toon (default), json, or csv; auto-detected from --output's extension (.json, .csv, or .toon) when --format is not explicitly given")
 	appsCmd.Flags().String("include", "", "Only include apps where mta_id, app_id, app_name, app_state, app_created_at, app_updated_at, or process_memory_in_mb contain any of these comma-separated keywords")
