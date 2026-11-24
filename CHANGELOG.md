@@ -4,6 +4,10 @@
 
 ### Added
 
+- **New `compare` command — side-by-side HTML diff report for two (or more paired) files**
+
+  `bo compare <file_A[,...]> <file_B[,...]> -o <report.html>` is a plain line-by-line text diff (same idea as `diff`/VS Code's compare view, and works identically whether the files are CSV, JSON, or anything else) rendered as a single, self-contained HTML page: a summary table (one row per pair, reporting identical/added/deleted/updated line counts and identical %) followed by a full side-by-side, color-coded diff view per pair (added green, deleted red, updated dark red, identical uncolored). `file_A`/`file_B` can each be a comma-separated list of several files (same length on both sides, paired up by position) to compare more than one pair of files in a single report. `--output`/`-o` is required.
+
 - **`sort --sort-nested-fields` — sort a field's own content, not just the rows**
 
   Adds `--sort-nested-fields <field,...>` to `bo sort`: for each named top-level field, its own content — a `,`- or `;`-delimited list (whichever delimiter the value actually uses), or a JSON array/object (native, or JSON-encoded as a string, e.g. a CSV cell) — is sorted into a canonical order, recursing into any nested arrays/objects. Meant to run right before diffing two exports, so a tags list or label object that's merely in a different internal order on each side doesn't show up as a difference by itself. A field absent from a row, or whose content isn't a list/object, is left unchanged.

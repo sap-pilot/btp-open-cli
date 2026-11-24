@@ -205,6 +205,16 @@ they're logged in.
   JSON-encoded as a string) into canonical order — useful right before a
   diff, so a tags list or label object that's merely in a different
   internal order on each side doesn't show up as a difference by itself.
+- **`compare <file_A[,...]> <file_B[,...]> -o <report.html>`** is also not a
+  BTP command — a plain line-by-line text diff (same idea as `diff`/VS
+  Code's compare view, works identically on CSV/JSON/anything else) of two
+  files already on disk, rendered as one self-contained HTML report with a
+  summary table (identical/added/deleted/updated counts + identical %) plus
+  a full side-by-side, color-coded view. Safe to run freely; see "Compare
+  two orgs/subaccounts to find differences" below. `--output`/`-o` is
+  required. `file_A`/`file_B` can each be a comma-separated list of several
+  files (same length on both sides, paired up by position) to compare
+  several pairs in one report.
 - Common flags across most commands: `--regions`, `--org`/`--orgs`/
   `--excludeOrgs` (falls back to the `bo orgs` session default scope if
   omitted), `--format toon|json|csv` (plus `uar.csv` on `users` and
@@ -542,8 +552,9 @@ bo service-credentials --orgs prod-orgs.csv --spaces prod --apps "*-srv" --servi
 ### Compare two orgs/subaccounts to find differences (read-only, safe to run freely)
 
 Export the same `--fields`/`--sort-by` selection from each org/subaccount, then
-`diff` the two files — any line only on one side is missing from the other.
-Works for `html5-apps`, `apps`, `destinations` (or
+either `diff` the two files (any line only on one side is missing from the
+other) or run `bo compare` for a shareable, color-coded HTML report of the
+same thing. Works for `html5-apps`, `apps`, `destinations` (or
 `subaccount-destinations`/`space-destinations`), `users`, `role-collections`,
 and `roles` — any command with `--fields`/`--sort-by` (see "Common flags"
 above). `bo sort` is for re-sorting/narrowing a file you already have (e.g.
@@ -567,6 +578,10 @@ bo destinations --org <org-B> --fields org_name,space_name,instance_name --sort-
 bo apps --org <org-A> --include-labels --format csv -o a-full.csv
 bo sort --fields=space_name,app_name,app_labels.commit_id a-full.csv -o a.csv
 diff a.csv b.csv
+
+# Or, for a shareable HTML report instead of a terminal diff — same a.csv/
+# b.csv from any of the exports above
+bo compare a.csv b.csv -o diff.html
 ```
 
 ### Bulk-create users (guarded)

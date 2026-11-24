@@ -158,6 +158,7 @@ mv bo ~/.local/bin/   # optional
 | Command | Description |
 |---|---|
 | [`clear-logs`](#clear-logs) | Delete all local log files under `~/.bo/log/` |
+| [`compare`](#compare) | Compare two (or more paired) CSV/JSON files into a single side-by-side HTML diff report |
 | [`completion`](#completion) | Generate shell autocompletion script (bash, zsh, fish, PowerShell) |
 | [`count-lines`](#count-lines) | Count total lines of source code files within a folder |
 | [`reorg-wiki-attachments`](#reorg-wiki-attachments) | Reorganize wiki attachment files from a flat folder into per-page subdirectories |
@@ -2427,6 +2428,35 @@ Use `--fields`/`-f <field,...>` to keep only those leaf fields in the output, dr
 **Use `--sort-nested-fields <field,...>` to sort a field's own content into a canonical order** — not the rows themselves (that's `--by`), but what's *inside* the named field's value, so two otherwise-equivalent files that only differ in some list's or object's internal ordering (e.g. tags written in a different order, or a JSON object whose keys happened to be assembled in a different order upstream) don't show up as a diff. Each name is a plain, top-level field (no dotted paths). Its content is handled by shape: a JSON array is sorted element by element (recursing into any nested arrays/objects first); a JSON object has every one of its values recursed into the same way (its own keys need no sorting — re-encoding a JSON object already always emits its keys alphabetically); anything else is treated as a plain delimited list and sorted as such — `,` whenever the value contains one, otherwise `;` if that's what it uses instead (e.g. a tags field written `a;b;c` to sidestep a CSV column's own comma), rejoined with that same delimiter. This works whether the field holds that content natively (a JSON input file's own array/object) or as a JSON-encoded string (e.g. a CSV cell, or a JSON field whose value is itself a JSON-encoded string, both exactly the `app_labels` shape [`bo apps --include-labels`](#apps) writes) — either way the result is written back in the same shape it was found. A field absent from a given row, or whose content is a scalar or otherwise isn't a list/object at all, is left unchanged. List/array elements are compared the same numeric-aware-else-text way `--by` compares field values.
 
 Without `--output`/`-o`, every matched file is sorted and overwritten in place: unless `-y` is given, a confirmation listing every file about to be overwritten is required first. `--output` instead writes the sorted result to a different file, and only accepts exactly one matched input file (so it's unambiguous which file the output came from).
+
+### `compare`
+
+Compares `file_A` against `file_B` and renders the result as a single, self-contained HTML report — a side-by-side, VS Code-style diff view, the same idea as `diff`/VS Code's own compare view. It's a plain line-by-line text diff: each file is just its sequence of lines, never otherwise parsed or interpreted, so it works identically whether the files are CSV, JSON, or anything else — the natural next step after [`bo sort`](#sort) has put two exports into the same comparable order, replacing the "open both in VS Code" step of [doc/compare-subaccounts.md](doc/compare-subaccounts.md) with a report you can save, email, or view without an editor.
+
+```bash
+# Compare two sorted exports into a single HTML report
+bo compare us10-pre-apps-sorted.csv us20-pre-apps-sorted.csv -o apps-diff.html
+
+# Several pairs in one report: file_A's Nth file is paired with file_B's
+# Nth file — each pair compared and rendered independently
+bo compare us10-pre-apps-sorted.csv,us10-pre-dest-sorted.json us20-pre-apps-sorted.csv,us20-pre-dest-sorted.json -o diff.html
+```
+
+`--output`/`-o` is required — there's no useful plain-text/stdout form of an HTML page. `file_A`/`file_B` can each be a comma-separated list of several files instead of just one, as long as both lists are the same length; they're paired up by position, each pair compared and rendered independently, for comparing more than one set of exports in a single report.
+
+The page opens with a summary table, one row per pair (linking down to that pair's own section), reporting:
+
+| Column | Meaning |
+|---|---|
+| Identical | lines equal on both sides |
+| Added | lines only in `file_B` |
+| Deleted | lines only in `file_A` |
+| Updated | lines present on both sides but changed |
+| Identical % | Identical / `file_A`'s own total line count |
+
+A changed block (some lines replaced by some other lines) is paired up line-for-line as "updated" to the shorter side's length; if the two sides' line counts differ, the excess on the longer side is still counted as plain added/deleted rather than updated. Below the summary, each pair gets its own collapsible section (open by default, click the header to collapse) with the full side-by-side diff: line numbers and content for `file_A` on the left, `file_B` on the right, color-coded to match the summary (added green, deleted red, updated dark red, identical uncolored).
+
+The rendered file is entirely self-contained (inline CSS, no external resources or scripts), so it opens and reads correctly offline, on any machine, with no other files alongside it.
 
 ### `update`
 
